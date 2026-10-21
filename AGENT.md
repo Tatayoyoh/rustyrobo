@@ -62,6 +62,11 @@ Key design rules:
   keeps the two driver backends thin: `mongodb` 3.x (wire ≥ 9, MongoDB 4.4+) and `mongodb_legacy`
   2.8 (3.6–4.2), chosen automatically on a wire-version error. Both share `bson` 2.x.
 - Shell cursors use an explicit session per shell so that `getMore` hits the same session.
+- **Results are fetched natively.** A statement whose value is an unexecuted `find` (or an
+  untouched `aggregate` cursor, opened with an empty first batch) is handed to Rust, which reads the
+  page with the driver. Documents never round-trip through EJSON/QuickJS (13× faster on large
+  documents, see `bench_large_documents`). Pipelines ending in `$out`/`$merge` keep a normal first
+  batch, since the server only runs them then.
 - The JS ↔ Rust bridge exchanges **canonical Extended JSON** strings. `serde_json` has
   `preserve_order` on: command key order matters (first key = command name).
 - Through an SSH tunnel the driver connects to `127.0.0.1:<port>` with `directConnection=true`.

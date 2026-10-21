@@ -347,6 +347,16 @@ function __text(s) { return { __shellText: String(s) }; }
 
 function __batch() { return __n_batch(); }
 
+// Cursor options for the initial aggregate command. Without an explicit
+// batch size no document is returned yet: the result view reads the cursor
+// natively. Pipelines ending in $out / $merge keep the default, because the
+// server only runs them with a non-empty first batch.
+function __firstBatch(pipeline, cursor) {
+    const last = pipeline.length ? Object.keys(pipeline[pipeline.length - 1] || {})[0] : undefined;
+    if (cursor.batchSize !== undefined || last === "$out" || last === "$merge") return cursor;
+    return Object.assign({}, cursor, { batchSize: 0 });
+}
+
 class DBCommandCursor {
     constructor(dbName, res, batchSize) {
         const c = res.cursor;
@@ -356,8 +366,11 @@ class DBCommandCursor {
         this._ns = c.ns || "";
         this._coll = this._ns.substring(this._ns.indexOf(".") + 1);
         this._batchSize = batchSize;
+        // Untouched cursors are read natively by the result view.
+        this._touched = false;
     }
     _more() {
+        this._touched = true;
         if (this._isDead()) return false;
         const cmd = { getMore: this._id, collection: this._coll };
         if (this._batchSize) cmd.batchSize = this._batchSize;
@@ -546,7 +559,8 @@ class DBCollection {
             delete options.explain;
             return this._run(Object.assign({ aggregate: this._name, pipeline, explain: true }, options));
         }
-        const res = this._run(Object.assign({ aggregate: this._name, pipeline, cursor }, options));
+        const first = __firstBatch(pipeline, cursor);
+        const res = this._run(Object.assign({ aggregate: this._name, pipeline, cursor: first }, options));
         return new DBCommandCursor(this._db.getName(), res, cursor.batchSize);
     }
     watch() { throw new Error("Change streams are not supported in the shell view"); }
@@ -878,7 +892,8 @@ class DB {
         options = Object.assign({}, options || {});
         const cursor = options.cursor || {};
         delete options.cursor;
-        return new DBCommandCursor(this._name, __cmd(this._name, Object.assign({ aggregate: 1, pipeline, cursor }, options)));
+        const first = __firstBatch(pipeline, cursor);
+        return new DBCommandCursor(this._name, __cmd(this._name, Object.assign({ aggregate: 1, pipeline, cursor: first }, options)), cursor.batchSize);
     }
 }
 
@@ -1030,10 +1045,15 @@ globalThis.__shellResult = function (v) {
     if (v instanceof DBQuery) {
         globalThis.__lastQuery = v;
         const spec = v.__spec();
+        // Not executed yet: Rust runs the find itself and keeps the documents
+        // as BSON (no EJSON round trip through JavaScript).
+        if (!v._cursor) return JSON.stringify({ t: "query", spec: __toEJ(spec) });
         const page = v._exec().__page(spec.limit && spec.limit > 0 && spec.limit < N ? spec.limit : N);
         return JSON.stringify({ t: "docs", docs: __toEJ(page.docs), spec: __toEJ(spec), more: page.more });
     }
     if (v instanceof DBCommandCursor) {
+        if (!v._touched && v._buf.length === 0 && !v._isDead())
+            return JSON.stringify({ t: "cursor", db: v._db, coll: v._coll, ns: v._db + "." + v._coll, id: __toEJ(v._id) });
         const page = v.__page(N);
         v.close();
         return JSON.stringify({ t: "docs", docs: __toEJ(page.docs), ns: v._db + "." + v._coll, more: page.more });

@@ -605,6 +605,8 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
 
 // ------------------------------------------------------------------ text
 
+const TEXT_VIEW_LIMIT: usize = 2 << 20;
+
 fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let fmt = cx.fmt;
     let needs = !matches!(&pane.text_cache, Some((f, _)) if *f == fmt);
@@ -612,6 +614,15 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         let mut s = String::new();
         let docs = pane.docs();
         for (i, d) in docs.iter().enumerate() {
+            // Laying out megabytes of text freezes the UI: stop at TEXT_VIEW_LIMIT.
+            if s.len() > TEXT_VIEW_LIMIT {
+                s.push_str(&format!(
+                    "/* {} more document(s) not shown: the text view is limited to {} MB. Use the tree view or a smaller page size. */\n",
+                    docs.len() - i,
+                    TEXT_VIEW_LIMIT >> 20
+                ));
+                break;
+            }
             if docs.len() > 1 {
                 s.push_str(&format!("/* {} */\n", pane.skip as usize + i + 1));
             }
@@ -675,6 +686,24 @@ mod tests {
     fn table_columns_union() {
         assert_eq!(table_columns(&docs()), (vec!["_id".to_string(), "a".into(), "s".into(), "z".into()], false));
         assert_eq!(table_columns(&[Bson::Int32(1)]), (vec!["value".to_string()], true));
+    }
+
+    #[test]
+    fn text_view_is_capped() {
+        let big = "x".repeat(600 * 1024);
+        let docs: Vec<Bson> = (0..10).map(|i| Bson::Document(doc! { "i": i, "s": big.clone() })).collect();
+        let mut p = pane(docs, None);
+        p.mode = ViewMode::Text;
+        let ctx = egui::Context::default();
+        let theme = crate::theme::THEMES[0];
+        let mut actions = Vec::new();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: &theme, fmt: FormatOptions::default(), font_size: 13.0, actions: &mut actions };
+            text_view(ui, &mut p, &mut cx);
+        });
+        let (_, text) = p.text_cache.as_ref().unwrap();
+        assert!(text.len() < TEXT_VIEW_LIMIT + 700 * 1024);
+        assert!(text.contains("more document(s) not shown"));
     }
 
     #[test]

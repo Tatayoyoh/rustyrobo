@@ -648,15 +648,10 @@ impl App {
                 // Placeholder so the request is sent only once.
                 map.insert(coll.clone(), Vec::new());
                 self.spawn(async move {
-                    let docs = mongo::collect_cursor(
-                        &conn,
-                        &db,
-                        doc! { "aggregate": &coll, "pipeline": [{ "$sample": { "size": 100 } }], "cursor": {} },
-                        100,
-                        None,
-                    )
-                    .await
-                    .unwrap_or_default();
+                    let docs = mongo::collect_cursor(&conn, &db, field_names_command(&coll), 100, None)
+                        .await
+                        .map(|keys| keys.iter().map(keys_to_document).collect::<Vec<_>>())
+                        .unwrap_or_default();
                     AppEvent::Fields(server, db, coll, sample_fields(&docs))
                 });
             }
@@ -998,6 +993,48 @@ fn check_write(d: Document) -> Result<Document, String> {
     Ok(d)
 }
 
+/// Aggregation returning only the field names (two levels) of 100 sampled
+/// documents: the server does the work, so large documents never travel.
+pub fn field_names_command(coll: &str) -> Document {
+    doc! {
+        "aggregate": coll,
+        "pipeline": [
+            { "$sample": { "size": 100 } },
+            { "$project": { "_id": 0, "f": { "$map": {
+                "input": { "$objectToArray": "$$ROOT" },
+                "as": "e",
+                "in": {
+                    "k": "$$e.k",
+                    "s": { "$cond": [
+                        { "$eq": [{ "$type": "$$e.v" }, "object"] },
+                        { "$map": { "input": { "$objectToArray": "$$e.v" }, "as": "x", "in": "$$x.k" } },
+                        []
+                    ] }
+                }
+            } } } }
+        ],
+        "cursor": {}
+    }
+}
+
+/// Rebuilds a key-only document (`{ name: null, address: { city: null } }`)
+/// from one result of [`field_names_command`].
+pub fn keys_to_document(d: &Document) -> Document {
+    let mut out = Document::new();
+    for e in d.get_array("f").into_iter().flatten().filter_map(|e| e.as_document()) {
+        let Ok(k) = e.get_str("k") else { continue };
+        let subs: Document = e
+            .get_array("s")
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str())
+            .map(|s| (s.to_string(), Bson::Null))
+            .collect();
+        out.insert(k, if subs.is_empty() { Bson::Null } else { Bson::Document(subs) });
+    }
+    out
+}
+
 /// Field paths (dotted, up to 3 levels) seen in sample documents, most
 /// frequent first.
 pub fn sample_fields(docs: &[Document]) -> Vec<String> {
@@ -1082,6 +1119,15 @@ mod tests {
         assert_eq!(e, "E11000 duplicate key (code 11000)");
         let e = check_write(doc! { "ok": 1, "writeConcernError": { "errmsg": "waiting for replication timed out" } }).unwrap_err();
         assert!(e.contains("replication"));
+    }
+
+    #[test]
+    fn key_only_documents() {
+        let d = doc! { "f": [{ "k": "name", "s": [] }, { "k": "address", "s": ["city", "zip"] }] };
+        assert_eq!(keys_to_document(&d), doc! { "name": null, "address": { "city": null, "zip": null } });
+        let f = sample_fields(&[keys_to_document(&d)]);
+        assert_eq!(f, vec!["name", "address", "address.city", "address.zip"]);
+        assert_eq!(field_names_command("c").get_str("aggregate").unwrap(), "c");
     }
 
     #[test]

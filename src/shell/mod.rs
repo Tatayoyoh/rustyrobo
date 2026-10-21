@@ -167,6 +167,7 @@ struct NativeState {
     interrupt: Arc<AtomicBool>,
     timeout: Duration,
     prints: Vec<String>,
+    batch: u32,
 }
 
 fn block_on_interruptible<T>(
@@ -333,6 +334,7 @@ fn shell_thread(
         interrupt,
         timeout: options.timeout,
         prints: Vec::new(),
+        batch: options.batch_size.max(1),
     }));
 
     context.with(|ctx| {
@@ -418,15 +420,25 @@ fn run_script(ctx: &Ctx<'_>, state: &Rc<RefCell<NativeState>>, script: &str) -> 
                 let f: Function = ctx.globals().get("__shellResult")?;
                 f.call::<_, String>((v,))
             });
-        let elapsed = t0.elapsed();
         flush_prints(&mut outputs, &stmt);
         match result {
             Ok(json) => {
-                if let Some(kind) = parse_result(&json) {
+                let kind = match resolve_native(state, &json) {
+                    Some(Ok(kind)) => Some(kind),
+                    Some(Err(msg)) => {
+                        let elapsed = t0.elapsed();
+                        outputs.push(ShellOutput { statement: stmt.text.clone(), line: stmt.line, kind: OutputKind::Error(msg), elapsed });
+                        break;
+                    }
+                    None => parse_result(&json),
+                };
+                let elapsed = t0.elapsed();
+                if let Some(kind) = kind {
                     outputs.push(ShellOutput { statement: stmt.text.clone(), line: stmt.line, kind, elapsed });
                 }
             }
             Err(e) => {
+                let elapsed = t0.elapsed();
                 let msg = exception_message(ctx, e);
                 outputs.push(ShellOutput {
                     statement: stmt.text.clone(),
@@ -440,6 +452,71 @@ fn run_script(ctx: &Ctx<'_>, state: &Rc<RefCell<NativeState>>, script: &str) -> 
         i += 1;
     }
     outputs
+}
+
+/// Results the JavaScript side hands over unexecuted (`find`) or as an open
+/// cursor (`aggregate`) are fetched here with the driver: documents stay
+/// BSON instead of round-tripping through Extended JSON and QuickJS, which
+/// dominates the time for large documents.
+fn resolve_native(state: &Rc<RefCell<NativeState>>, json: &str) -> Option<Result<OutputKind, String>> {
+    if !json.starts_with(r#"{"t":"query""#) && !json.starts_with(r#"{"t":"cursor""#) {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut guard = state.borrow_mut();
+    let st = &mut *guard;
+    let batch = st.batch as u64;
+    let conn = st.conn.clone();
+    match v.get("t")?.as_str()? {
+        "query" => {
+            let mut spec = Bson::try_from(v.get("spec")?.clone()).ok()?.as_document().and_then(QuerySpec::from_bson)?;
+            // limit(-n) means a single batch of n documents.
+            spec.limit = spec.limit.abs();
+            let page = if spec.limit > 0 { batch.min(spec.limit as u64) } else { batch };
+            let fetch_spec = spec.clone();
+            let res = block_on_interruptible(st, async move {
+                // One extra document tells whether there is a next page.
+                fetch_page(&conn, &fetch_spec, fetch_spec.skip, page + 1).await
+            });
+            Some(
+                res.map(|mut docs| {
+                    let more = docs.len() as u64 > page;
+                    docs.truncate(page as usize);
+                    OutputKind::Docs { docs, spec: Some(spec), ns: None, more }
+                })
+                .map_err(|e| crate::mongo::error_message(&e)),
+            )
+        }
+        "cursor" => {
+            let db = v.get("db")?.as_str()?.to_string();
+            let coll = v.get("coll")?.as_str()?.to_string();
+            let ns = v.get("ns").and_then(|n| n.as_str()).map(String::from);
+            let id = Bson::try_from(v.get("id")?.clone()).ok().and_then(|b| bson_as_i64(&b))?;
+            let mut session = st.session.take();
+            let res = block_on_interruptible(st, async {
+                let mut docs: Vec<Bson> = Vec::new();
+                let mut id = id;
+                while id != 0 && (docs.len() as u64) < batch {
+                    let want = (batch - docs.len() as u64) as i64;
+                    let more = conn
+                        .run_command(&db, bson::doc! { "getMore": id, "collection": &coll, "batchSize": want }, session.as_mut())
+                        .await?;
+                    let cur = more.get_document("cursor")?;
+                    if let Ok(batch_docs) = cur.get_array("nextBatch") {
+                        docs.extend(batch_docs.iter().cloned());
+                    }
+                    id = cur.get("id").and_then(bson_as_i64).unwrap_or(0);
+                }
+                if id != 0 {
+                    let _ = conn.run_command(&db, bson::doc! { "killCursors": &coll, "cursors": [id] }, session.as_mut()).await;
+                }
+                Ok((docs, id != 0))
+            });
+            st.session = session;
+            Some(res.map(|(docs, more)| OutputKind::Docs { docs, spec: None, ns, more }).map_err(|e| crate::mongo::error_message(&e)))
+        }
+        _ => None,
+    }
 }
 
 fn parse_result(json: &str) -> Option<OutputKind> {

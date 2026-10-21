@@ -182,6 +182,10 @@ fn shell_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
     let d = sh.docs("db.people.aggregate([{ $match: { age: { $gte: 30 } } }, { $group: { _id: null, avg: { $avg: '$age' }, n: { $sum: 1 } } }])");
     assert_eq!(field(&d[0], "n"), &Bson::Int32(4));
     assert_eq!(sh.text("db.people.aggregate([{ $count: 'n' }]).toArray()[0].n"), "5");
+    // The pipeline runs immediately even though no document is fetched yet.
+    sh.run("var ignored = db.people.aggregate([{ $match: {} }, { $out: 'people_copy' }])");
+    assert_eq!(sh.text("db.people_copy.countDocuments({})"), "5");
+    sh.ok("db.people_copy.drop()");
 
     // --- bulkWrite and deletes
     sh.ok("db.people.bulkWrite([{ insertOne: { document: { name: 'Tmp1' } } }, { insertOne: { document: { name: 'Tmp2' } } }, { deleteOne: { filter: { name: 'Tmp1' } } }])");
@@ -475,4 +479,47 @@ fn ssh_failures_are_reported() {
     let mut s = via_ssh(SshAuthMethod::Password);
     s.ssh.port = 1;
     assert!(format!("{:#}", open(&rt, &s).err().unwrap()).contains("SSH"));
+}
+
+/// Timing of large-document queries. Run with RR_BENCH=1 (and RR_LIVE=1):
+///   RR_LIVE=1 RR_BENCH=1 cargo test --release --test live bench -- --nocapture
+#[test]
+fn bench_large_documents() {
+    if !live() || std::env::var("RR_BENCH").is_err() {
+        return;
+    }
+    let rt = rt();
+    let c = Arc::new(open(&rt, &mongo8()).unwrap());
+    let mut sh = Shell::new(&rt, c.clone(), "rr_bench", Duration::from_secs(120));
+    // ~250 KB per document: nested steps with text and coordinates, like a roadbook.
+    sh.ok(r#"db.dropDatabase();
+        var steps = [];
+        for (var s = 0; s < 400; s++) steps.push({ n: s, title: 'Step ' + s, note: 'x'.repeat(300), lat: 45.1 + s / 1000, lon: 5.7, tags: ['a', 'b'], at: new Date() });
+        for (var i = 0; i < 120; i++) db.big.insertOne({ name: 'Roadbook ' + i, steps: steps, meta: { owner: 'bench', i: NumberLong(i) } })"#);
+    let time = |sh: &mut Shell, script: &str| {
+        let t = Instant::now();
+        let outs = sh.run(script);
+        let n = match &outs.last().unwrap().kind {
+            OutputKind::Docs { docs, .. } => docs.len(),
+            other => panic!("{other:?}"),
+        };
+        (t.elapsed(), n)
+    };
+    // Old path: the cursor is consumed by JavaScript (EJSON round trips).
+    let (js_find, n1) = time(&mut sh, "var q = db.getCollection('big').find({}); q.hasNext(); q");
+    let (js_agg, n2) = time(&mut sh, "var a = db.big.aggregate([{ $match: {} }]); a.hasNext(); a");
+    // New path: documents fetched natively by Rust.
+    let (native_find, n3) = time(&mut sh, "db.getCollection('big').find({})");
+    let (native_agg, n4) = time(&mut sh, "db.big.aggregate([{ $match: {} }])");
+    let t = Instant::now();
+    let full = rt.block_on(rustyrobo::mongo::collect_cursor(&c, "rr_bench", doc! { "aggregate": "big", "pipeline": [{ "$sample": { "size": 100 } }], "cursor": {} }, 100, None)).unwrap();
+    let full_sample = t.elapsed();
+    let t = Instant::now();
+    let keys = rt.block_on(rustyrobo::mongo::collect_cursor(&c, "rr_bench", rustyrobo::app::field_names_command("big"), 100, None)).unwrap();
+    let keys_sample = t.elapsed();
+    println!("find:      JS path {js_find:?} ({n1} docs) -> native {native_find:?} ({n3} docs)");
+    println!("aggregate: JS path {js_agg:?} ({n2} docs) -> native {native_agg:?} ({n4} docs)");
+    println!("field sampling: full documents {full_sample:?} ({}) -> keys only {keys_sample:?} ({})", full.len(), keys.len());
+    assert!(native_find < js_find && native_agg < js_agg);
+    sh.ok("db.dropDatabase()");
 }
