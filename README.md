@@ -21,34 +21,27 @@
 ## Why
 
 Robo 3T (formerly Robomongo) was the go-to lightweight MongoDB shell-centric GUI, but it is no longer
-maintained: its embedded shell stopped at MongoDB 4.2, SSH tunnels are unreliable and it is tied to an
-aging Qt/C++ stack.
+maintained.
 
 rustyrobo keeps what made Robomongo great — the same layout, the same workflow, the same shortcuts —
 and rebuilds it as a single native Rust binary that supports current MongoDB versions.
 
 ## Features
 
-- **Robo 3T interface**: database explorer, query tabs, tree / table / text result views, paging, logs,
-  same menus and keyboard shortcuts (F5, F6, F2/F3/F4, Ctrl+T, Alt+1…9…)
-- **Embedded mongo shell** (QuickJS): `db.getCollection('x').find()`, cursors, `aggregate`, CRUD,
-  indexes, users, `use db`, `show dbs`, `print`/`printjson`, `rs.*`, `sh.*`, `.mongorc.js`
-- **MongoDB 3.6 → 8.x**: modern driver for 4.4+, automatic fallback to a legacy driver for 3.6–4.2
+- **Robo 3T interface**
+- **Embedded mongo shell**
+- **MongoDB 3.6 → 8.x**
 - **Working SSH tunnels**: password, private key (with passphrase) or SSH agent, known_hosts
   verification, keep-alive
-- **Connections**: direct, replica set, `mongodb+srv`, SCRAM / X.509 / PLAIN auth, TLS with CA and
-  client certificates, read preference, visible databases
-- **Redesigned connection editor**: section sidebar with live status, inline validation, two-way
-  connection string, step-by-step connection test (SSH → server → auth → databases), colour tags, groups
-- **Connection manager**: search, groups, reorder, clone, import from Robo 3T or from a URI
-- **Autocompletion**: collections, shell methods, cursor methods, **field names** sampled from the
-  collection, query / update operators and aggregation stages
+- **Connections**
+- **Improved connection manager**
+- **Redesigned connection editor**
+- **Autocompletion**
 - **Document editing**: view, edit, insert, delete documents in shell syntax with validation
 - **Admin dialogs**: create/drop/rename/duplicate/copy collections, indexes (TTL, partial, text…),
   users and roles, stored functions
-- **Real colour themes**: Porcelain, Graphite, Nord, Solarized, Gruvbox, One Dark, Dracula,
-  Tokyo Night, Catppuccin, High Contrast — or follow the system
-- **Light on resources**: single binary, no Electron, no JVM
+- **Colored themes**
+- **Light on resources**
 
 Website: https://tatayoyoh.github.io/rustyrobo/
 

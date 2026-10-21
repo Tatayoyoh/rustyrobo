@@ -92,7 +92,8 @@
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; }
     .card h3 { margin: 6px 0 6px; font-size: 18px; }
     .card p { margin: 0; color: var(--muted); font-size: 15px; }
-    .icon { font-size: 24px; }
+    .icon { color: var(--rust); flex: none; }
+    .icon svg { width: 22px; height: 22px; stroke-width: 1.8; display: block; }
 
     .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
     .feature { display: flex; gap: 12px; padding: 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
@@ -102,8 +103,8 @@
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: center; }
     .split img { width: 100%; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
     ul.checks { list-style: none; padding: 0; margin: 0; }
-    ul.checks li { padding: 6px 0 6px 28px; position: relative; }
-    ul.checks li::before { content: "✓"; position: absolute; left: 0; color: var(--teal); font-weight: 700; }
+    ul.checks li { padding: 6px 0; display: flex; gap: 10px; align-items: flex-start; }
+    ul.checks li svg { width: 20px; height: 20px; color: var(--teal); flex: none; margin-top: 2px; }
 
     .themes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
     .swatch { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
@@ -171,9 +172,9 @@
         <p class="sub">Robomongo / Robo 3T was the lightweight, shell-centric MongoDB GUI many of us loved.
           It is no longer maintained, its shell stopped at MongoDB 4.2 and SSH tunnels became unreliable.</p>
         <div class="why">
-          <div class="card"><div class="icon">🧭</div><h3>Same interface</h3><p>Explorer, query tabs, tree/table/text views, menus and shortcuts as you remember them.</p></div>
-          <div class="card"><div class="icon">⚡</div><h3>Native and light</h3><p>A single Rust binary with immediate-mode rendering: starts instantly, uses little memory.</p></div>
-          <div class="card"><div class="icon">🍃</div><h3>Today's MongoDB</h3><p>Modern driver for 4.4–8.x, automatic legacy driver for 3.6–4.2, SRV, TLS, X.509.</p></div>
+          <div class="card"><h3>Same interface</h3><p>Explorer, query tabs, tree/table/text views, menus and shortcuts as you remember them.</p></div>
+          <div class="card"><h3>Native and light</h3><p>A single Rust binary with immediate-mode rendering: starts instantly, uses little memory.</p></div>
+          <div class="card"><h3>Today's MongoDB</h3><p>Modern driver for 4.4–8.x, automatic legacy driver for 3.6–4.2, SRV, TLS, X.509.</p></div>
         </div>
       </div>
     </section>
@@ -183,14 +184,14 @@
         <h2>Everything you used, and more</h2>
         <p class="sub">Feature parity with Robo 3T first, then the things it always lacked.</p>
         <div class="features">
-          <div class="feature"><div class="icon">🐚</div><div><b>Embedded mongo shell</b><span>find, cursors, aggregate, CRUD, indexes, users, use, show dbs, rs.*, sh.*</span></div></div>
-          <div class="feature"><div class="icon">🌲</div><div><b>Tree, table and text views</b><span>Paging, expand recursively, copy value / path / JSON / Extended JSON.</span></div></div>
-          <div class="feature"><div class="icon">💡</div><div><b>Smart autocompletion</b><span>Collections, methods, sampled field names, query and update operators, pipeline stages.</span></div></div>
-          <div class="feature"><div class="icon">🔀</div><div><b>Working SSH tunnels</b><span>Password, private key with passphrase or SSH agent, known_hosts checks.</span></div></div>
-          <div class="feature"><div class="icon">📝</div><div><b>Document editing</b><span>View, edit, insert and delete in shell syntax with validation.</span></div></div>
-          <div class="feature"><div class="icon">🛠</div><div><b>Admin dialogs</b><span>Collections, indexes (TTL, partial, text), users and roles, stored functions.</span></div></div>
-          <div class="feature"><div class="icon">📥</div><div><b>Import from Robo 3T</b><span>Bring your existing connections, or paste any connection string.</span></div></div>
-          <div class="feature"><div class="icon">🎨</div><div><b>Real colour themes</b><span>Eleven complete themes for UI, editor and BSON values, or follow the system.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="terminal"></i></div><div><b>Embedded mongo shell</b><span>find, cursors, aggregate, CRUD, indexes, users, use, show dbs, rs.*, sh.*</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="list-tree"></i></div><div><b>Tree, table and text views</b><span>Paging, expand recursively, copy value / path / JSON / Extended JSON.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="wand-sparkles"></i></div><div><b>Smart autocompletion</b><span>Collections, methods, sampled field names, query and update operators, pipeline stages.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="key-round"></i></div><div><b>Working SSH tunnels</b><span>Password, private key with passphrase or SSH agent, known_hosts checks.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="file-pen-line"></i></div><div><b>Document editing</b><span>View, edit, insert and delete in shell syntax with validation.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="wrench"></i></div><div><b>Admin dialogs</b><span>Collections, indexes (TTL, partial, text), users and roles, stored functions.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="download"></i></div><div><b>Import from Robo 3T</b><span>Bring your existing connections, or paste any connection string.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="palette"></i></div><div><b>Real colour themes</b><span>Twelve complete themes for UI, editor and BSON values, or follow the system.</span></div></div>
         </div>
       </div>
     </section>
@@ -201,11 +202,11 @@
           <h2>A connection editor that tells you what's wrong</h2>
           <p class="sub">The connection dialog was redesigned from scratch.</p>
           <ul class="checks">
-            <li>Sections with live status badges and inline validation</li>
-            <li>Two-way connection string: paste a URI or copy the generated one</li>
-            <li>Step-by-step test: SSH tunnel → server → authentication → databases</li>
-            <li>Colour tags and groups to tell production from staging at a glance</li>
-            <li>Searchable connection manager with keyboard navigation</li>
+            <li><i data-lucide="circle-check"></i>Sections with live status badges and inline validation</li>
+            <li><i data-lucide="circle-check"></i>Two-way connection string: paste a URI or copy the generated one</li>
+            <li><i data-lucide="circle-check"></i>Step-by-step test: SSH tunnel → server → authentication → databases</li>
+            <li><i data-lucide="circle-check"></i>Colour tags and groups to tell production from staging at a glance</li>
+            <li><i data-lucide="circle-check"></i>Searchable connection manager with keyboard navigation</li>
           </ul>
         </div>
         <img src="screenshots/04-editor-test.png" alt="Connection editor showing a successful step-by-step SSH connection test" loading="lazy">
@@ -258,5 +259,7 @@
       <a href="https://github.com/Tatayoyoh/rustyrobo">github.com/Tatayoyoh/rustyrobo</a>
     </div>
   </footer>
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+  <script>lucide.createIcons();</script>
 </body>
 </html>
