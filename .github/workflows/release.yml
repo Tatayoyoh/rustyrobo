@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: linux-x86_64 }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, name: linux-aarch64 }
+          - { os: macos-14, target: aarch64-apple-darwin, name: macos-aarch64 }
+          - { os: macos-14, target: x86_64-apple-darwin, name: macos-x86_64 }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgtk-3-dev
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          d=rustyrobo-$TAG-${{ matrix.name }}
+          mkdir -p $d
+          cp target/${{ matrix.target }}/release/rustyrobo $d/
+          cp assets/rustyrobo.desktop $d/
+          cp assets/icon-256.png $d/rustyrobo.png
+          cp README.md LICENSE CHANGELOG.md $d/
+          tar czf $d.tar.gz $d
+          echo "ASSET=$d.tar.gz" >> $GITHUB_ENV
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=Rustyrobo.app
+          mkdir -p $app/Contents/MacOS $app/Contents/Resources icon.iconset
+          cp target/${{ matrix.target }}/release/rustyrobo $app/Contents/MacOS/
+          for s in 16 32 64 128 256; do
+            sips -z $s $s assets/icon-256.png --out icon.iconset/icon_${s}x${s}.png >/dev/null
+          done
+          cp icon.iconset/icon_32x32.png icon.iconset/icon_16x16@2x.png
+          cp icon.iconset/icon_64x64.png icon.iconset/icon_32x32@2x.png
+          cp icon.iconset/icon_256x256.png icon.iconset/icon_128x128@2x.png
+          rm icon.iconset/icon_64x64.png
+          iconutil -c icns icon.iconset -o $app/Contents/Resources/rustyrobo.icns
+          version=${TAG#v}
+          cat > $app/Contents/Info.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>Rustyrobo</string>
+            <key>CFBundleDisplayName</key><string>Rustyrobo</string>
+            <key>CFBundleIdentifier</key><string>io.github.tatayoyoh.rustyrobo</string>
+            <key>CFBundleExecutable</key><string>rustyrobo</string>
+            <key>CFBundleIconFile</key><string>rustyrobo</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$version</string>
+            <key>CFBundleVersion</key><string>$version</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          EOF
+          # Ad-hoc signature: required to run on Apple Silicon.
+          codesign --force --deep --sign - $app
+          d=rustyrobo-$TAG-${{ matrix.name }}
+          ditto -c -k --keepParent $app $d.zip
+          echo "ASSET=$d.zip" >> $GITHUB_ENV
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $d = "rustyrobo-$env:TAG-${{ matrix.name }}"
+          New-Item -ItemType Directory $d | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/rustyrobo.exe $d/
+          Copy-Item README.md, LICENSE, CHANGELOG.md $d/
+          Compress-Archive -Path $d -DestinationPath "$d.zip"
+          "ASSET=$d.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and release notes
+        run: |
+          cd dist && sha256sum * > SHA256SUMS && cd ..
+          version=${TAG#v}
+          awk -v v="## $version" '$0 == v { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "Rustyrobo ${TAG#v}" --notes-file notes.md
+          fi

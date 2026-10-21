@@ -48,7 +48,16 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 
 ## Install
 
-Build from source (Rust 1.88+):
+Download the latest release for your system from the
+[releases page](https://github.com/Tatayoyoh/rustyrobo/releases/latest):
+
+| System | File |
+|---|---|
+| Linux x86_64 / ARM64 | `rustyrobo-vX.Y.Z-linux-*.tar.gz` — extract and run `./rustyrobo` |
+| macOS Apple Silicon / Intel | `rustyrobo-vX.Y.Z-macos-*.zip` — unzip, then right-click `Rustyrobo.app` → Open the first time (unsigned) |
+| Windows x86_64 | `rustyrobo-vX.Y.Z-windows-x86_64.zip` — extract and run `rustyrobo.exe` |
+
+Or build from source (Rust 1.88+):
 
 ```sh
 git clone https://github.com/Tatayoyoh/rustyrobo.git

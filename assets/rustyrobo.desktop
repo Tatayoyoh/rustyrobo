@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Rustyrobo
+GenericName=MongoDB GUI
+Comment=Native MongoDB management tool (Robomongo port)
+Exec=rustyrobo
+Icon=rustyrobo
+Terminal=false
+Categories=Development;Database;
+Keywords=mongodb;mongo;database;robomongo;robo3t;
+StartupWMClass=rustyrobo

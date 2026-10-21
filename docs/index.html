@@ -99,6 +99,8 @@
     .feature { display: flex; gap: 12px; padding: 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
     .feature b { display: block; margin-bottom: 2px; }
     .feature span { color: var(--muted); font-size: 14.5px; }
+    a.feature { color: var(--text); }
+    a.feature:hover { text-decoration: none; border-color: var(--rust); }
 
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: center; }
     .split img { width: 100%; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
@@ -141,7 +143,7 @@
         <a href="#why">Why</a>
         <a href="#features">Features</a>
         <a href="#ssh">SSH</a>
-        <a href="#install">Install</a>
+        <a href="#install">Download</a>
         <a href="https://github.com/Tatayoyoh/Rustyrobo">GitHub</a>
       </nav>
     </div>
@@ -240,13 +242,19 @@
 
     <section id="install">
       <div class="wrap">
-        <h2>Install</h2>
-        <p class="sub">Build from source with Rust 1.88 or newer.</p>
-<pre><span class="c"># clone and build</span>
-<span class="p">$</span> git clone https://github.com/Tatayoyoh/Rustyrobo.git
-<span class="p">$</span> cd Rustyrobo
+        <h2>Download</h2>
+        <p class="sub">Prebuilt binaries for Linux, macOS and Windows are on the
+          <a href="https://github.com/Tatayoyoh/rustyrobo/releases/latest">latest release</a>.</p>
+        <div class="features">
+          <a class="feature" href="https://github.com/Tatayoyoh/rustyrobo/releases/latest"><div class="icon"><i data-lucide="monitor"></i></div><div><b>Linux</b><span>x86_64 and ARM64, .tar.gz with a .desktop file</span></div></a>
+          <a class="feature" href="https://github.com/Tatayoyoh/rustyrobo/releases/latest"><div class="icon"><i data-lucide="laptop"></i></div><div><b>macOS</b><span>Apple Silicon and Intel, Rustyrobo.app (right-click → Open the first time)</span></div></a>
+          <a class="feature" href="https://github.com/Tatayoyoh/rustyrobo/releases/latest"><div class="icon"><i data-lucide="app-window"></i></div><div><b>Windows</b><span>x86_64, .zip with rustyrobo.exe</span></div></a>
+        </div>
+        <p class="sub" style="margin-top:28px">Or build from source with Rust 1.88 or newer:</p>
+<pre><span class="p">$</span> git clone https://github.com/Tatayoyoh/rustyrobo.git
+<span class="p">$</span> cd rustyrobo
 <span class="p">$</span> cargo build --release
-<span class="p">$</span> ./target/release/Rustyrobo</pre>
+<span class="p">$</span> ./target/release/rustyrobo</pre>
         <p class="sub" style="margin-top:16px">Your existing Robo 3T connections can be imported from the connection manager
           (<em>Import → From Robo 3T</em>).</p>
       </div>
