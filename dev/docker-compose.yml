@@ -1,5 +1,5 @@
 # Test environment for rustyrobo's live tests and manual checks:
-#   docker compose -f dev/docker-compose.yml up -d
+#   docker compose -f dev/docker-compose.yml up -d --wait
 #   RR_LIVE=1 cargo test --test live -- --test-threads=1
 name: rustyrobo-dev
 services:
@@ -10,10 +10,21 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: secret
+    healthcheck:
+      # Authenticated ping: only succeeds once the init restart is over.
+      test: ["CMD", "mongosh", "--quiet", "-u", "admin", "-p", "secret", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
   mongo42:
     image: mongo:4.2
     container_name: rr-mongo42
     ports: ["27142:27017"]
+    healthcheck:
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
   ssh:
     image: lscr.io/linuxserver/openssh-server:latest
     container_name: rr-ssh
@@ -23,3 +34,9 @@ services:
       USER_NAME: tunnel
       USER_PASSWORD: tunnelpw
       DOCKER_MODS: linuxserver/mods:openssh-server-ssh-tunnel
+    healthcheck:
+      # The tunnel mod is installed at start-up; sshd listens once it is done.
+      test: ["CMD-SHELL", "nc -z localhost 2222"]
+      interval: 3s
+      timeout: 3s
+      retries: 60

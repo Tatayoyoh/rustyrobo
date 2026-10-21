@@ -214,7 +214,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
             if menu_item(ui, "Keyboard Shortcuts", "") {
                 app.actions.push(Action::Dialog(Dialog::Shortcuts));
             }
-            if menu_item(ui, "About rustyrobo…", "") {
+            if menu_item(ui, "About Rustyrobo…", "") {
                 app.actions.push(Action::Dialog(Dialog::About));
             }
         });

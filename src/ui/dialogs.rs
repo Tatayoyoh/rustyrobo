@@ -720,7 +720,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Dialog::About => {
                 ui.set_width(420.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("rustyrobo").size(28.0).strong().color(theme.accent));
+                    if let Some(logo) = &app.logo {
+                        ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(96.0, 96.0)));
+                    }
+                    ui.label(RichText::new("Rustyrobo").size(28.0).strong().color(theme.accent));
                     ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                     ui.add_space(8.0);
                     ui.label("Native MongoDB management tool written in Rust.");

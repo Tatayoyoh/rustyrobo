@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" width="128" alt="rustyrobo logo">
 </p>
 
-<h1 align="center">rustyrobo</h1>
+<h1 align="center">Rustyrobo</h1>
 
 <p align="center">
   A fast, native MongoDB GUI written in Rust — a port of Robomongo / Robo 3T.
@@ -14,6 +14,10 @@
   <img src="https://img.shields.io/badge/MongoDB-3.6%20%E2%86%92%208.x-47A248?logo=mongodb&logoColor=white" alt="MongoDB 3.6 to 8.x">
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-555" alt="Platforms">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+</p>
+
+<p align="center">
+<a href="https://tatayoyoh.github.io/rustyrobo/">Website</a>
 </p>
 
 ![rustyrobo](docs/screenshots/05-tree.png)
@@ -31,8 +35,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - **Robo 3T interface**
 - **Embedded mongo shell**
 - **MongoDB 3.6 → 8.x**
-- **Working SSH tunnels**: password, private key (with passphrase) or SSH agent, known_hosts
-  verification, keep-alive
+- **Working SSH tunnels**
 - **Connections**
 - **Improved connection manager**
 - **Redesigned connection editor**
@@ -42,8 +45,6 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
   users and roles, stored functions
 - **Colored themes**
 - **Light on resources**
-
-Website: https://tatayoyoh.github.io/rustyrobo/
 
 ## Install
 
@@ -63,7 +64,7 @@ XDG portal or GTK.
 
 ```sh
 cargo test                                   # unit tests
-docker compose -f dev/docker-compose.yml up -d
+docker compose -f dev/docker-compose.yml up -d --wait
 RR_LIVE=1 cargo test --test live -- --test-threads=1   # against real servers + SSH
 ```
 

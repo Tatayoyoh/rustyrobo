@@ -186,6 +186,7 @@ pub struct App {
     pub theme: Theme,
     fullscreen: bool,
     pub autotest: Option<crate::autotest::AutoTest>,
+    pub logo: Option<egui::TextureHandle>,
     /// Sampled field names for query completion: (server, db) → collection → fields.
     pub fields: std::collections::HashMap<(u64, String), std::collections::HashMap<String, Vec<String>>>,
 }
@@ -226,9 +227,10 @@ impl App {
             theme,
             fullscreen: false,
             autotest: crate::autotest::AutoTest::from_env(),
+            logo: crate::assets::logo_texture(&cc.egui_ctx),
             fields: Default::default(),
         };
-        app.log(LogLevel::Info, format!("rustyrobo {} started", env!("CARGO_PKG_VERSION")));
+        app.log(LogLevel::Info, format!("Rustyrobo {} started", env!("CARGO_PKG_VERSION")));
         // Like Robo 3T: open the connection manager at startup.
         app.conn_list = Some(ConnectionList::new(&app.settings));
         app

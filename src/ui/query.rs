@@ -329,8 +329,11 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
 fn welcome(app: &mut App, ui: &mut Ui) {
     let theme = app.theme;
     ui.vertical_centered(|ui| {
-        ui.add_space(ui.available_height() * 0.18);
-        ui.label(RichText::new("rustyrobo").size(34.0).strong().color(theme.accent));
+        ui.add_space(ui.available_height() * 0.12);
+        if let Some(logo) = &app.logo {
+            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(160.0, 160.0)));
+        }
+        ui.label(RichText::new("Rustyrobo").size(34.0).strong().color(theme.accent));
         ui.label(RichText::new("Native MongoDB management tool").color(theme.text_weak));
         ui.add_space(18.0);
         if ui.button(RichText::new(format!("{} Manage connections…", crate::ui::ICON_CONNECT)).size(16.0)).clicked() {

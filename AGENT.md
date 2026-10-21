@@ -18,7 +18,7 @@ Robomongo / Robo 3T. Repository: https://github.com/Tatayoyoh/rustyrobo (Apache-
 cargo build                     # dev build (deps are optimised, see Cargo.toml profiles)
 cargo test                      # unit tests (must stay green)
 cargo clippy --all-targets -- -D warnings   # CI fails on any warning
-docker compose -f dev/docker-compose.yml up -d
+docker compose -f dev/docker-compose.yml up -d --wait
 RR_LIVE=1 cargo test --test live -- --test-threads=1   # real servers: mongo 8, mongo 4.2, SSH
 RUSTYROBO_CONFIG_DIR=/tmp/rr RUSTYROBO_AUTOTEST=docs/screenshots cargo run   # UI walkthrough + screenshots
 ```

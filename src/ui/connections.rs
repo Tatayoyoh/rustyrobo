@@ -543,14 +543,23 @@ pub fn validate(c: &ConnectionSettings) -> Vec<Issue> {
             push(Section::Ssh, "username", "SSH user name is required");
         }
         if s.method == SshAuthMethod::PrivateKey {
-            let p = crate::mongo::ssh::expand_tilde(&s.private_key_file);
+            use crate::mongo::ssh::{KeyFileState, probe_private_key};
             if s.private_key_file.trim().is_empty() {
                 push(Section::Ssh, "key", "Select a private key file");
-            } else if !p.exists() {
-                push(Section::Ssh, "key", "Private key file not found");
+            } else {
+                match probe_private_key(&s.private_key_file) {
+                    KeyFileState::Missing => push(Section::Ssh, "key", "Private key file not found"),
+                    KeyFileState::Invalid(e) => push(Section::Ssh, "key", &format!("Not a usable private key: {e}")),
+                    KeyFileState::Encrypted if s.passphrase.is_empty() && !s.ask_password => push(
+                        Section::Ssh,
+                        "passphrase",
+                        "This key is encrypted: enter its passphrase, or tick \"Ask for passphrase each time\"",
+                    ),
+                    _ => {}
+                }
             }
         }
-        if s.method == SshAuthMethod::Agent && std::env::var_os("SSH_AUTH_SOCK").is_none() {
+        if cfg!(unix) && s.method == SshAuthMethod::Agent && std::env::var_os("SSH_AUTH_SOCK").is_none() {
             push(Section::Ssh, "agent", "No SSH agent detected (SSH_AUTH_SOCK is not set)");
         }
     }
@@ -1146,18 +1155,42 @@ fn ssh_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th: &Th
                         field_error(ui, issues, "key", th, show);
                     });
                     ui.end_row();
-                    ui.label("Passphrase");
+                    ui.label("Key passphrase");
                     ui.vertical(|ui| {
-                        password_field(ui, &mut s.passphrase, &mut ed.show_ssh_password, !s.ask_password, if s.ask_password { "asked at connect time" } else { "empty if the key is not encrypted" });
+                        use crate::mongo::ssh::{KeyFileState, probe_private_key};
+                        let state = probe_private_key(&s.private_key_file);
+                        let hint = if s.ask_password {
+                            "asked at connect time"
+                        } else if state == KeyFileState::Plain {
+                            "not needed: this key has no passphrase"
+                        } else {
+                            "secret that unlocks the private key"
+                        };
+                        password_field(ui, &mut s.passphrase, &mut ed.show_ssh_password, !s.ask_password, hint);
                         changed |= ui.checkbox(&mut s.ask_password, "Ask for passphrase each time").changed();
+                        let missing = show && issues.iter().any(|i| i.field == "passphrase");
+                        let status = match state {
+                            KeyFileState::Encrypted => "🔒 This key is encrypted: its passphrase is required to unlock it.",
+                            KeyFileState::Plain => "🔓 This key is not encrypted: leave the passphrase empty.",
+                            _ => "The passphrase is the secret chosen when the key was created (ssh-keygen), not the server password.",
+                        };
+                        if missing {
+                            field_error(ui, issues, "passphrase", th, show);
+                        } else {
+                            ui.label(RichText::new(status).small().color(th.text_weak));
+                        }
                     });
                     ui.end_row();
                 }
                 SshAuthMethod::Agent => {
                     ui.label("Agent");
                     ui.vertical(|ui| {
-                        let sock = std::env::var("SSH_AUTH_SOCK").unwrap_or_default();
-                        ui.label(RichText::new(if sock.is_empty() { "not detected".to_string() } else { sock }).monospace().color(th.text_weak));
+                        let sock = if cfg!(windows) {
+                            "Windows OpenSSH agent or Pageant".to_string()
+                        } else {
+                            std::env::var("SSH_AUTH_SOCK").unwrap_or_else(|_| "not detected".into())
+                        };
+                        ui.label(RichText::new(sock).monospace().color(th.text_weak));
                         field_error(ui, issues, "agent", th, show);
                     });
                     ui.end_row();
@@ -1314,6 +1347,16 @@ mod tests {
         c.ssh.method = SshAuthMethod::PrivateKey;
         c.ssh.private_key_file = "/definitely/missing".into();
         assert_eq!(fields(&c), vec!["key"]);
+        // An encrypted key without passphrase is reported on the passphrase field.
+        let dir = std::env::temp_dir().join(format!("rr-val-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("k");
+        std::fs::write(&key, "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nxx\n-----END RSA PRIVATE KEY-----\n").unwrap();
+        c.ssh.private_key_file = key.display().to_string();
+        assert_eq!(fields(&c), vec!["passphrase"]);
+        c.ssh.ask_password = true;
+        assert!(fields(&c).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

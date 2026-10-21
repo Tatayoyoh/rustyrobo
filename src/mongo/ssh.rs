@@ -98,6 +98,33 @@ fn dirs_home_known_hosts() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|d| d.home_dir().join(".ssh").join("known_hosts"))
 }
 
+/// Tries every identity of the agent until one is accepted.
+async fn auth_with_agent<S>(
+    session: &mut client::Handle<Handler>,
+    user: &str,
+    mut agent: keys::agent::client::AgentClient<S>,
+) -> anyhow::Result<bool>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let identities = agent.request_identities().await?;
+    if identities.is_empty() {
+        bail!("SSH agent has no identities");
+    }
+    let hash = session.best_supported_rsa_hash().await?.flatten();
+    for id in identities {
+        let keys::agent::AgentIdentity::PublicKey { key, .. } = id else { continue };
+        let res = session
+            .authenticate_publickey_with(user.to_string(), key, hash, &mut agent)
+            .await
+            .map_err(|e| anyhow!("SSH agent signing failed: {e}"))?;
+        if res.success() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub struct SshTunnel {
     pub local_port: u16,
     pub host_key: HostKeyStatus,
@@ -166,26 +193,27 @@ impl SshTunnel {
                     .success()
             }
             SshAuthMethod::Agent => {
-                let mut agent = keys::agent::client::AgentClient::connect_env()
+                #[cfg(unix)]
+                let agent = keys::agent::client::AgentClient::connect_env()
                     .await
                     .context("Cannot reach SSH agent (is SSH_AUTH_SOCK set?)")?;
-                let identities = agent.request_identities().await?;
-                if identities.is_empty() {
-                    bail!("SSH agent has no identities");
-                }
-                let hash = session.best_supported_rsa_hash().await?.flatten();
-                let mut ok = false;
-                for id in identities {
-                    let keys::agent::AgentIdentity::PublicKey { key, .. } = id else { continue };
-                    let res = session
-                        .authenticate_publickey_with(user.clone(), key, hash, &mut agent)
-                        .await
-                        .map_err(|e| anyhow!("SSH agent signing failed: {e:?}"))?;
-                    if res.success() {
-                        ok = true;
-                        break;
+                #[cfg(windows)]
+                let ok = {
+                    // Windows OpenSSH agent first, then Pageant (PuTTY).
+                    match keys::agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
+                        Ok(agent) => auth_with_agent(&mut session, &user, agent).await?,
+                        Err(_) => {
+                            let agent = keys::agent::client::AgentClient::connect_pageant()
+                                .await
+                                .context("No SSH agent found (Windows OpenSSH agent or Pageant)")?;
+                            auth_with_agent(&mut session, &user, agent).await?
+                        }
                     }
-                }
+                };
+                #[cfg(unix)]
+                let ok = auth_with_agent(&mut session, &user, agent).await?;
+                #[cfg(not(any(unix, windows)))]
+                let ok = bail!("SSH agent is not supported on this platform");
                 ok
             }
         };
@@ -253,4 +281,93 @@ pub fn expand_tilde(p: &str) -> PathBuf {
         return home.home_dir().join(rest);
     }
     PathBuf::from(p)
+}
+
+/// What we know about a private key file, for the connection editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyFileState {
+    Missing,
+    /// Readable without a passphrase.
+    Plain,
+    /// Protected by a passphrase.
+    Encrypted,
+    Invalid(String),
+}
+
+/// Inspects a private key file. Results are cached by path and
+/// modification time, so calling it every frame only costs a `stat`.
+pub fn probe_private_key(path: &str) -> KeyFileState {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::SystemTime;
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (SystemTime, KeyFileState)>>> = OnceLock::new();
+
+    let p = expand_tilde(path.trim());
+    let Ok(meta) = std::fs::metadata(&p) else {
+        return KeyFileState::Missing;
+    };
+    let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((t, state)) = cache.lock().ok().and_then(|c| c.get(&p).cloned())
+        && t == mtime
+    {
+        return state;
+    }
+    let state = if meta.len() > 1 << 20 {
+        KeyFileState::Invalid("file too large for a private key".into())
+    } else {
+        match keys::load_secret_key(&p, None) {
+            Ok(_) => KeyFileState::Plain,
+            Err(keys::Error::KeyIsEncrypted) => KeyFileState::Encrypted,
+            Err(e) => {
+                // Legacy PEM keys announce encryption in their headers.
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                if text.contains("ENCRYPTED") {
+                    KeyFileState::Encrypted
+                } else {
+                    KeyFileState::Invalid(e.to_string())
+                }
+            }
+        }
+    };
+    if let Ok(mut c) = cache.lock() {
+        c.insert(p, (mtime, state.clone()));
+    }
+    state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keygen(dir: &std::path::Path, name: &str, pass: &str) -> Option<String> {
+        let path = dir.join(name);
+        let ok = std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", pass, "-f"])
+            .arg(&path)
+            .status()
+            .ok()?
+            .success();
+        ok.then(|| path.display().to_string())
+    }
+
+    #[test]
+    fn detects_encrypted_and_plain_keys() {
+        let dir = std::env::temp_dir().join(format!("rr-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(probe_private_key(&dir.join("nope").display().to_string()), KeyFileState::Missing);
+        let junk = dir.join("junk");
+        std::fs::write(&junk, "not a key").unwrap();
+        assert!(matches!(probe_private_key(&junk.display().to_string()), KeyFileState::Invalid(_)));
+        // ssh-keygen may be missing on some CI images: only test what we can.
+        if let Some(plain) = keygen(&dir, "plain", "") {
+            assert_eq!(probe_private_key(&plain), KeyFileState::Plain);
+        }
+        if let Some(enc) = keygen(&dir, "enc", "secret") {
+            assert_eq!(probe_private_key(&enc), KeyFileState::Encrypted);
+            assert!(keys::load_secret_key(&enc, Some("secret")).is_ok());
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

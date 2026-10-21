@@ -1,59 +1,110 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="rustyrobo logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Rustyrobo logo">
   <defs>
     <linearGradient id="body" x1="0.2" y1="0" x2="0.8" y2="1">
-      <stop offset="0" stop-color="#F28C45"/>
-      <stop offset="0.5" stop-color="#D0532F"/>
-      <stop offset="1" stop-color="#A63A22"/>
+      <stop offset="0" stop-color="#E8823F"/>
+      <stop offset="0.5" stop-color="#C24E2C"/>
+      <stop offset="1" stop-color="#93341E"/>
     </linearGradient>
     <linearGradient id="dark" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#9C3A22"/>
-      <stop offset="1" stop-color="#7A2A18"/>
+      <stop offset="0" stop-color="#93361F"/>
+      <stop offset="1" stop-color="#6C2514"/>
     </linearGradient>
     <linearGradient id="iron" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8E8270"/>
-      <stop offset="1" stop-color="#6D6253"/>
+      <stop offset="0" stop-color="#8A7B68"/>
+      <stop offset="1" stop-color="#635646"/>
     </linearGradient>
     <radialGradient id="lens" cx="0.45" cy="0.4" r="0.6">
       <stop offset="0" stop-color="#C9FFF2"/>
       <stop offset="0.55" stop-color="#6FE3C8"/>
       <stop offset="1" stop-color="#2BAE93"/>
     </radialGradient>
+
+    <!-- Rust: dark corroded blotches from fractal noise -->
+    <filter id="corrosion" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.011" numOctaves="5" seed="11"/>
+      <feColorMatrix values="0 0 0 0 0.40  0 0 0 0 0.14  0 0 0 0 0.06  4.5 0 0 0 -2.05"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+    <!-- Rust: fine orange flakes -->
+    <filter id="flakes" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="3" seed="4"/>
+      <feColorMatrix values="0 0 0 0 0.96  0 0 0 0 0.60  0 0 0 0 0.32  0 3.2 0 0 -2.15"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+    <!-- Rust on iron parts -->
+    <filter id="iron-rust" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="4" seed="3"/>
+      <feColorMatrix values="0 0 0 0 0.62  0 0 0 0 0.27  0 0 0 0 0.12  2.6 0 0 0 -1.15"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+
+    <path id="head" d="M508 20 C 380 120, 250 280, 250 450 A 258 300 0 0 0 766 450 C 766 280, 640 120, 508 20 Z"/>
+
+    <!-- Crab pincer, pointing up, palm centred on the origin -->
+    <g id="pincer">
+      <ellipse cx="0" cy="0" rx="62" ry="70" fill="url(#body)" stroke="#6C2514" stroke-width="4"/>
+      <!-- fixed finger -->
+      <path d="M-50 -30 C -98 -100 -78 -185 -20 -215 C -38 -160 -36 -105 -6 -62 Z" fill="url(#body)" stroke="#6C2514" stroke-width="4" stroke-linejoin="round"/>
+      <!-- moving finger -->
+      <path d="M46 -36 C 82 -95 70 -160 22 -190 C 32 -140 26 -95 8 -62 Z" fill="url(#body)" stroke="#6C2514" stroke-width="4" stroke-linejoin="round"/>
+      <!-- teeth -->
+      <g fill="#F2B27A">
+        <circle cx="-14" cy="-110" r="6"/>
+        <circle cx="-12" cy="-145" r="5"/>
+        <circle cx="16" cy="-105" r="5"/>
+        <circle cx="20" cy="-138" r="4"/>
+      </g>
+      <!-- shell ridge -->
+      <path d="M-40 18 Q 0 40 40 18" fill="none" stroke="#6C2514" stroke-width="5" stroke-linecap="round" opacity="0.6"/>
+    </g>
+    <g id="pincer-mask" fill="#fff">
+      <ellipse cx="0" cy="0" rx="62" ry="70"/>
+      <path d="M-50 -30 C -98 -100 -78 -185 -20 -215 C -38 -160 -36 -105 -6 -62 Z"/>
+      <path d="M46 -36 C 82 -95 70 -160 22 -190 C 32 -140 26 -95 8 -62 Z"/>
+    </g>
   </defs>
 
   <!-- shadow -->
-  <ellipse cx="512" cy="975" rx="200" ry="16" fill="#000" opacity="0.18"/>
+  <ellipse cx="512" cy="985" rx="210" ry="16" fill="#000" opacity="0.18"/>
 
-  <!-- arms (iron) -->
-  <path d="M245 430 A225 225 0 0 0 230 760" fill="none" stroke="url(#iron)" stroke-width="58" stroke-linecap="round"/>
-  <path d="M779 430 A225 225 0 0 1 794 760" fill="none" stroke="url(#iron)" stroke-width="58" stroke-linecap="round"/>
+  <!-- arms (rusty iron) -->
+  <g>
+    <path d="M245 430 A225 225 0 0 0 215 740" fill="none" stroke="url(#iron)" stroke-width="58" stroke-linecap="round"/>
+    <path d="M779 430 A225 225 0 0 1 809 740" fill="none" stroke="url(#iron)" stroke-width="58" stroke-linecap="round"/>
+    <g filter="url(#iron-rust)">
+      <path d="M245 430 A225 225 0 0 0 215 740" fill="none" stroke="#fff" stroke-width="58" stroke-linecap="round"/>
+      <path d="M779 430 A225 225 0 0 1 809 740" fill="none" stroke="#fff" stroke-width="58" stroke-linecap="round"/>
+    </g>
+  </g>
 
   <!-- shoulders -->
   <circle cx="258" cy="455" r="72" fill="url(#dark)"/>
   <circle cx="766" cy="455" r="72" fill="url(#dark)"/>
 
-  <!-- claws -->
-  <g fill="url(#body)" stroke="#7A2A18" stroke-width="3">
-    <path d="M325 742 c-60 -58 -150 -45 -170 25 c-18 62 35 100 85 92 c22 -4 26 -38 4 -46 c-30 -6 -50 -28 -38 -55 c12 -26 45 -26 66 -6 c22 18 72 -4 53 -10 z"/>
-    <path d="M699 742 c60 -58 150 -45 170 25 c18 62 -35 100 -85 92 c-22 -4 -26 -38 -4 -46 c30 -6 50 -28 38 -55 c-12 -26 -45 -26 -66 -6 c-22 18 -72 -4 -53 -10 z"/>
+  <!-- crab pincers -->
+  <use href="#pincer" transform="translate(205 815) rotate(-14)"/>
+  <use href="#pincer" transform="translate(819 815) scale(-1 1) rotate(-14)"/>
+  <g filter="url(#corrosion)">
+    <use href="#pincer-mask" transform="translate(205 815) rotate(-14)"/>
+    <use href="#pincer-mask" transform="translate(819 815) scale(-1 1) rotate(-14)"/>
   </g>
 
   <!-- lower body -->
-  <circle cx="507" cy="766" r="78" fill="url(#iron)" stroke="#5B5144" stroke-width="3"/>
+  <circle cx="507" cy="772" r="78" fill="url(#iron)" stroke="#4E4336" stroke-width="3"/>
+  <circle cx="507" cy="772" r="78" fill="#fff" filter="url(#iron-rust)"/>
   <ellipse cx="507" cy="680" rx="160" ry="120" fill="url(#dark)"/>
 
-  <!-- head: the drop -->
-  <path d="M508 20 C 380 120, 250 280, 250 450 A 258 300 0 0 0 766 450 C 766 280, 640 120, 508 20 Z" fill="url(#body)" stroke="#8A3020" stroke-width="3"/>
+  <!-- head + rust layers -->
+  <use href="#head" fill="url(#body)"/>
+  <use href="#head" fill="#fff" filter="url(#corrosion)"/>
+  <use href="#head" fill="#fff" filter="url(#flakes)"/>
+  <use href="#head" fill="none" stroke="#6C2514" stroke-width="4"/>
 
-  <!-- rust patina -->
-  <g fill="#8A3020" opacity="0.45">
-    <circle cx="350" cy="560" r="16"/>
-    <circle cx="378" cy="590" r="9"/>
-    <circle cx="660" cy="300" r="12"/>
-    <circle cx="640" cy="620" r="7"/>
-  </g>
-  <g fill="#F7B267" opacity="0.55">
-    <circle cx="430" cy="210" r="9"/>
-    <circle cx="610" cy="520" r="6"/>
+  <!-- rust streaks running down from the rivets -->
+  <g fill="#7A2C17" opacity="0.55">
+    <path d="M326 463 q4 40 -2 78 q-6 -30 -8 -70 z"/>
+    <path d="M698 463 q6 52 0 96 q-8 -40 -9 -88 z"/>
+    <path d="M424 696 q3 26 -2 44 q-4 -18 -6 -40 z"/>
   </g>
 
   <!-- eye -->
@@ -64,7 +115,7 @@
   <circle cx="484" cy="390" r="22" fill="#FFFFFF" opacity="0.8"/>
 
   <!-- grille -->
-  <g fill="#7A2A18">
+  <g fill="#6C2514">
     <path d="M431 585 h16 v42 l-16 -8 z"/>
     <rect x="465" y="585" width="18" height="58" rx="2"/>
     <rect x="501" y="585" width="18" height="63" rx="2"/>
@@ -73,28 +124,10 @@
   </g>
 
   <!-- rivets -->
-  <g fill="#F7B267">
-    <circle cx="330" cy="455" r="8"/>
-    <circle cx="694" cy="455" r="8"/>
-    <circle cx="420" cy="690" r="7"/>
-    <circle cx="604" cy="690" r="7"/>
-  </g>
-
-  <!-- small Rust cog on the tip -->
-  <g transform="translate(508 96)">
-    <g fill="#7A2A18">
-      <circle r="26"/>
-      <rect x="-7" y="-38" width="14" height="16" rx="3"/>
-      <rect x="-7" y="22" width="14" height="16" rx="3"/>
-      <rect x="-38" y="-7" width="16" height="14" rx="3"/>
-      <rect x="22" y="-7" width="16" height="14" rx="3"/>
-      <g transform="rotate(45)">
-        <rect x="-7" y="-38" width="14" height="16" rx="3"/>
-        <rect x="-7" y="22" width="14" height="16" rx="3"/>
-        <rect x="-38" y="-7" width="16" height="14" rx="3"/>
-        <rect x="22" y="-7" width="16" height="14" rx="3"/>
-      </g>
-    </g>
-    <circle r="11" fill="#F7B267"/>
+  <g fill="#D99A62" stroke="#6C2514" stroke-width="2">
+    <circle cx="330" cy="455" r="9"/>
+    <circle cx="694" cy="455" r="9"/>
+    <circle cx="420" cy="690" r="8"/>
+    <circle cx="604" cy="690" r="8"/>
   </g>
 </svg>

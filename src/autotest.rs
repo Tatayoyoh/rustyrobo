@@ -73,27 +73,30 @@ pub fn tick(app: &mut App, ctx: &Context) {
     let conn_ssh = app.settings.connections.get(2).cloned();
     let conn_main = app.settings.connections.first().map(|c| c.id);
     match t.step {
-        0 => shot(&mut t, ctx, "01-connections"),
-        1 => {
+        0 => app.conn_list = None,
+        1 => shot(&mut t, ctx, "00-welcome"),
+        2 => app.conn_list = Some(crate::ui::connections::ConnectionList::new(&app.settings)),
+        3 => shot(&mut t, ctx, "01-connections"),
+        4 => {
             if let Some(c) = conn_ssh.clone() {
                 app.conn_editor = Some(ConnectionEditor::new(c, false));
             }
         }
-        2 => shot(&mut t, ctx, "02-editor-general"),
-        3 => {
+        5 => shot(&mut t, ctx, "02-editor-general"),
+        6 => {
             if let Some(e) = &mut app.conn_editor {
                 e.section = Section::Ssh;
             }
         }
-        4 => shot(&mut t, ctx, "03-editor-ssh"),
-        5 => {
+        7 => shot(&mut t, ctx, "03-editor-ssh"),
+        8 => {
             if let Some(e) = &mut app.conn_editor {
                 e.run_test = true;
             }
             wait = 3.0;
         }
-        6 => shot(&mut t, ctx, "04-editor-test"),
-        7 => {
+        9 => shot(&mut t, ctx, "04-editor-test"),
+        10 => {
             app.conn_editor = None;
             app.conn_list = None;
             if let Some(id) = conn_main {
@@ -101,7 +104,7 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
             wait = 2.5;
         }
-        8 => {
+        11 => {
             if let Some(s) = app.servers.first() {
                 let sid = s.id;
                 open(ctx, Id::new(("srv", sid)));
@@ -120,12 +123,12 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
             wait = 2.5;
         }
-        9 => shot(&mut t, ctx, "05-tree"),
-        10 => set_mode(app, ViewMode::Table),
-        11 => shot(&mut t, ctx, "06-table"),
-        12 => set_mode(app, ViewMode::Text),
-        13 => shot(&mut t, ctx, "07-text"),
-        14 => {
+        12 => shot(&mut t, ctx, "05-tree"),
+        13 => set_mode(app, ViewMode::Table),
+        14 => shot(&mut t, ctx, "06-table"),
+        15 => set_mode(app, ViewMode::Text),
+        16 => shot(&mut t, ctx, "07-text"),
+        17 => {
             if let Some(tab) = app.tabs.last_mut() {
                 tab.script = "db.items.countDocuments({ tag: \"fizz\" })\nprint(\"hello from the shell\")\ndb.items.aggregate([{ $group: { _id: \"$tag\", n: { $sum: 1 } } }])\ndb.items.find({ $bad: 1 })".into();
                 let id = tab.id;
@@ -133,13 +136,13 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
             wait = 2.0;
         }
-        15 => shot(&mut t, ctx, "08-multi"),
-        16 => {
+        18 => shot(&mut t, ctx, "08-multi"),
+        19 => {
             app.settings.theme = "Nord".into();
             app.actions.push(Action::ApplyTheme);
         }
-        17 => shot(&mut t, ctx, "09-theme-nord"),
-        18 => {
+        20 => shot(&mut t, ctx, "09-theme-nord"),
+        21 => {
             app.settings.theme = "Porcelain".into();
             app.actions.push(Action::ApplyTheme);
             if let Some(s) = app.servers.first() {
@@ -154,7 +157,7 @@ pub fn tick(app: &mut App, ctx: &Context) {
                 ));
             }
         }
-        19 => shot(&mut t, ctx, "10-light-doc"),
+        22 => shot(&mut t, ctx, "10-light-doc"),
         _ => {
             app.dialog = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
