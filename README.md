@@ -64,8 +64,8 @@ XDG portal or GTK.
 
 ```sh
 cargo test                                   # unit tests
-docker compose -f dev/docker-compose.yml up -d
-RR_LIVE=1 cargo test --test live -- --test-threads=1   # against real servers + SSH
+dev/ssh/gen-keys.sh && docker compose -f dev/docker-compose.yml up -d --wait
+RR_LIVE=1 cargo test --test live --test ui -- --test-threads=1   # e2e: real servers, SSH, UI
 ```
 
 Settings are stored in `~/.config/rustyrobo/settings.json` (override with `RUSTYROBO_CONFIG_DIR`).

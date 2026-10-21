@@ -1,5 +1,5 @@
 # Test environment for rustyrobo's live tests and manual checks:
-#   docker compose -f dev/docker-compose.yml up -d --wait
+#   dev/ssh/gen-keys.sh && docker compose -f dev/docker-compose.yml up -d --wait
 #   RR_LIVE=1 cargo test --test live -- --test-threads=1
 name: rustyrobo-dev
 services:
@@ -33,7 +33,10 @@ services:
       PASSWORD_ACCESS: "true"
       USER_NAME: tunnel
       USER_PASSWORD: tunnelpw
+      PUBLIC_KEY_DIR: /pubkeys
       DOCKER_MODS: linuxserver/mods:openssh-server-ssh-tunnel
+    volumes:
+      - ./ssh/pubkeys:/pubkeys:ro
     healthcheck:
       # The tunnel mod is installed at start-up; sshd listens once it is done.
       test: ["CMD-SHELL", "nc -z localhost 2222"]
