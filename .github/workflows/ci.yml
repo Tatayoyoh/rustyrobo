@@ -35,6 +35,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgtk-3-dev
       - run: dev/ssh/gen-keys.sh && docker compose -f dev/docker-compose.yml up -d --wait
+        env:
+          MONGO_MODERN_IMAGE: mongo:7.0
       - run: RR_LIVE=1 cargo test --test live --test ui -- --test-threads=1
       - name: Container logs
         if: failure()

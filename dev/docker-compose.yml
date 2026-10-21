@@ -4,7 +4,9 @@
 name: rustyrobo-dev
 services:
   mongo8:
-    image: mongo:8
+    # MongoDB 8 refuses to start on Linux kernels >= 6.19 (SERVER-121912);
+    # CI runners may use such kernels and override this with mongo:7.0.
+    image: ${MONGO_MODERN_IMAGE:-mongo:8}
     container_name: rr-mongo8
     ports: ["27117:27017"]
     environment:
