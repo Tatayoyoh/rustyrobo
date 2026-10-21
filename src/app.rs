@@ -576,7 +576,7 @@ impl App {
                                 Some((d.get_str("name").ok()?.to_string(), d.get_str("type").unwrap_or("collection").to_string()))
                             })
                             .collect();
-                        v.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                        v.sort_by_key(|a| a.0.to_lowercase());
                         v
                     })
                     .map_err(|e| mongo::error_message(&e));

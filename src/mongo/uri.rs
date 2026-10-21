@@ -112,10 +112,8 @@ pub fn build_uri(
     match (conn.kind, tunnel) {
         (_, Some(_)) => opts.push("directConnection=true".into()),
         (ConnectionType::Direct, None) => opts.push("directConnection=true".into()),
-        (ConnectionType::ReplicaSet, None) => {
-            if !conn.replica_set_name.is_empty() {
-                opts.push(format!("replicaSet={}", enc(&conn.replica_set_name)));
-            }
+        (ConnectionType::ReplicaSet, None) if !conn.replica_set_name.is_empty() => {
+            opts.push(format!("replicaSet={}", enc(&conn.replica_set_name)));
         }
         _ => {}
     }

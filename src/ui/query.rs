@@ -341,7 +341,7 @@ fn welcome(app: &mut App, ui: &mut Ui) {
         }
         ui.add_space(14.0);
         let mut recent: Vec<_> = app.settings.connections.iter().filter(|c| c.last_connected.is_some()).collect();
-        recent.sort_by(|a, b| b.last_connected.cmp(&a.last_connected));
+        recent.sort_by_key(|c| std::cmp::Reverse(c.last_connected));
         if !recent.is_empty() {
             ui.label(RichText::new("Recent connections").strong());
             ui.add_space(4.0);
