@@ -600,3 +600,104 @@ pub fn parse_host_port(s: &str) -> Option<HostPort> {
         _ => Some(HostPort { host: s.to_string(), port: 27017 }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_port_parsing() {
+        assert_eq!(parse_host_port("db:27018").unwrap(), HostPort { host: "db".into(), port: 27018 });
+        assert_eq!(parse_host_port("db").unwrap(), HostPort { host: "db".into(), port: 27017 });
+        assert_eq!(parse_host_port("[::1]:1234").unwrap(), HostPort { host: "::1".into(), port: 1234 });
+        assert_eq!(parse_host_port("[fe80::1]").unwrap().port, 27017);
+        assert_eq!(parse_host_port("::1").unwrap().host, "::1");
+        assert!(parse_host_port("   ").is_none());
+        assert!(parse_host_port("db:notaport").is_none());
+    }
+
+    #[test]
+    fn host_display_brackets_ipv6() {
+        assert_eq!(HostPort { host: "::1".into(), port: 1 }.display(), "[::1]:1");
+        assert_eq!(HostPort { host: "a".into(), port: 2 }.display(), "a:2");
+    }
+
+    #[test]
+    fn labels() {
+        let mut c = ConnectionSettings::default();
+        assert_eq!(c.address_label(), "localhost:27017");
+        assert_eq!(c.auth_label(), "");
+        c.credentials.enabled = true;
+        c.credentials.username = "bob".into();
+        assert_eq!(c.auth_label(), "admin / bob");
+        c.kind = ConnectionType::ReplicaSet;
+        c.replica_set_name = "rs0".into();
+        c.hosts.push(HostPort { host: "b".into(), port: 1 });
+        assert_eq!(c.address_label(), "rs0 [localhost:27017, +1]");
+        c.kind = ConnectionType::Srv;
+        c.hosts = vec![HostPort { host: "cluster.example.net".into(), port: 27017 }];
+        assert_eq!(c.address_label(), "srv://cluster.example.net");
+    }
+
+    #[test]
+    fn enums_round_trip_through_uri_names() {
+        for m in AuthMechanism::ALL {
+            if let Some(n) = m.uri_name() {
+                assert_eq!(AuthMechanism::from_uri_name(n), m);
+            }
+        }
+        assert_eq!(AuthMechanism::from_uri_name("mongodb-cr"), AuthMechanism::ScramSha1);
+        for r in ReadPreference::ALL {
+            assert_eq!(ReadPreference::from_uri_name(r.uri_name()), r);
+        }
+        assert_eq!(ReadPreference::from_uri_name("bogus"), ReadPreference::Primary);
+    }
+
+    #[test]
+    fn settings_tolerate_missing_fields() {
+        let s: AppSettings = serde_json::from_str(r#"{"connections":[{"name":"x"}]}"#).unwrap();
+        assert_eq!(s.connections[0].name, "x");
+        assert_eq!(s.batch_size, 50);
+        assert_eq!(s.connections[0].hosts[0].port, 27017);
+        let text = serde_json::to_string(&s).unwrap();
+        let back: AppSettings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn imports_robo3t_config() {
+        let json = r#"{
+          "connections": [
+            {"connectionName": "prod", "serverHost": "db1", "serverPort": 27018, "defaultDatabase": "app",
+             "credentials": [{"enabled": true, "databaseName": "admin", "userName": "bob", "mechanism": "SCRAM-SHA-256"}],
+             "ssh": {"enabled": true, "host": "bastion", "port": 2200, "userName": "me", "method": "publickey", "privateKeyFile": "/k"},
+             "ssl": {"sslEnabled": true, "caFile": "/ca.pem", "allowInvalidHostnames": true},
+             "useManuallyVisibleDbs": true, "manuallyVisibleDbs": ["app", "logs"]},
+            {"connectionName": "", "isReplicaSet": true, "serverHost": "x", "serverPort": 1,
+             "replicaSet": {"setNameUserEntered": "rs0", "members": ["h1:27017", "h2:27018"], "readPreference": 1}}
+          ]}"#;
+        let dir = std::env::temp_dir().join(format!("rr-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("robo3t.json");
+        std::fs::write(&path, json).unwrap();
+        let list = import_robo3t(&path).unwrap();
+        assert_eq!(list.len(), 2);
+        let a = &list[0];
+        assert_eq!(a.name, "prod");
+        assert_eq!(a.hosts[0], HostPort { host: "db1".into(), port: 27018 });
+        assert!(a.credentials.enabled);
+        assert_eq!(a.credentials.mechanism, AuthMechanism::ScramSha256);
+        assert!(a.ssh.enabled);
+        assert_eq!(a.ssh.method, SshAuthMethod::PrivateKey);
+        assert_eq!(a.ssh.port, 2200);
+        assert!(a.tls.enabled && a.tls.allow_invalid_hostnames);
+        assert_eq!(a.visible_databases, vec!["app", "logs"]);
+        let b = &list[1];
+        assert_eq!(b.name, "Imported connection");
+        assert_eq!(b.kind, ConnectionType::ReplicaSet);
+        assert_eq!(b.replica_set_name, "rs0");
+        assert_eq!(b.hosts.len(), 2);
+        assert_eq!(b.read_preference, ReadPreference::PrimaryPreferred);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

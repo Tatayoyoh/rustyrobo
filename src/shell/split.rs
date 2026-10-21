@@ -320,4 +320,45 @@ mod tests {
         assert_eq!(rewrite_shell_command("show log global").unwrap(), "__show(\"log\", \"global\")");
         assert!(rewrite_shell_command("db.use.find()").is_none());
     }
+
+    #[test]
+    fn semicolons_inside_strings_and_regex() {
+        assert_eq!(texts("print('a;b'); print(\"c;d\")"), vec!["print('a;b')", "print(\"c;d\")"]);
+        assert_eq!(texts("var r = /;/g; r"), vec!["var r = /;/g", "r"]);
+        assert_eq!(texts("x = 6 / 3; y = x / 2"), vec!["x = 6 / 3", "y = x / 2"]);
+    }
+
+    #[test]
+    fn continuation_operators() {
+        assert_eq!(texts("var a = 1 +\n  2\nb"), vec!["var a = 1 +\n  2", "b"]);
+        assert_eq!(texts("var a = cond\n  ? 1\n  : 2"), vec!["var a = cond\n  ? 1\n  : 2"]);
+        assert_eq!(texts("return\nfoo"), vec!["return\nfoo"]);
+        assert_eq!(texts("try {\n x()\n}\ncatch (e) {}\nfinally {}"), vec!["try {\n x()\n}\ncatch (e) {}\nfinally {}"]);
+    }
+
+    #[test]
+    fn blank_and_comment_only() {
+        assert!(texts("").is_empty());
+        assert!(texts("   \n\n  ;;").is_empty());
+        assert_eq!(texts("/* only */").len(), 1);
+    }
+
+    #[test]
+    fn merge_helper() {
+        let mut s = split_statements("if (a)\nb()");
+        assert_eq!(s.len(), 2);
+        assert!(merge_with_next(&mut s, 0));
+        assert_eq!(s[0].text, "if (a)\nb()");
+        assert!(!merge_with_next(&mut s, 0));
+    }
+
+    #[test]
+    fn shell_command_edge_cases() {
+        assert_eq!(rewrite_shell_command("  use   my-db  ").unwrap(), "__use(\"my-db\")");
+        assert_eq!(rewrite_shell_command("it").unwrap(), "__it()");
+        assert_eq!(rewrite_shell_command("help").unwrap(), "help()");
+        assert!(rewrite_shell_command("use").is_none());
+        assert!(rewrite_shell_command("show").is_none());
+        assert!(rewrite_shell_command("use a b").is_none());
+    }
 }

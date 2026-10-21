@@ -771,4 +771,42 @@ mod tests {
         let total: usize = toks.iter().map(|(s, e, _)| e - s).sum();
         assert_eq!(total, src.len());
     }
+
+    #[test]
+    fn token_kinds() {
+        let src = "var x = db.c.find({ a: \"s\", n: 1 }) // c\nObjectId(true)";
+        let kinds: Vec<(String, Tok)> = tokenize(src).into_iter().map(|(s, e, t)| (src[s..e].to_string(), t)).collect();
+        let find = |w: &str| kinds.iter().find(|(s, _)| s == w).map(|(_, t)| *t);
+        assert!(find("var") == Some(Tok::Keyword));
+        assert!(find("\"s\"") == Some(Tok::String));
+        assert!(find("1") == Some(Tok::Number));
+        assert!(find("// c") == Some(Tok::Comment));
+        assert!(find("find") == Some(Tok::Function));
+        assert!(find("a") == Some(Tok::Property));
+        assert!(find("ObjectId") == Some(Tok::Bson));
+        assert!(find("true") == Some(Tok::Constant));
+    }
+
+    #[test]
+    fn highlight_job_covers_text() {
+        let t = &crate::theme::THEMES[0];
+        let job = highlight("db.x.find({})", t, FontId::monospace(12.0));
+        assert_eq!(job.text, "db.x.find({})");
+        assert!(job.sections.len() > 3);
+        let empty = highlight("", t, FontId::monospace(12.0));
+        assert_eq!(empty.text, "");
+    }
+
+    #[test]
+    fn completion_misc() {
+        let cols = vec!["a".to_string()];
+        assert!(completions("x", 1, &cols, CompletionMode::All).is_none(), "one letter is too short");
+        let (_, items) = completions("pri", 3, &cols, CompletionMode::All).unwrap();
+        assert!(items.contains(&"print".to_string()) && items.contains(&"printjson".to_string()));
+        let (_, items) = completions("rs.st", 5, &cols, CompletionMode::All).unwrap();
+        assert!(items.contains(&"status".to_string()) && items.contains(&"stepDown".to_string()));
+        let (_, items) = completions("db.", 3, &cols, CompletionMode::NoCollectionNames).unwrap();
+        assert!(!items.contains(&"a".to_string()));
+        assert!(completions("foo.ba", 6, &cols, CompletionMode::All).is_none());
+    }
 }

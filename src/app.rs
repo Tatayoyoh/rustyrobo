@@ -1060,3 +1060,40 @@ impl eframe::App for App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn titles_and_file_names() {
+        assert_eq!(tab_title("\n\n  db.users.find()  \n"), "db.users.find()");
+        assert_eq!(tab_title(""), "New Shell");
+        assert_eq!(tab_title("db.getCollection('a_long_collection_name').find({})"), "db.getCollection('a_long_col…");
+        assert_eq!(sanitize("a b/c:d"), "a_b_c_d");
+    }
+
+    #[test]
+    fn write_errors_are_detected() {
+        assert!(check_write(doc! { "ok": 1, "n": 1 }).is_ok());
+        let e = check_write(doc! { "ok": 1, "writeErrors": [{ "index": 0, "code": 11000, "errmsg": "E11000 duplicate key" }] }).unwrap_err();
+        assert_eq!(e, "E11000 duplicate key (code 11000)");
+        let e = check_write(doc! { "ok": 1, "writeConcernError": { "errmsg": "waiting for replication timed out" } }).unwrap_err();
+        assert!(e.contains("replication"));
+    }
+
+    #[test]
+    fn field_sampling() {
+        let docs = vec![
+            doc! { "_id": 1, "name": "a", "address": { "city": "x", "geo": { "lat": 1, "deep": { "too": 1 } } } },
+            doc! { "_id": 2, "name": "b", "tags": [1] },
+        ];
+        let f = sample_fields(&docs);
+        assert_eq!(&f[..2], &["_id".to_string(), "name".to_string()]);
+        assert!(f.contains(&"address.city".to_string()));
+        assert!(f.contains(&"address.geo.lat".to_string()));
+        assert!(f.contains(&"address.geo.deep".to_string()));
+        assert!(!f.contains(&"address.geo.deep.too".to_string()), "limited to 3 levels");
+        assert!(sample_fields(&[]).is_empty());
+    }
+}

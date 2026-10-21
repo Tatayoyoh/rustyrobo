@@ -1258,3 +1258,94 @@ fn advanced_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th
     field_error(ui, issues, "visible", th, show);
     changed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fields(c: &ConnectionSettings) -> Vec<&'static str> {
+        validate(c).into_iter().map(|i| i.field).collect()
+    }
+
+    #[test]
+    fn default_connection_is_valid() {
+        assert!(validate(&ConnectionSettings::default()).is_empty());
+    }
+
+    #[test]
+    fn general_validation() {
+        let mut c = ConnectionSettings { name: " ".into(), ..Default::default() };
+        c.hosts[0].host.clear();
+        c.hosts[0].port = 0;
+        assert_eq!(fields(&c), vec!["name", "host", "port"]);
+        let mut c = ConnectionSettings { kind: ConnectionType::ReplicaSet, ..Default::default() };
+        c.hosts = vec![HostPort { host: String::new(), port: 1 }];
+        assert_eq!(fields(&c), vec!["members"]);
+        let mut c = ConnectionSettings { kind: ConnectionType::Srv, ..Default::default() };
+        c.hosts = vec![HostPort { host: "cluster:27017".into(), port: 27017 }];
+        assert_eq!(fields(&c), vec!["host"]);
+        c.hosts[0].host = "a.b".into();
+        assert_eq!(fields(&c), vec!["host"]);
+        c.hosts[0].host = "cluster0.abc.mongodb.net".into();
+        assert!(fields(&c).is_empty());
+    }
+
+    #[test]
+    fn auth_ssh_tls_validation() {
+        let mut c = ConnectionSettings::default();
+        c.credentials.enabled = true;
+        c.credentials.database.clear();
+        assert_eq!(fields(&c), vec!["username", "database"]);
+        c.credentials.mechanism = AuthMechanism::X509;
+        c.credentials.database = "$external".into();
+        assert_eq!(fields(&c), vec!["mechanism"]);
+        c.tls.enabled = true;
+        assert_eq!(fields(&c), vec!["cert"]);
+        c.tls.cert_key_file = "/definitely/missing.pem".into();
+        assert_eq!(fields(&c), vec!["cert"]);
+
+        let mut c = ConnectionSettings::default();
+        c.ssh.enabled = true;
+        c.ssh.port = 0;
+        assert_eq!(fields(&c), vec!["host", "port", "username"]);
+        c.ssh.host = "h".into();
+        c.ssh.port = 22;
+        c.ssh.username = "u".into();
+        c.ssh.method = SshAuthMethod::PrivateKey;
+        c.ssh.private_key_file = "/definitely/missing".into();
+        assert_eq!(fields(&c), vec!["key"]);
+    }
+
+    #[test]
+    fn advanced_validation() {
+        let c = ConnectionSettings { use_visible_databases: true, extra_options: "a=1&broken".into(), ..Default::default() };
+        assert_eq!(fields(&c), vec!["visible", "extra"]);
+    }
+
+    #[test]
+    fn relative_times() {
+        assert_eq!(relative_time(None), "never");
+        assert_eq!(relative_time(Some(chrono::Utc::now())), "just now");
+        assert_eq!(relative_time(Some(chrono::Utc::now() - chrono::Duration::hours(3))), "3 h ago");
+        assert_eq!(relative_time(Some(chrono::Utc::now() - chrono::Duration::days(2))), "2 d ago");
+    }
+
+    #[test]
+    fn search_matches_name_host_and_group() {
+        let c = ConnectionSettings { name: "Prod".into(), group: "Billing".into(), ..Default::default() };
+        assert!(matches(&c, ""));
+        assert!(matches(&c, "prod"));
+        assert!(matches(&c, "LOCALHOST"));
+        assert!(matches(&c, "bill"));
+        assert!(!matches(&c, "staging"));
+    }
+
+    #[test]
+    fn editor_dirty_tracking() {
+        let mut e = ConnectionEditor::new(ConnectionSettings::default(), false);
+        assert!(!e.dirty());
+        e.conn.name = "changed".into();
+        assert!(e.dirty());
+        assert!(ConnectionEditor::new(ConnectionSettings::default(), true).dirty());
+    }
+}

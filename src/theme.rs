@@ -148,7 +148,7 @@ pub const THEMES: &[Theme] = &[
         surface: hex(0xE4DDC8),
         surface_hover: hex(0xD9D2BC),
         border: hex(0xC9C2AC),
-        text: hex(0x586E75),
+        text: hex(0x4A5B62),
         text_weak: hex(0x839496),
         accent: hex(0x268BD2),
         on_accent: hex(0xFDF6E3),
@@ -158,12 +158,12 @@ pub const THEMES: &[Theme] = &[
         warning: hex(0xB58900),
         success: hex(0x859900),
         syntax: Syntax {
-            keyword: hex(0x859900),
-            string: hex(0x2AA198),
+            keyword: hex(0x748600),
+            string: hex(0x208F87),
             number: hex(0xD33682),
             comment: hex(0x93A1A1),
             function: hex(0x268BD2),
-            property: hex(0xB58900),
+            property: hex(0xA07800),
             punctuation: hex(0x657B83),
             regex: hex(0xDC322F),
             constant: hex(0xCB4B16),
@@ -339,8 +339,8 @@ pub const THEMES: &[Theme] = &[
         success: hex(0x40A02B),
         syntax: Syntax {
             keyword: hex(0x8839EF),
-            string: hex(0x40A02B),
-            number: hex(0xFE640B),
+            string: hex(0x378F24),
+            number: hex(0xD85408),
             comment: hex(0x9CA0B0),
             function: hex(0x1E66F5),
             property: hex(0x179299),
@@ -500,5 +500,63 @@ pub fn bson_color(t: &Theme, b: &bson::Bson) -> Color32 {
         RegularExpression(_) => t.syntax.regex,
         JavaScriptCode(_) | JavaScriptCodeWithScope(_) => t.syntax.function,
         Document(_) | Array(_) => t.text_weak,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(c: Color32) -> f64 {
+        let ch = |v: u8| {
+            let v = v as f64 / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn names_are_unique_and_resolvable() {
+        let mut seen = std::collections::HashSet::new();
+        for t in THEMES {
+            assert!(seen.insert(t.name), "duplicate theme {}", t.name);
+            assert_eq!(resolve(t.name, false).name, t.name);
+        }
+        assert!(!resolve("System", false).dark);
+        assert!(resolve("System", true).dark);
+        assert_eq!(resolve("does not exist", true).name, THEMES[0].name);
+        assert_eq!(names().count(), THEMES.len() + 1);
+    }
+
+    #[test]
+    fn text_is_readable_in_every_theme() {
+        for t in THEMES {
+            // WCAG AA for body text on panels and editors.
+            assert!(contrast(t.text, t.bg) >= 4.5, "{}: text/bg {:.2}", t.name, contrast(t.text, t.bg));
+            assert!(contrast(t.text, t.base) >= 4.5, "{}: text/base", t.name);
+            assert!(contrast(t.text, t.selection) >= 3.0, "{}: text/selection", t.name);
+            assert!(contrast(t.text_weak, t.bg) >= 2.5, "{}: weak text", t.name);
+            assert_eq!(t.dark, luminance(t.bg) < 0.2, "{}: dark flag", t.name);
+            let s = &t.syntax;
+            for (name, c) in [("keyword", s.keyword), ("string", s.string), ("number", s.number), ("function", s.function), ("property", s.property), ("bson", s.bson_type)] {
+                assert!(contrast(c, t.base) >= 3.0, "{}: {name} {:.2}", t.name, contrast(c, t.base));
+            }
+        }
+    }
+
+    #[test]
+    fn visuals_follow_theme() {
+        for t in THEMES {
+            let v = visuals(t);
+            assert_eq!(v.dark_mode, t.dark);
+            assert_eq!(v.panel_fill, t.bg);
+            // Strong text must stay readable (it uses the active widget colour).
+            assert_eq!(v.strong_text_color(), t.text);
+        }
     }
 }

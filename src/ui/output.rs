@@ -624,3 +624,70 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         crate::ui::editor::code_view(ui, Id::new(("out-json", cx.tab, cx.index)), text, cx.theme, FontId::monospace(cx.font_size));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::shell::{QuerySpec, ShellOutput};
+    use std::time::Duration;
+
+    fn docs() -> Vec<Bson> {
+        vec![
+            Bson::Document(doc! { "_id": 1, "a": { "b": [1, { "c": 2 }] }, "s": "x" }),
+            Bson::Document(doc! { "_id": 2, "z": true }),
+        ]
+    }
+
+    fn pane(docs: Vec<Bson>, spec: Option<QuerySpec>) -> OutputPane {
+        OutputPane::new(
+            ShellOutput { statement: "q".into(), line: 0, kind: OutputKind::Docs { docs, spec, ns: None, more: true }, elapsed: Duration::ZERO },
+            ViewMode::Tree,
+            50,
+            true,
+        )
+    }
+
+    #[test]
+    fn flatten_respects_expansion() {
+        let t = &crate::theme::THEMES[0];
+        let d = docs();
+        let mut exp = HashSet::new();
+        assert_eq!(flatten(&d, &exp, FormatOptions::default(), t).len(), 2);
+        exp.insert("0".to_string());
+        let rows = flatten(&d, &exp, FormatOptions::default(), t);
+        assert_eq!(rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), vec!["(1) 1", "_id", "a", "s", "(2) 2"]);
+        expand_all(&mut exp, &d[0], "0".into());
+        let rows = flatten(&d, &exp, FormatOptions::default(), t);
+        assert!(rows.iter().any(|r| r.path == "0/a/b/[1]/c" && r.depth == 4));
+    }
+
+    #[test]
+    fn lookup_paths() {
+        let d = docs();
+        assert_eq!(lookup(&d, 0, &["a".into(), "b".into(), "[1]".into(), "c".into()]), Some(&Bson::Int32(2)));
+        assert_eq!(lookup(&d, 1, &["z".into()]), Some(&Bson::Boolean(true)));
+        assert_eq!(lookup(&d, 0, &["missing".into()]), None);
+        assert_eq!(lookup(&d, 9, &[]), None);
+    }
+
+    #[test]
+    fn table_columns_union() {
+        assert_eq!(table_columns(&docs()), (vec!["_id".to_string(), "a".into(), "s".into(), "z".into()], false));
+        assert_eq!(table_columns(&[Bson::Int32(1)]), (vec!["value".to_string()], true));
+    }
+
+    #[test]
+    fn paging_state() {
+        let spec = QuerySpec { db: "d".into(), coll: "c".into(), filter: doc! {}, projection: None, sort: None, skip: 10, limit: 20, hint: None, collation: None };
+        let mut p = pane(docs(), Some(spec));
+        assert_eq!((p.skip, p.page_size), (10, 20));
+        assert!(p.expanded.contains("0"), "first document auto-expanded");
+        assert_eq!(p.source(), Some(("d".to_string(), "c".to_string())));
+        p.set_page(vec![Bson::Int32(1)], 30);
+        assert_eq!(p.skip, 30);
+        assert!(matches!(p.output.kind, OutputKind::Docs { more: false, .. }));
+        assert_eq!(p.docs().len(), 1);
+        assert!(pane(docs(), None).source().is_none());
+    }
+}

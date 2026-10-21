@@ -267,4 +267,87 @@ mod tests {
         assert_eq!(n, "JUUID");
         assert_eq!(u, "07060504-0302-0100-0f0e-0d0c0b0a0908");
     }
+
+    #[test]
+    fn type_names_and_short_values() {
+        let o = FormatOptions::default();
+        let cases: Vec<(Bson, &str, &str)> = vec![
+            (Bson::Double(1.0), "Double", "1.0"),
+            (Bson::Double(2.5), "Double", "2.5"),
+            (Bson::Double(f64::NAN), "Double", "NaN"),
+            (Bson::Double(f64::NEG_INFINITY), "Double", "-Infinity"),
+            (Bson::Int32(7), "Int32", "7"),
+            (Bson::Int64(8), "Int64", "8"),
+            (Bson::Boolean(true), "Boolean", "true"),
+            (Bson::Null, "Null", "null"),
+            (Bson::String("a\nb".into()), "String", "a⏎b"),
+            (Bson::Array(vec![Bson::Int32(1)]), "Array", "[ 1 element ]"),
+            (Bson::Document(doc! { "a": 1, "b": 2 }), "Object", "{ 2 fields }"),
+            (Bson::MinKey, "MinKey", "MinKey"),
+            (Bson::MaxKey, "MaxKey", "MaxKey"),
+            (Bson::Undefined, "Undefined", "undefined"),
+        ];
+        for (b, t, v) in cases {
+            assert_eq!(type_name(&b), t);
+            assert_eq!(short_value(&b, o), v, "{b:?}");
+        }
+    }
+
+    #[test]
+    fn scalar_shell_syntax() {
+        let o = FormatOptions::default();
+        let ts = Bson::Timestamp(bson::Timestamp { time: 5, increment: 2 });
+        assert_eq!(scalar_shell(&ts, o), "Timestamp(5, 2)");
+        let re = Bson::RegularExpression(bson::Regex { pattern: "a+".into(), options: "i".into() });
+        assert_eq!(scalar_shell(&re, o), "/a+/i");
+        let dt = Bson::DateTime(bson::DateTime::from_millis(0));
+        assert_eq!(scalar_shell(&dt, o), "ISODate(\"1970-01-01T00:00:00.000Z\")");
+        let bin = Bson::Binary(bson::Binary { subtype: BinarySubtype::Generic, bytes: vec![1, 2, 3] });
+        assert_eq!(scalar_shell(&bin, o), "BinData(0,\"AQID\")");
+        let uuid = Bson::Binary(bson::Binary { subtype: BinarySubtype::Uuid, bytes: (0u8..16).collect() });
+        assert_eq!(scalar_shell(&uuid, o), "UUID(\"00010203-0405-0607-0809-0a0b0c0d0e0f\")");
+        assert_eq!(type_name(&uuid), "UUID");
+        assert_eq!(scalar_shell(&Bson::String("q\"".into()), o), "\"q\\\"\"");
+    }
+
+    #[test]
+    fn legacy_uuid_encodings() {
+        let bytes: Vec<u8> = (0u8..16).collect();
+        let bin = Bson::Binary(bson::Binary { subtype: BinarySubtype::UuidOld, bytes: bytes.clone() });
+        let mut o = FormatOptions::default();
+        assert!(scalar_shell(&bin, o).starts_with("BinData(3,"));
+        o.uuid = UuidEncoding::CSharpLegacy;
+        assert_eq!(scalar_shell(&bin, o), "CSUUID(\"03020100-0504-0706-0809-0a0b0c0d0e0f\")");
+        o.uuid = UuidEncoding::PythonLegacy;
+        assert_eq!(scalar_shell(&bin, o), "PYUUID(\"00010203-0405-0607-0809-0a0b0c0d0e0f\")");
+        assert!(legacy_uuid(&bytes[..4], UuidEncoding::JavaLegacy).is_none());
+    }
+
+    #[test]
+    fn dates_and_labels() {
+        assert_eq!(format_date(1_000, TimeZoneMode::Utc, false), "1970-01-01 00:00:01.000Z");
+        assert_eq!(format_date(1_000, TimeZoneMode::Utc, true), "1970-01-01T00:00:01.000Z");
+        assert!(format_date(1_000, TimeZoneMode::Local, false).starts_with("1970-01-01"));
+        let o = FormatOptions::default();
+        let d = Bson::Document(doc! { "_id": 5 });
+        assert_eq!(root_label(1, &d, o), "(1) 5");
+        assert_eq!(root_label(2, &Bson::Document(doc! { "x": 1 }), o), "(2)");
+        assert_eq!(root_label(3, &Bson::Document(doc! { "_id": { "a": 1 } }), o), "(3) { 1 field }");
+        assert_eq!(root_label(4, &Bson::Int32(9), o), "(4) 9");
+        assert!(is_container(&d) && !is_container(&Bson::Null));
+    }
+
+    #[test]
+    fn human_sizes() {
+        assert_eq!(human_bytes(512.0), "512 B");
+        assert_eq!(human_bytes(2048.0), "2.00 KB");
+        assert_eq!(human_bytes(5.0 * 1024.0 * 1024.0 * 1024.0), "5.00 GB");
+    }
+
+    #[test]
+    fn empty_containers_inline() {
+        let o = FormatOptions::default();
+        assert_eq!(to_shell_json(&Bson::Array(vec![]), 0, o), "[]");
+        assert_eq!(to_shell_json(&Bson::Document(doc! {}), 0, o), "{}");
+    }
 }

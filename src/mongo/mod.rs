@@ -436,3 +436,36 @@ fn first_line(s: &str) -> String {
     let s = s.split(", labels:").next().unwrap_or(s);
     s.chars().take(600).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_coercions() {
+        assert_eq!(bson_as_i64(&Bson::Int32(3)), Some(3));
+        assert_eq!(bson_as_i64(&Bson::Int64(4)), Some(4));
+        assert_eq!(bson_as_i64(&Bson::Double(5.9)), Some(5));
+        assert_eq!(bson_as_i64(&Bson::String("6".into())), None);
+        assert_eq!(bson_as_f64(&Bson::Int32(2)), Some(2.0));
+        assert_eq!(bson_as_f64(&Bson::Null), None);
+    }
+
+    #[test]
+    fn error_classification() {
+        assert!(is_wire_version_error(&anyhow!("Server at h:1 reports wire version 8, but this version of the driver requires at least 9")));
+        assert!(!is_wire_version_error(&anyhow!("connection refused")));
+        assert!(is_unauthorized(&anyhow!("Unauthorized: not authorized on admin")));
+        assert!(is_auth_error("SCRAM failure: Authentication failed."));
+        assert!(!is_auth_error("connection refused"));
+        assert_eq!(error_message(&anyhow!("plain")), "plain");
+        assert_eq!(first_line("msg, labels: {}, source"), "msg");
+    }
+
+    #[test]
+    fn step_labels() {
+        for k in [StepKind::Ssh, StepKind::Server, StepKind::Auth, StepKind::Databases] {
+            assert!(!k.label().is_empty());
+        }
+    }
+}

@@ -331,4 +331,61 @@ mod tests {
         assert_eq!(c.hosts[0].port, 27019);
         assert!(build_uri(&c, None, None, Secrets::Omit).starts_with("mongodb://[::1]:27019/"));
     }
+
+    #[test]
+    fn secrets_handling() {
+        let mut c = ConnectionSettings::default();
+        apply_uri(&mut c, "mongodb://u:p%3Aw@h/").unwrap();
+        assert_eq!(c.credentials.password, "p:w");
+        assert!(build_uri(&c, None, None, Secrets::Mask).starts_with("mongodb://u:*****@h:27017/"));
+        assert!(build_uri(&c, None, None, Secrets::Omit).starts_with("mongodb://u@h:27017/"));
+        assert!(build_uri(&c, Some("typed"), None, Secrets::Include).starts_with("mongodb://u:typed@"));
+    }
+
+    #[test]
+    fn x509_and_plain() {
+        let mut c = ConnectionSettings::default();
+        apply_uri(&mut c, "mongodb://CN=me@h/?authMechanism=MONGODB-X509&tls=true&tlsCertificateKeyFile=/c.pem").unwrap();
+        assert_eq!(c.credentials.mechanism, AuthMechanism::X509);
+        assert_eq!(c.credentials.database, "$external");
+        assert_eq!(c.tls.cert_key_file, "/c.pem");
+        let uri = build_uri(&c, None, None, Secrets::Include);
+        assert!(!uri.contains("CN%3Dme:"), "no password for X.509: {uri}");
+        assert!(uri.contains("authMechanism=MONGODB-X509"));
+    }
+
+    #[test]
+    fn options_and_warnings() {
+        let mut c = ConnectionSettings::default();
+        let w = apply_uri(&mut c, "mongodb://h:1/?connectTimeoutMS=5000&appName=my%20app&compressors=zstd&tlsInsecure=true").unwrap();
+        assert_eq!(c.connect_timeout_secs, 5);
+        assert_eq!(c.app_name, "my app");
+        assert_eq!(c.extra_options, "compressors=zstd");
+        assert!(c.tls.allow_invalid_certificates && c.tls.allow_invalid_hostnames);
+        assert_eq!(w.len(), 1);
+        let uri = build_uri(&c, None, None, Secrets::Include);
+        assert!(uri.ends_with("&compressors=zstd"), "{uri}");
+        assert!(uri.contains("appName=my%20app"));
+    }
+
+    #[test]
+    fn rejects_invalid_uris() {
+        let mut c = ConnectionSettings::default();
+        assert!(apply_uri(&mut c, "http://x").is_err());
+        assert!(apply_uri(&mut c, "mongodb://").is_err());
+        assert!(apply_uri(&mut c, "mongodb://user@/db").is_err());
+    }
+
+    #[test]
+    fn direct_flag_and_default_db() {
+        let mut c = ConnectionSettings::default();
+        apply_uri(&mut c, "mongodb://a,b/?directConnection=true").unwrap();
+        assert_eq!(c.kind, ConnectionType::Direct);
+        assert_eq!(c.hosts.len(), 1);
+        let mut c = ConnectionSettings::default();
+        apply_uri(&mut c, "mongodb://a/shop").unwrap();
+        assert_eq!(c.default_database, "shop");
+        assert!(!c.credentials.enabled);
+        assert!(build_uri(&c, None, None, Secrets::Include).starts_with("mongodb://a:27017/shop?directConnection=true"));
+    }
 }

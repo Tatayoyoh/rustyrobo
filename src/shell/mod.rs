@@ -527,4 +527,128 @@ mod tests {
     fn reports_syntax_errors() {
         assert!(parse_shell_value("{ a: }").is_err());
     }
+
+    /// Evaluates an expression with the prelude loaded (no connection) and
+    /// returns its value converted to a string by JavaScript.
+    fn js(src: &str) -> Result<String, String> {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            install_natives(&ctx, None, 50).unwrap();
+            ctx.eval_with_options::<(), _>(PRELUDE, eval_opts("<prelude>")).map_err(|e| exception_message(&ctx, e))?;
+            ctx.eval_with_options::<String, _>(format!("String((() => {{ return {src}; }})())"), eval_opts("<t>"))
+                .map_err(|e| exception_message(&ctx, e))
+        })
+    }
+
+    #[test]
+    fn tojson_shell_format() {
+        assert_eq!(js("tojson({ a: 1, b: [1, 'x'], c: {} })").unwrap(), "{\n    \"a\" : 1,\n    \"b\" : [\n        1,\n        \"x\"\n    ],\n    \"c\" : {}\n}");
+        assert_eq!(js("tojsononeline({ a: ObjectId('5f1d7a0e1c9d440000a1b2c3') })").unwrap(), "{ \"a\" : ObjectId(\"5f1d7a0e1c9d440000a1b2c3\") }");
+        assert_eq!(js("tojson(ISODate('2020-01-02'))").unwrap(), "ISODate(\"2020-01-02T00:00:00.000Z\")");
+        assert_eq!(js("tojson(NumberLong('9007199254740993'))").unwrap(), "NumberLong(\"9007199254740993\")");
+        assert_eq!(js("tojson(NumberLong(5))").unwrap(), "NumberLong(5)");
+        assert_eq!(js("tojson(UUID('01234567-89ab-cdef-0123-456789abcdef'))").unwrap(), "UUID(\"01234567-89ab-cdef-0123-456789abcdef\")");
+        assert_eq!(js("tojson(Timestamp(1, 2))").unwrap(), "Timestamp(1, 2)");
+        assert_eq!(js("tojson([MinKey, MaxKey])").unwrap(), "[\n    MinKey,\n    MaxKey\n]");
+    }
+
+    #[test]
+    fn bson_helpers() {
+        assert_eq!(js("ObjectId('5f1d7a0e1c9d440000a1b2c3').getTimestamp().toISOString()").unwrap(), "2020-07-26T12:41:50.000Z");
+        assert_eq!(js("ObjectId().str.length").unwrap(), "24");
+        assert_eq!(js("new ObjectId('5F1D7A0E1C9D440000A1B2C3').str").unwrap(), "5f1d7a0e1c9d440000a1b2c3");
+        assert_eq!(js("ObjectId('5f1d7a0e1c9d440000a1b2c3') instanceof ObjectId").unwrap(), "true");
+        assert!(js("ObjectId('nope')").unwrap_err().contains("Invalid ObjectId"));
+        assert_eq!(js("ObjectId.isValid('5f1d7a0e1c9d440000a1b2c3')").unwrap(), "true");
+        assert_eq!(js("ISODate('2020-01-02 03:04:05').toISOString()").unwrap(), "2020-01-02T03:04:05.000Z");
+        assert!(js("ISODate('garbage')").unwrap_err().contains("invalid ISO date"));
+        assert_eq!(js("HexData(0, 'ff00').base64()").unwrap(), "/wA=");
+        assert_eq!(js("BinData(0, '/wA=').hex()").unwrap(), "ff00");
+        assert_eq!(js("UUID().tojson().length").unwrap(), "44");
+        assert_eq!(js("NumberInt('12.7').valueOf()").unwrap(), "12");
+    }
+
+    #[test]
+    fn ejson_bridge() {
+        assert_eq!(js("__toEJSONString({ a: 1, b: 1.5, c: 2 ** 40, d: undefined, e: [undefined] })").unwrap(),
+            r#"{"a":{"$numberInt":"1"},"b":{"$numberDouble":"1.5"},"c":{"$numberDouble":"1099511627776.0"},"e":[null]}"#);
+        assert_eq!(js("__toEJSONString(/a.b/gi)").unwrap(), r#"{"$regularExpression":{"pattern":"a.b","options":"i"}}"#);
+        assert_eq!(js("JSON.stringify(__fromEJ({ $numberLong: '5' }).s)").unwrap(), "\"5\"");
+        assert_eq!(js("__fromEJ({ $date: { $numberLong: '0' } }).toISOString()").unwrap(), "1970-01-01T00:00:00.000Z");
+        assert_eq!(js("__fromEJ({ $regularExpression: { pattern: 'a', options: 'x' } }).tojson()").unwrap(), "/a/x");
+        // _id is put first on insert, like the mongo shell.
+        assert_eq!(js("Object.keys(__withId({ a: 1 })).join(',')").unwrap(), "_id,a");
+    }
+
+    #[test]
+    fn db_and_collection_proxies() {
+        assert_eq!(js("db.getName()").unwrap(), "test");
+        assert_eq!(js("db.users.getFullName()").unwrap(), "test.users");
+        assert_eq!(js("db.system.js.getFullName()").unwrap(), "test.system.js");
+        assert_eq!(js("db.getSiblingDB('other').coll.getFullName()").unwrap(), "other.coll");
+        assert_eq!(js("db.getCollection('a b').getName()").unwrap(), "a b");
+        assert_eq!(js("(__use('admin'), db.getName())").unwrap(), "admin");
+    }
+
+    #[test]
+    fn query_spec_building() {
+        let spec = js("JSON.stringify(__toEJ(db.getCollection('items').find({ a: 1 }, { b: 1 }).sort({ n: -1 }).skip(5).limit(10).hint('a_1').__spec()))").unwrap();
+        let b = ejson_to_bson(&spec).unwrap();
+        let q = QuerySpec::from_bson(b.as_document().unwrap()).unwrap();
+        assert_eq!(q.db, "test");
+        assert_eq!(q.coll, "items");
+        assert_eq!(q.filter, bson::doc! { "a": 1 });
+        assert_eq!(q.projection, Some(bson::doc! { "b": 1 }));
+        assert_eq!(q.sort, Some(bson::doc! { "n": -1 }));
+        assert_eq!((q.skip, q.limit), (5, 10));
+        assert_eq!(q.hint, Some(Bson::String("a_1".into())));
+        let cmd = q.find_command(20, 50);
+        assert_eq!(cmd.get_i64("skip").unwrap(), 20);
+        assert_eq!(cmd.get_i64("limit").unwrap(), 50);
+        assert!(cmd.get_bool("singleBatch").unwrap());
+        assert_eq!(cmd.keys().next().unwrap(), "find");
+        // A string filter means { _id: … }.
+        assert_eq!(js("JSON.stringify(db.c.find('x')._filter)").unwrap(), r#"{"_id":"x"}"#);
+        // Modifying an executed query is rejected.
+        assert!(js("(() => { const q = db.c.find(); q._cursor = {}; return q.sort({a:1}); })()").unwrap_err().contains("already executed"));
+    }
+
+    #[test]
+    fn shell_results() {
+        assert_eq!(js("__shellResult(undefined)").unwrap(), r#"{"t":"none"}"#);
+        assert_eq!(js("__shellResult('hi')").unwrap(), r#"{"t":"text","text":"hi"}"#);
+        assert_eq!(js("__shellResult(42)").unwrap(), r#"{"t":"text","text":"42"}"#);
+        assert_eq!(js("__shellResult(db.users)").unwrap(), r#"{"t":"text","text":"test.users"}"#);
+        assert_eq!(js("JSON.parse(__shellResult({ a: 1 })).docs.length").unwrap(), "1");
+        assert_eq!(js("JSON.parse(__shellResult([{ a: 1 }, { a: 2 }])).docs.length").unwrap(), "2");
+        let k = parse_result(&js("__shellResult({ a: NumberLong(3) })").unwrap()).unwrap();
+        match k {
+            OutputKind::Docs { docs, spec, more, .. } => {
+                assert_eq!(docs, vec![Bson::Document(bson::doc! { "a": 3i64 })]);
+                assert!(spec.is_none() && !more);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(parse_result(r#"{"t":"none"}"#).is_none());
+        assert!(parse_result("garbage").is_none());
+    }
+
+    #[test]
+    fn commands_without_connection_fail_cleanly() {
+        let e = js("db.c.findOne()").unwrap_err();
+        assert!(e.contains("MongoServerError") && e.contains("No connection"), "{e}");
+        assert!(js("db.c.updateOne({}, { a: 1 })").unwrap_err().contains("atomic operators"));
+        assert!(js("db.c.replaceOne({}, { $set: { a: 1 } })").unwrap_err().contains("must not contain"));
+        assert!(js("db.killOp()").unwrap_err().contains("operation id"));
+        assert!(js("__show('nope')").unwrap_err().contains("don't know how to show"));
+    }
+
+    #[test]
+    fn errors_are_formatted() {
+        let e = js("null.x").unwrap_err();
+        assert!(e.starts_with("TypeError"), "{e}");
+        let e = js("(() => { throw 'plain' })()").unwrap_err();
+        assert_eq!(e, "Error: \"plain\"");
+    }
 }
