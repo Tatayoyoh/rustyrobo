@@ -1,0 +1,25 @@
+# Test environment for rustyrobo's live tests and manual checks:
+#   docker compose -f dev/docker-compose.yml up -d
+#   RR_LIVE=1 cargo test --test live -- --test-threads=1
+name: rustyrobo-dev
+services:
+  mongo8:
+    image: mongo:8
+    container_name: rr-mongo8
+    ports: ["27117:27017"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: secret
+  mongo42:
+    image: mongo:4.2
+    container_name: rr-mongo42
+    ports: ["27142:27017"]
+  ssh:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: rr-ssh
+    ports: ["2222:2222"]
+    environment:
+      PASSWORD_ACCESS: "true"
+      USER_NAME: tunnel
+      USER_PASSWORD: tunnelpw
+      DOCKER_MODS: linuxserver/mods:openssh-server-ssh-tunnel

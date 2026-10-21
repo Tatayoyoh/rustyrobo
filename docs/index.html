@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rustyrobo — native MongoDB GUI in Rust</title>
+  <meta name="description" content="rustyrobo is a fast, native MongoDB GUI written in Rust: a port of Robomongo / Robo 3T with an embedded shell, working SSH tunnels and MongoDB 3.6 to 8.x support.">
+  <meta property="og:title" content="rustyrobo — native MongoDB GUI in Rust">
+  <meta property="og:description" content="The Robo 3T workflow, rebuilt in Rust for today's MongoDB.">
+  <meta property="og:image" content="screenshots/05-tree.png">
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
+  <style>
+    :root {
+      --bg: #faf7f4;
+      --surface: #ffffff;
+      --surface-2: #f2ede8;
+      --text: #1f2328;
+      --muted: #5f6670;
+      --border: #e4ddd5;
+      --rust: #ce422b;
+      --rust-2: #f0883e;
+      --teal: #13917c;
+      --code-bg: #1e1f22;
+      --code-text: #dcdfe4;
+      --shadow: 0 18px 50px rgba(60, 30, 10, .14);
+      --radius: 14px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141518;
+        --surface: #1c1d21;
+        --surface-2: #232429;
+        --text: #e6e8eb;
+        --muted: #9aa0a9;
+        --border: #2e3036;
+        --rust: #f0704f;
+        --rust-2: #f7a35c;
+        --teal: #4de0c2;
+        --code-bg: #0f1012;
+        --shadow: 0 18px 50px rgba(0, 0, 0, .45);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Ubuntu, Roboto, sans-serif;
+    }
+    a { color: var(--rust); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+
+    header.nav {
+      position: sticky; top: 0; z-index: 10;
+      backdrop-filter: blur(10px);
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav .wrap { display: flex; align-items: center; gap: 16px; height: 60px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); font-size: 18px; }
+    .brand img { width: 30px; height: 30px; }
+    .nav nav { margin-left: auto; display: flex; gap: 20px; font-size: 15px; }
+    .nav nav a { color: var(--muted); }
+    .nav nav a:hover { color: var(--text); text-decoration: none; }
+
+    .hero { padding: 72px 16px 40px; text-align: center; }
+    .hero img.logo { width: 112px; height: 112px; filter: drop-shadow(0 10px 24px rgba(206, 66, 43, .35)); }
+    .hero h1 { font-size: clamp(34px, 6vw, 58px); line-height: 1.1; margin: 18px 0 12px; letter-spacing: -0.02em; }
+    .hero h1 span { background: linear-gradient(90deg, var(--rust), var(--rust-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .hero p.lead { font-size: clamp(17px, 2.4vw, 21px); color: var(--muted); max-width: 680px; margin: 0 auto 28px; }
+    .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 20px; border-radius: 10px; font-weight: 600; font-size: 15px;
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    }
+    .btn.primary { background: linear-gradient(135deg, var(--rust-2), var(--rust)); color: #fff; border: 0; }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .badges { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    .badge { font-size: 13px; padding: 4px 10px; border-radius: 99px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+
+    .shot { margin: 40px auto 0; max-width: 1060px; }
+    .shot img { width: 100%; height: auto; display: block; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
+
+    section { padding: 72px 0; }
+    section h2 { font-size: clamp(26px, 4vw, 36px); margin: 0 0 10px; letter-spacing: -0.01em; }
+    section p.sub { color: var(--muted); margin: 0 0 36px; max-width: 720px; }
+
+    .why { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; }
+    .card h3 { margin: 6px 0 6px; font-size: 18px; }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
+    .icon { font-size: 24px; }
+
+    .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+    .feature { display: flex; gap: 12px; padding: 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+    .feature b { display: block; margin-bottom: 2px; }
+    .feature span { color: var(--muted); font-size: 14.5px; }
+
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: center; }
+    .split img { width: 100%; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
+    ul.checks { list-style: none; padding: 0; margin: 0; }
+    ul.checks li { padding: 6px 0 6px 28px; position: relative; }
+    ul.checks li::before { content: "✓"; position: absolute; left: 0; color: var(--teal); font-weight: 700; }
+
+    .themes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+    .swatch { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
+    .swatch i { width: 22px; height: 22px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.1); }
+
+    pre {
+      background: var(--code-bg); color: var(--code-text);
+      padding: 18px 20px; border-radius: 12px; overflow-x: auto;
+      font: 14px/1.6 ui-monospace, "Cascadia Code", "Fira Code", Menlo, monospace;
+    }
+    pre .c { color: #7d8590; }
+    pre .p { color: #f0883e; }
+
+    .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .gallery figure { margin: 0; }
+    .gallery img { width: 100%; border-radius: 12px; border: 1px solid var(--border); }
+    .gallery figcaption { color: var(--muted); font-size: 14px; margin-top: 6px; }
+
+    footer { border-top: 1px solid var(--border); padding: 28px 0 40px; color: var(--muted); font-size: 14px; }
+    footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+
+    @media (max-width: 820px) {
+      .why, .split, .gallery { grid-template-columns: 1fr; }
+      .nav nav { display: none; }
+      section { padding: 52px 0; }
+    }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap">
+      <a class="brand" href="#"><img src="logo.svg" alt="">rustyrobo</a>
+      <nav>
+        <a href="#why">Why</a>
+        <a href="#features">Features</a>
+        <a href="#ssh">SSH</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/Tatayoyoh/rustyrobo">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero wrap">
+      <img class="logo" src="logo.svg" alt="rustyrobo logo">
+      <h1>The Robo 3T workflow,<br><span>rebuilt in Rust.</span></h1>
+      <p class="lead">A fast, native MongoDB GUI with an embedded shell, working SSH tunnels and support
+        for every MongoDB from 3.6 to 8.x. One binary. No Electron.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Get rustyrobo</a>
+        <a class="btn" href="https://github.com/Tatayoyoh/rustyrobo">View on GitHub</a>
+      </div>
+      <div class="badges">
+        <span class="badge">Rust 2024</span>
+        <span class="badge">MongoDB 3.6 → 8.x</span>
+        <span class="badge">Linux · macOS · Windows</span>
+        <span class="badge">Apache-2.0</span>
+      </div>
+      <div class="shot"><img src="screenshots/05-tree.png" alt="rustyrobo main window with the database explorer and a query result in tree view" loading="eager"></div>
+    </div>
+
+    <section id="why">
+      <div class="wrap">
+        <h2>Why rustyrobo?</h2>
+        <p class="sub">Robomongo / Robo 3T was the lightweight, shell-centric MongoDB GUI many of us loved.
+          It is no longer maintained, its shell stopped at MongoDB 4.2 and SSH tunnels became unreliable.</p>
+        <div class="why">
+          <div class="card"><div class="icon">🧭</div><h3>Same interface</h3><p>Explorer, query tabs, tree/table/text views, menus and shortcuts as you remember them.</p></div>
+          <div class="card"><div class="icon">⚡</div><h3>Native and light</h3><p>A single Rust binary with immediate-mode rendering: starts instantly, uses little memory.</p></div>
+          <div class="card"><div class="icon">🍃</div><h3>Today's MongoDB</h3><p>Modern driver for 4.4–8.x, automatic legacy driver for 3.6–4.2, SRV, TLS, X.509.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" style="background: var(--surface-2)">
+      <div class="wrap">
+        <h2>Everything you used, and more</h2>
+        <p class="sub">Feature parity with Robo 3T first, then the things it always lacked.</p>
+        <div class="features">
+          <div class="feature"><div class="icon">🐚</div><div><b>Embedded mongo shell</b><span>find, cursors, aggregate, CRUD, indexes, users, use, show dbs, rs.*, sh.*</span></div></div>
+          <div class="feature"><div class="icon">🌲</div><div><b>Tree, table and text views</b><span>Paging, expand recursively, copy value / path / JSON / Extended JSON.</span></div></div>
+          <div class="feature"><div class="icon">💡</div><div><b>Smart autocompletion</b><span>Collections, methods, sampled field names, query and update operators, pipeline stages.</span></div></div>
+          <div class="feature"><div class="icon">🔀</div><div><b>Working SSH tunnels</b><span>Password, private key with passphrase or SSH agent, known_hosts checks.</span></div></div>
+          <div class="feature"><div class="icon">📝</div><div><b>Document editing</b><span>View, edit, insert and delete in shell syntax with validation.</span></div></div>
+          <div class="feature"><div class="icon">🛠</div><div><b>Admin dialogs</b><span>Collections, indexes (TTL, partial, text), users and roles, stored functions.</span></div></div>
+          <div class="feature"><div class="icon">📥</div><div><b>Import from Robo 3T</b><span>Bring your existing connections, or paste any connection string.</span></div></div>
+          <div class="feature"><div class="icon">🎨</div><div><b>Real colour themes</b><span>Eleven complete themes for UI, editor and BSON values, or follow the system.</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ssh">
+      <div class="wrap split">
+        <div>
+          <h2>A connection editor that tells you what's wrong</h2>
+          <p class="sub">The connection dialog was redesigned from scratch.</p>
+          <ul class="checks">
+            <li>Sections with live status badges and inline validation</li>
+            <li>Two-way connection string: paste a URI or copy the generated one</li>
+            <li>Step-by-step test: SSH tunnel → server → authentication → databases</li>
+            <li>Colour tags and groups to tell production from staging at a glance</li>
+            <li>Searchable connection manager with keyboard navigation</li>
+          </ul>
+        </div>
+        <img src="screenshots/04-editor-test.png" alt="Connection editor showing a successful step-by-step SSH connection test" loading="lazy">
+      </div>
+    </section>
+
+    <section id="themes" style="background: var(--surface-2)">
+      <div class="wrap">
+        <h2>Real themes</h2>
+        <p class="sub">Each theme styles the whole interface, the JavaScript editor and the colours of BSON types.</p>
+        <div class="themes">
+          <span class="swatch"><i style="background:#f3f4f6"></i>Porcelain</span>
+          <span class="swatch"><i style="background:#1e1f22"></i>Graphite</span>
+          <span class="swatch"><i style="background:#2e3440"></i>Nord</span>
+          <span class="swatch"><i style="background:#fdf6e3"></i>Solarized Light</span>
+          <span class="swatch"><i style="background:#002b36"></i>Solarized Dark</span>
+          <span class="swatch"><i style="background:#282828"></i>Gruvbox Dark</span>
+          <span class="swatch"><i style="background:#282c34"></i>One Dark</span>
+          <span class="swatch"><i style="background:#282a36"></i>Dracula</span>
+          <span class="swatch"><i style="background:#1a1b26"></i>Tokyo Night</span>
+          <span class="swatch"><i style="background:#eff1f5"></i>Catppuccin Latte</span>
+          <span class="swatch"><i style="background:#1e1e2e"></i>Catppuccin Mocha</span>
+          <span class="swatch"><i style="background:#000"></i>High Contrast</span>
+        </div>
+        <div class="gallery" style="margin-top:32px">
+          <figure><img src="screenshots/09-theme-nord.png" alt="Nord theme" loading="lazy"><figcaption>Nord</figcaption></figure>
+          <figure><img src="screenshots/10-light-doc.png" alt="Porcelain theme with the document editor" loading="lazy"><figcaption>Porcelain, document editor</figcaption></figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="wrap">
+        <h2>Install</h2>
+        <p class="sub">Build from source with Rust 1.88 or newer.</p>
+<pre><span class="c"># clone and build</span>
+<span class="p">$</span> git clone https://github.com/Tatayoyoh/rustyrobo.git
+<span class="p">$</span> cd rustyrobo
+<span class="p">$</span> cargo build --release
+<span class="p">$</span> ./target/release/rustyrobo</pre>
+        <p class="sub" style="margin-top:16px">Your existing Robo 3T connections can be imported from the connection manager
+          (<em>Import → From Robo 3T</em>).</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>rustyrobo — Apache-2.0. Not affiliated with Studio 3T or MongoDB, Inc.</span>
+      <a href="https://github.com/Tatayoyoh/rustyrobo">github.com/Tatayoyoh/rustyrobo</a>
+    </div>
+  </footer>
+</body>
+</html>
