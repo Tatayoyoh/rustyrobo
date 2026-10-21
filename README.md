@@ -32,19 +32,19 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 
 ## Features
 
-- **Robo 3T interface**
-- **Embedded mongo shell**
-- **MongoDB 3.6 → 8.x**
-- **Working SSH tunnels**
-- **Connections**
-- **Improved connection manager**
-- **Redesigned connection editor**
-- **Autocompletion**
-- **Document editing**: view, edit, insert, delete documents in shell syntax with validation
-- **Admin dialogs**: create/drop/rename/duplicate/copy collections, indexes (TTL, partial, text…),
-  users and roles, stored functions
-- **Colored themes**
-- **Light on resources**
+**Like Robomongo**
+- Same interface: explorer, query tabs, tree / table / text views, shortcuts
+- Embedded mongo shell
+- Easy document editing
+- Collection, index, user and function management
+
+**Plus**
+- MongoDB 3.6 → 8.x, shell included (no 4.2 limit)
+- Reliable SSH tunnels: agent, encrypted keys, host-key checks
+- Improved connection manager and redesigned connection editor
+- Field-name and operator autocompletion
+- Real colour themes
+- Native single binary, light on resources
 
 ## Install
 
@@ -64,7 +64,7 @@ XDG portal or GTK.
 
 ```sh
 cargo test                                   # unit tests
-docker compose -f dev/docker-compose.yml up -d --wait
+docker compose -f dev/docker-compose.yml up -d
 RR_LIVE=1 cargo test --test live -- --test-threads=1   # against real servers + SSH
 ```
 
