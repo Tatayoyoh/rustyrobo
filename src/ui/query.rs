@@ -167,7 +167,9 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         });
     };
 
-    let panel_id = Id::new(("editor-panel", tab.id));
+    // One panel id per orientation: a shared one would make the new panel
+    // reuse the other axis' size (the editor then fills the whole area).
+    let panel_id = Id::new(("editor-panel", tab.id, orientation));
     match orientation {
         Orientation::Vertical => {
             egui::Panel::top(panel_id)

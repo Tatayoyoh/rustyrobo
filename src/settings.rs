@@ -354,7 +354,7 @@ pub enum AutocompletionMode {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Orientation {
     #[default]
     Vertical,

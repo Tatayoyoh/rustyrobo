@@ -313,6 +313,24 @@ fn keyboard_shortcuts_open_dialogs() {
     assert!(has_label(&h, "started"), "startup line in the logs");
 }
 
+#[test]
+fn f10_rotates_both_ways() {
+    use rustyrobo::settings::Orientation;
+    let env = env("rotate", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.orientation, Orientation::Vertical);
+    h.key_press(Key::F10);
+    h.run_steps(2);
+    assert_eq!(h.state().settings.orientation, Orientation::Horizontal);
+    h.key_press(Key::F10);
+    h.run_steps(2);
+    assert_eq!(h.state().settings.orientation, Orientation::Vertical);
+    assert_eq!(saved_settings(&env).orientation, Orientation::Vertical);
+}
+
 // ---------------------------------------------------------------- live
 
 fn live() -> bool {
