@@ -206,8 +206,7 @@ fn opt_doc(text: &str) -> Result<Option<Document>, String> {
 fn buttons(ui: &mut Ui, ok_label: &str, ok_enabled: bool) -> (bool, bool) {
     let mut ok = false;
     let mut cancel = false;
-    ui.add_space(6.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    button_row(ui, |ui| {
         if ui.add_enabled(ok_enabled, egui::Button::new(RichText::new(ok_label).strong())).clicked() {
             ok = true;
         }
@@ -216,6 +215,22 @@ fn buttons(ui: &mut Ui, ok_label: &str, ok_enabled: bool) -> (bool, bool) {
         }
     });
     (ok, cancel)
+}
+
+/// Single right-aligned button for informational dialogs.
+fn close_button(ui: &mut Ui, label: &str) -> bool {
+    let mut clicked = false;
+    button_row(ui, |ui| clicked = ui.button(RichText::new(label).strong()).clicked());
+    clicked
+}
+
+/// Right-aligned row of buttons at the bottom of a dialog, as wide as the
+/// content above it: a bare right-to-left layout would take the whole
+/// available size and stretch the modal.
+fn button_row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.add_space(6.0);
+    let size = egui::vec2(ui.min_rect().width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), add);
 }
 
 fn title(ui: &mut Ui, t: &str) {
@@ -274,8 +289,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     ui.add(egui::Label::new(message.as_str()).selectable(true).wrap());
                 });
-                let (ok, _) = buttons(ui, "OK", true);
-                if ok || enter { Outcome::Close } else { Outcome::Keep }
+                if close_button(ui, "OK") || enter { Outcome::Close } else { Outcome::Keep }
             }
             Dialog::Confirm { title: t, message, action } => {
                 ui.set_max_width(480.0);
@@ -688,7 +702,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 if ok || cancel { Outcome::Close } else { Outcome::Keep }
             }
             Dialog::Preferences { batch_size } => {
-                ui.set_width(360.0);
                 title(ui, "Preferences");
                 egui::Grid::new("prefs").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label("Batch size (documents per page):");
@@ -729,13 +742,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.label("Native MongoDB management tool written in Rust.");
                     ui.label("Inspired by Robomongo / Robo 3T. Apache-2.0.");
                     ui.add_space(6.0);
-                    ui.label(RichText::new("MongoDB 3.6 → 8.x · embedded QuickJS shell · SSH tunnels").small().color(theme.text_weak));
+                    ui.label(RichText::new("MongoDB 3.6 to 8.x · embedded QuickJS shell · SSH tunnels").small().color(theme.text_weak));
                 });
-                let (ok, _) = buttons(ui, "OK", true);
-                if ok || enter { Outcome::Close } else { Outcome::Keep }
+                if close_button(ui, "OK") || enter { Outcome::Close } else { Outcome::Keep }
             }
             Dialog::Shortcuts => {
-                ui.set_width(440.0);
                 title(ui, "Keyboard Shortcuts");
                 egui::Grid::new("keys").num_columns(2).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
                     for (k, d) in [
@@ -760,8 +771,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ui.end_row();
                     }
                 });
-                let (ok, _) = buttons(ui, "Close", true);
-                if ok || enter { Outcome::Close } else { Outcome::Keep }
+                if close_button(ui, "Close") || enter { Outcome::Close } else { Outcome::Keep }
             }
         }
     });
