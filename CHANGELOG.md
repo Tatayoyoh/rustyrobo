@@ -9,6 +9,9 @@
   arrays that stay editable
 - Editors: Ctrl+F search bar, Ctrl+D multiple cursors (select the word, then each next
   occurrence)
+- Tree and table views: multiple selection (Ctrl+click toggles, Shift+click selects a range);
+  the context menu then offers only the actions that apply to all: expand / collapse, copy
+  values, names, paths or the documents as a JSON array, delete the selected documents
 
 ### Fixed
 - F10 rotated the editor and results only one way: the editor then filled the whole area
@@ -17,6 +20,7 @@
   informational dialogs
 - Tree mode button icon
 - Line numbers of document syntax errors were off by one
+- A dialog that settled on its size a frame late could stay misplaced until the next input
 
 ## 1.0.0
 
