@@ -23,7 +23,7 @@ pub struct OutputPane {
     pub skip: u64,
     pub page_size: u64,
     pub expanded: HashSet<String>,
-    pub selected: Option<String>,
+    pub selected: Selection,
     /// Derived views, rebuilt only when the page, the expansion state, the
     /// format options or the theme change (not every frame).
     text_cache: Option<(FormatOptions, String)>,
@@ -56,7 +56,7 @@ impl OutputPane {
             skip,
             page_size,
             expanded,
-            selected: None,
+            selected: Selection::default(),
             text_cache: None,
             folded: HashSet::new(),
             fold_cache: None,
@@ -86,13 +86,85 @@ impl OutputPane {
         self.fold_cache = None;
         self.rows_cache = None;
         self.columns_cache = None;
-        self.selected = None;
+        self.selected.clear();
     }
 
     fn source(&self) -> Option<(String, String)> {
         match &self.output.kind {
             OutputKind::Docs { spec: Some(s), .. } => Some((s.db.clone(), s.coll.clone())),
             _ => None,
+        }
+    }
+}
+
+/// Selected rows (tree paths, or document indices in the table view).
+#[derive(Default)]
+pub struct Selection {
+    items: HashSet<String>,
+    /// Start of Shift+click ranges.
+    anchor: Option<String>,
+}
+
+impl Selection {
+    pub fn contains(&self, path: &str) -> bool {
+        self.items.contains(path)
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.anchor = None;
+    }
+
+    /// Click on `path`: Ctrl toggles it, Shift selects the range from the
+    /// last clicked row in the visible `order`, otherwise only `path`.
+    pub fn click<I: IntoIterator<Item = String>>(&mut self, path: &str, mods: egui::Modifiers, order: impl FnOnce() -> I) {
+        if mods.shift
+            && let Some(anchor) = self.anchor.clone()
+        {
+            let mut range = Vec::new();
+            let mut inside = false;
+            for p in order() {
+                let edge = p == anchor || p == path;
+                if edge || inside {
+                    range.push(p);
+                }
+                if edge && (inside || anchor == path) {
+                    break;
+                }
+                inside |= edge;
+            }
+            // The anchor may be hidden now (collapsed): then a plain click.
+            if range.contains(&anchor) {
+                if !mods.command {
+                    self.items.clear();
+                }
+                self.items.extend(range);
+                return;
+            }
+        }
+        if mods.command {
+            if !self.items.remove(path) {
+                self.items.insert(path.to_string());
+            }
+        } else {
+            self.items.clear();
+            self.items.insert(path.to_string());
+        }
+        self.anchor = Some(path.to_string());
+    }
+
+    /// Right click: keeps the selection when `path` is part of it.
+    pub fn context(&mut self, path: &str) {
+        if !self.contains(path) {
+            self.click(path, egui::Modifiers::NONE, Vec::new);
         }
     }
 }
@@ -340,8 +412,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         .body(|body| {
             body.rows(row_h, rows.len(), |mut row| {
                 let r = &rows[row.index()];
-                let selected = pane.selected.as_deref() == Some(r.path.as_str());
-                row.set_selected(selected);
+                row.set_selected(pane.selected.contains(&r.path));
                 row.col(|ui| {
                     ui.add_space(indent * r.depth as f32);
                     if r.container {
@@ -363,14 +434,23 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     ui.add(egui::Label::new(RichText::new(r.tname).color(th.text_weak)).selectable(false).truncate());
                 });
                 let resp = row.response();
-                if resp.clicked() || resp.secondary_clicked() {
-                    pane.selected = Some(r.path.clone());
+                if resp.clicked() {
+                    let mods = resp.ctx.input(|i| i.modifiers);
+                    pane.selected.click(&r.path, mods, || rows.iter().map(|r| r.path.clone()));
+                }
+                if resp.secondary_clicked() {
+                    pane.selected.context(&r.path);
                 }
                 if resp.double_clicked() && r.container {
                     toggle = Some(r.path.clone());
                 }
                 resp.context_menu(|ui| {
-                    doc_menu(ui, pane, cx_parts(cx), r.doc, Some(&r.keys), Some(&r.path), &mut menu_actions);
+                    let targets: Vec<Target<'_>> = if pane.selected.len() > 1 && pane.selected.contains(&r.path) {
+                        rows.iter().filter(|r| pane.selected.contains(&r.path)).map(|r| Target { doc: r.doc, keys: Some(&r.keys), path: Some(&r.path) }).collect()
+                    } else {
+                        vec![Target { doc: r.doc, keys: Some(&r.keys), path: Some(&r.path) }]
+                    };
+                    doc_menu(ui, pane, cx_parts(cx), &targets, &mut menu_actions);
                 });
             });
         });
@@ -427,7 +507,108 @@ fn apply_menu_actions(pane: &mut OutputPane, cx: &mut PaneCtx<'_>, list: Vec<Men
     }
 }
 
-fn doc_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Option<&[String]>, path: Option<&str>, out: &mut Vec<MenuAction>) {
+/// Row a context menu applies to: a document, or a value inside it (tree).
+struct Target<'a> {
+    doc: usize,
+    keys: Option<&'a [String]>,
+    path: Option<&'a str>,
+}
+
+fn doc_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>], out: &mut Vec<MenuAction>) {
+    match targets {
+        [t] => single_menu(ui, pane, cx, t.doc, t.keys, t.path, out),
+        _ => multi_menu(ui, pane, cx, targets, out),
+    }
+}
+
+/// Menu of several selected rows: only the actions that apply to all.
+fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>], out: &mut Vec<MenuAction>) {
+    let docs = pane.docs();
+    let values: Vec<(&Target<'_>, &Bson)> = targets.iter().filter_map(|t| Some((t, lookup(docs, t.doc, t.keys.unwrap_or(&[]))?))).collect();
+    let containers: Vec<&str> = values.iter().filter(|(_, v)| bsonfmt::is_container(v)).filter_map(|(t, _)| t.path).collect();
+    if !containers.is_empty() {
+        if ui.button("Expand Recursively").clicked() {
+            out.extend(containers.iter().map(|p| MenuAction::ExpandAll(p.to_string())));
+            ui.close();
+        }
+        if ui.button("Collapse Recursively").clicked() {
+            out.extend(containers.iter().map(|p| MenuAction::CollapseAll(p.to_string())));
+            ui.close();
+        }
+        ui.separator();
+    }
+    // Values inside documents (not the documents themselves): one per line.
+    if values.iter().all(|(t, _)| t.keys.is_some_and(|k| !k.is_empty())) {
+        if ui.button("Copy Values").clicked() {
+            ui.ctx().copy_text(values.iter().map(|(_, v)| copy_value(v, cx.fmt)).collect::<Vec<_>>().join("\n"));
+            ui.close();
+        }
+        if ui.button("Copy Names").clicked() {
+            ui.ctx().copy_text(values.iter().filter_map(|(t, _)| t.keys?.last().cloned()).collect::<Vec<_>>().join("\n"));
+            ui.close();
+        }
+        if ui.button("Copy Paths").clicked() {
+            ui.ctx().copy_text(values.iter().filter_map(|(t, _)| t.keys.map(dotted_path)).collect::<Vec<_>>().join("\n"));
+            ui.close();
+        }
+        ui.separator();
+    }
+
+    // The documents of the selected rows, once each, as an array.
+    let mut indices: Vec<usize> = targets.iter().map(|t| t.doc).collect();
+    indices.dedup();
+    let roots: Vec<&Bson> = indices.iter().filter_map(|&i| docs.get(i)).collect();
+    let n = roots.len();
+    let plural = if n == 1 { "" } else { "s" };
+    if ui.button(format!("Copy JSON ({n} document{plural})")).clicked() {
+        ui.ctx().copy_text(bsonfmt::to_shell_json(&Bson::Array(roots.iter().map(|&b| b.clone()).collect()), 0, cx.fmt));
+        ui.close();
+    }
+    if ui.button(format!("Copy Extended JSON ({n} document{plural})")).clicked() {
+        let v: Vec<serde_json::Value> = roots.iter().map(|&b| b.clone().into_relaxed_extjson()).collect();
+        ui.ctx().copy_text(serde_json::to_string_pretty(&v).unwrap_or_default());
+        ui.close();
+    }
+    // Deleting needs whole documents selected, not values inside them.
+    let whole = targets.iter().all(|t| t.keys.is_none_or(|k| k.is_empty()));
+    let ids: Vec<Bson> = roots.iter().filter_map(|b| b.as_document()?.get("_id").cloned()).collect();
+    if let Some((db, coll)) = pane.source()
+        && whole
+        && !ids.is_empty()
+    {
+        ui.separator();
+        let n = ids.len();
+        let plural = if n == 1 { "" } else { "s" };
+        if ui.button(format!("Delete {n} Document{plural}…")).clicked() {
+            out.push(MenuAction::Push(Action::Dialog(Dialog::confirm(
+                "Delete Documents",
+                format!("Delete {n} document{plural} from \"{coll}\"?"),
+                Action::Command {
+                    server: cx.server,
+                    db,
+                    cmd: doc! { "delete": &coll, "deletes": [{ "q": { "_id": { "$in": ids } }, "limit": 0 }] },
+                    label: format!("Delete {n} document{plural}"),
+                    refresh: Refresh::Tab(cx.tab),
+                },
+            ))));
+            ui.close();
+        }
+    }
+}
+
+fn copy_value(v: &Bson, fmt: FormatOptions) -> String {
+    match v {
+        Bson::String(s) => s.clone(),
+        other => bsonfmt::to_shell_json(other, 0, fmt),
+    }
+}
+
+/// `a.b.0.c` from tree keys (`[0]` for array elements).
+fn dotted_path(keys: &[String]) -> String {
+    keys.iter().map(|k| k.strip_prefix('[').and_then(|k| k.strip_suffix(']')).unwrap_or(k)).collect::<Vec<_>>().join(".")
+}
+
+fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Option<&[String]>, path: Option<&str>, out: &mut Vec<MenuAction>) {
     let docs = pane.docs();
     let Some(root) = docs.get(doc) else { return };
     let source = pane.source();
@@ -449,11 +630,7 @@ fn doc_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Option
         if !keys.is_empty()
             && let Some(v) = value {
                 if ui.button("Copy Value").clicked() {
-                    let text = match v {
-                        Bson::String(s) => s.clone(),
-                        other => bsonfmt::to_shell_json(other, 0, cx.fmt),
-                    };
-                    ui.ctx().copy_text(text);
+                    ui.ctx().copy_text(copy_value(v, cx.fmt));
                     ui.close();
                 }
                 if ui.button("Copy Name").clicked() {
@@ -461,11 +638,7 @@ fn doc_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Option
                     ui.close();
                 }
                 if ui.button("Copy Path").clicked() {
-                    let p: Vec<String> = keys
-                        .iter()
-                        .map(|k| k.strip_prefix('[').and_then(|k| k.strip_suffix(']')).unwrap_or(k).to_string())
-                        .collect();
-                    ui.ctx().copy_text(p.join("."));
+                    ui.ctx().copy_text(dotted_path(keys));
                     ui.close();
                 }
                 ui.separator();
@@ -550,7 +723,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let fmt = cx.fmt;
     let menu = cx_parts(cx);
     let mut menu_actions = Vec::new();
-    let mut select: Option<String> = None;
+    let mut click: Option<(String, Option<egui::Modifiers>)> = None;
 
     egui::ScrollArea::horizontal().id_salt(("table-h", cx.tab, cx.index)).show(ui, |ui| {
         let mut tb = TableBuilder::new(ui)
@@ -579,7 +752,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let i = row.index();
                 let d = &docs[i];
                 let path = i.to_string();
-                row.set_selected(pane.selected.as_deref() == Some(path.as_str()));
+                row.set_selected(pane.selected.contains(&path));
                 row.col(|ui| {
                     ui.label(RichText::new((pane.skip + i as u64 + 1).to_string()).color(th.text_weak));
                 });
@@ -596,15 +769,30 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     });
                 }
                 let resp = row.response();
-                if resp.clicked() || resp.secondary_clicked() {
-                    select = Some(path.clone());
+                if resp.clicked() {
+                    click = Some((path.clone(), Some(resp.ctx.input(|i| i.modifiers))));
                 }
-                resp.context_menu(|ui| doc_menu(ui, pane, menu, i, None, None, &mut menu_actions));
+                if resp.secondary_clicked() {
+                    click = Some((path.clone(), None));
+                }
+                resp.context_menu(|ui| {
+                    let targets: Vec<Target<'_>> = if pane.selected.len() > 1 && pane.selected.contains(&path) {
+                        (0..docs.len()).filter(|j| pane.selected.contains(&j.to_string())).map(|doc| Target { doc, keys: None, path: None }).collect()
+                    } else {
+                        vec![Target { doc: i, keys: None, path: None }]
+                    };
+                    doc_menu(ui, pane, menu, &targets, &mut menu_actions);
+                });
             });
         });
     });
-    if let Some(s) = select {
-        pane.selected = Some(s);
+    match click {
+        Some((path, Some(mods))) => {
+            let n = pane.docs().len();
+            pane.selected.click(&path, mods, || (0..n).map(|i| i.to_string()));
+        }
+        Some((path, None)) => pane.selected.context(&path),
+        None => {}
     }
     apply_menu_actions(pane, cx, menu_actions);
     if pane.columns_cache.is_none() {
@@ -741,6 +929,33 @@ mod tests {
         assert!(folded.text.contains("\"a\" : {…},\n"), "{}", folded.text);
         assert!(!folded.text.contains("\"c\""));
         assert_eq!(fold_text(&text, &HashSet::from([0])).text, "{…}\n");
+    }
+
+    #[test]
+    fn selection_clicks() {
+        let order = || ["a", "b", "c", "d"].map(String::from);
+        let ctrl = egui::Modifiers::COMMAND;
+        let shift = egui::Modifiers::SHIFT;
+        let mut s = Selection::default();
+        s.click("b", egui::Modifiers::NONE, order);
+        s.click("d", ctrl, order);
+        assert!(s.contains("b") && s.contains("d") && s.len() == 2);
+        s.click("b", ctrl, order);
+        assert!(!s.contains("b") && s.len() == 1, "ctrl+click toggles");
+        s.click("b", egui::Modifiers::NONE, order);
+        s.click("d", shift, order);
+        assert_eq!((s.contains("b"), s.contains("c"), s.contains("d"), s.len()), (true, true, true, 3));
+        s.click("a", shift, order);
+        assert_eq!((s.contains("a"), s.contains("b"), s.len()), (true, true, 2), "range from the anchor, replaced");
+        s.click("d", shift | ctrl, order);
+        assert_eq!(s.len(), 4, "ctrl+shift adds the range");
+        s.context("c");
+        assert_eq!(s.len(), 4, "right click inside keeps the selection");
+        s.context("z");
+        assert!(s.contains("z") && s.len() == 1);
+        // Anchor no longer visible: plain click.
+        s.click("a", shift, || ["a", "b"].map(String::from));
+        assert!(s.contains("a") && s.len() == 1);
     }
 
     #[test]

@@ -479,6 +479,29 @@ fn live_connect_query_and_views() {
     wait_until(&mut h, "error", Duration::from_secs(15), |h| !h.state().tabs[0].running && h.state().tabs[0].outputs.len() == 1);
     h.run_steps(3);
     assert!(has_label(&h, "unknown top level operator"));
+
+    // Multiple selection in the tree: Ctrl+click, then only the actions
+    // that apply to several documents.
+    h.state_mut().tabs[0].script = "db.people.find({ age: { $gt: 30 } }).sort({ age: 1 })".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "query results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 2));
+    h.key_press(Key::F2);
+    h.run_steps(3);
+    h.get_by_label_contains("(1) ").click();
+    h.run_steps(2);
+    h.get_by_label_contains("(2) ").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].outputs[0].selected.len(), 2);
+    h.get_by_label_contains("(2) ").click_secondary();
+    h.run_steps(3);
+    assert!(has_label(&h, "Copy JSON (2 documents)"));
+    assert!(!has_label(&h, "Edit Document…"), "single-document actions hidden");
+    h.get_by_label("Delete 2 Documents…").click();
+    h.run_steps(5);
+    h.get_by_label("Yes").click();
+    wait_until(&mut h, "documents deleted", Duration::from_secs(15), |h| {
+        h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().is_empty()) && !h.state().tabs[0].running
+    });
 }
 
 #[test]
