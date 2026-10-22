@@ -370,6 +370,17 @@ fn live_connect_query_and_views() {
     });
     wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
 
+    // Rename the tab from its context menu.
+    h.get_by_label("seed").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Rename Shell…").click();
+    h.run_steps(3);
+    replace_text(&mut h, "seed", "people");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().tabs[0].title, "people");
+    assert!(h.state().tabs[0].renaming.is_none());
+
     // Type a query in the editor and run it with F5.
     let tab = h.state_mut().tabs.first_mut().unwrap();
     tab.script = "db.people.find({ age: { $gt: 30 } }).sort({ age: 1 })".into();

@@ -34,6 +34,8 @@ pub struct QueryTab {
     pub cursor_hint: Option<usize>,
     pub result_tab: usize,
     pub line_numbers: bool,
+    /// Title being edited in the tab bar (double-click or "Rename Shell…").
+    pub renaming: Option<String>,
     focus_editor: bool,
 }
 
@@ -58,6 +60,7 @@ impl QueryTab {
             cursor_hint: None,
             result_tab: 0,
             line_numbers: false,
+            renaming: None,
             focus_editor: true,
         }
     }
@@ -247,14 +250,17 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
 fn tab_bar(app: &mut App, ui: &mut Ui) {
     let theme = app.theme;
     let mut close = None;
+    let (mut activate, mut rename, mut close_others, mut close_right) = (None, None, None, None);
     let mut actions = Vec::new();
+    let active_tab = app.active_tab;
+    let servers = &app.servers;
     egui::Frame::new().fill(theme.surface).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
         egui::ScrollArea::horizontal().id_salt("tabbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                for (i, t) in app.tabs.iter().enumerate() {
-                    let active = i == app.active_tab;
-                    let color = app.server(t.server).and_then(|s| s.settings.color);
+                for (i, t) in app.tabs.iter_mut().enumerate() {
+                    let active = i == active_tab;
+                    let color = servers.iter().find(|s| s.id == t.server).and_then(|s| s.settings.color);
                     let fill = if active { theme.base } else { theme.surface };
                     egui::Frame::new()
                         .fill(fill)
@@ -265,6 +271,24 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
                             ui.horizontal(|ui| {
                                 if color.is_some() {
                                     color_dot(ui, color, 8.0);
+                                }
+                                if let Some(name) = &mut t.renaming {
+                                    let edit_id = Id::new(("tab-rename", t.id));
+                                    let r = ui.add(egui::TextEdit::singleline(name).id(edit_id).desired_width(140.0));
+                                    if !r.has_focus() && !r.lost_focus() {
+                                        r.request_focus();
+                                    }
+                                    let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                    if cancel {
+                                        t.renaming = None;
+                                    } else if r.lost_focus() {
+                                        let name = name.trim().to_string();
+                                        if !name.is_empty() {
+                                            t.title = name;
+                                        }
+                                        t.renaming = None;
+                                    }
+                                    return;
                                 }
                                 let mut title = t.title.clone();
                                 if t.dirty && t.file.is_some() {
@@ -277,7 +301,10 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
                                 }
                                 let r = r.on_hover_text(format!("{}\n{}", t.db, t.script.lines().next().unwrap_or("")));
                                 if r.clicked() {
-                                    app.active_tab = i;
+                                    activate = Some(i);
+                                }
+                                if r.double_clicked() {
+                                    rename = Some(i);
                                 }
                                 if r.middle_clicked() {
                                     close = Some(t.id);
@@ -295,21 +322,21 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
                                         actions.push(Action::DuplicateTab(t.id));
                                         ui.close();
                                     }
+                                    if ui.button("Rename Shell…").clicked() {
+                                        rename = Some(i);
+                                        ui.close();
+                                    }
                                     ui.separator();
                                     if ui.button("Close Shell").clicked() {
                                         actions.push(Action::CloseTab(t.id));
                                         ui.close();
                                     }
                                     if ui.button("Close Other Shells").clicked() {
-                                        for o in app.tabs.iter().filter(|o| o.id != t.id) {
-                                            actions.push(Action::CloseTab(o.id));
-                                        }
+                                        close_others = Some(t.id);
                                         ui.close();
                                     }
                                     if ui.button("Close Shells to the Right").clicked() {
-                                        for o in app.tabs.iter().skip(i + 1) {
-                                            actions.push(Action::CloseTab(o.id));
-                                        }
+                                        close_right = Some(i);
                                         ui.close();
                                     }
                                 });
@@ -322,6 +349,18 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
             });
         });
     });
+    if let Some(i) = activate {
+        app.active_tab = i;
+    }
+    if let Some(t) = rename.and_then(|i| app.tabs.get_mut(i)) {
+        t.renaming = Some(t.title.clone());
+    }
+    if let Some(id) = close_others {
+        actions.extend(app.tabs.iter().filter(|o| o.id != id).map(|o| Action::CloseTab(o.id)));
+    }
+    if let Some(i) = close_right {
+        actions.extend(app.tabs.iter().skip(i + 1).map(|o| Action::CloseTab(o.id)));
+    }
     if let Some(id) = close {
         actions.push(Action::CloseTab(id));
     }
