@@ -42,9 +42,12 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - MongoDB 3.6 → 8.x, shell included (no 4.2 limit)
 - Reliable SSH tunnels: agent, encrypted keys, host-key checks
 - Improved connection manager and redesigned connection editor
+- Improved document view/edit modal
 - Field-name and operator autocompletion
 - Real colour themes
 - Native single binary, light on resources
+- Multi document selection
+- A favorite script manager
 
 ## Install
 
