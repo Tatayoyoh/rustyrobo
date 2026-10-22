@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Rename a query tab by double-clicking it or with "Rename Shell…" in its context menu
+- Text result view: fold objects and arrays from the gutter, collapse / expand all documents
+
+### Fixed
+- F10 rotated the editor and results only one way: the editor then filled the whole area
+- The selected connection was hard to see in the connection manager
+- Dialogs: buttons at the bottom, height fitted to the content, single button for
+  informational dialogs
+- Tree mode button icon
+
 ## 1.0.0
 
 First release of Rustyrobo, a native MongoDB GUI written in Rust that ports Robomongo / Robo 3T.
