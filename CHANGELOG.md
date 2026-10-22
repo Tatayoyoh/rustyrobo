@@ -5,6 +5,10 @@
 ### Added
 - Rename a query tab by double-clicking it or with "Rename Shell…" in its context menu
 - Text result view: fold objects and arrays from the gutter, collapse / expand all documents
+- Document editor: validation while typing (no more Validate button), foldable objects and
+  arrays that stay editable
+- Editors: Ctrl+F search bar, Ctrl+D multiple cursors (select the word, then each next
+  occurrence)
 
 ### Fixed
 - F10 rotated the editor and results only one way: the editor then filled the whole area
@@ -12,6 +16,7 @@
 - Dialogs: buttons at the bottom, height fitted to the content, single button for
   informational dialogs
 - Tree mode button icon
+- Line numbers of document syntax errors were off by one
 
 ## 1.0.0
 
