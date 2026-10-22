@@ -12,6 +12,12 @@
 - Tree and table views: multiple selection (Ctrl+click toggles, Shift+click selects a range);
   the context menu then offers only the actions that apply to all: expand / collapse, copy
   values, names, paths or the documents as a JSON array, delete the selected documents
+- Del deletes the selected documents of the tree or table view, after confirmation
+- Favorite scripts: ☆ in a shell adds its script under a name (★ • saves later changes),
+  "Favorite Scripts" in the toolbar opens the manager: scripts by connection and database,
+  add / edit / clone / delete, drag and drop to move or reorder, load with a double-click or
+  Enter (connecting first when needed)
+- Tree / Table / Text labels on the result view buttons
 
 ### Fixed
 - F10 rotated the editor and results only one way: the editor then filled the whole area
