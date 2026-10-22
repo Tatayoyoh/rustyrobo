@@ -1,31 +1,24 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 ### Added
-- Rename a query tab by double-clicking it or with "Rename Shell…" in its context menu
-- Text result view: fold objects and arrays from the gutter, collapse / expand all documents
-- Document editor: validation while typing (no more Validate button), foldable objects and
-  arrays that stay editable
-- Editors: Ctrl+F search bar, Ctrl+D multiple cursors (select the word, then each next
-  occurrence)
-- Tree and table views: multiple selection (Ctrl+click toggles, Shift+click selects a range);
-  the context menu then offers only the actions that apply to all: expand / collapse, copy
-  values, names, paths or the documents as a JSON array, delete the selected documents
-- Del deletes the selected documents of the tree or table view, after confirmation
-- Favorite scripts: ☆ in a shell adds its script under a name (★ • saves later changes),
-  "Favorite Scripts" in the toolbar opens the manager: scripts by connection and database,
-  add / edit / clone / delete, drag and drop to move or reorder, load with a double-click or
-  Enter (connecting first when needed)
-- Tree / Table / Text labels on the result view buttons
-- Real icons (Phosphor) instead of emoji and Unicode symbols, consistent across platforms
+- Favorite scripts manager: by connection and database, with drag and drop
+- Multiple selection in tree and table views (Ctrl+click, Shift+click), Del to delete
+- Editors: Ctrl+F search, Ctrl+D multiple cursors
+- Document editor: live validation, foldable objects and arrays
+- Foldable text result view
+- Rename query tabs (double-click or context menu)
+- Phosphor icons instead of emoji
+
+### Changed
+- egui 0.36: building from source needs Rust 1.95 or later
 
 ### Fixed
 - F10 rotated the editor and results only one way: the editor then filled the whole area
 - The selected connection was hard to see in the connection manager
 - Dialogs: buttons at the bottom, height fitted to the content, single button for
   informational dialogs
-- Tree mode button icon
 - Line numbers of document syntax errors were off by one
 - Line breaks in short string values showed as a box
 - A dialog that settled on its size a frame late could stay misplaced until the next input
