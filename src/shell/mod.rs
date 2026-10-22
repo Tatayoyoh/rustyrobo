@@ -552,7 +552,8 @@ pub fn parse_shell_value(src: &str) -> Result<Bson, String> {
         install_natives(&ctx, None, 50).map_err(|e| e.to_string())?;
         ctx.eval_with_options::<(), _>(PRELUDE, eval_opts("<prelude>"))
             .map_err(|e| exception_message(&ctx, e))?;
-        let code = format!("__toEJSONString((\n{src}\n))");
+        // No line break before `src`: error positions match the user's lines.
+        let code = format!("__toEJSONString(({src}\n))");
         let json: String = ctx
             .eval_with_options(code, eval_opts("<document>"))
             .map_err(|e| exception_message(&ctx, e))?;
@@ -603,6 +604,8 @@ mod tests {
     #[test]
     fn reports_syntax_errors() {
         assert!(parse_shell_value("{ a: }").is_err());
+        let e = parse_shell_value("{\n    a: 1\n    \"b\" 2\n}").unwrap_err();
+        assert!(e.contains(":3:"), "line of the user's text: {e}");
     }
 
     /// Evaluates an expression with the prelude loaded (no connection) and
