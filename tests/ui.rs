@@ -576,7 +576,7 @@ fn live_connect_query_and_views() {
     h.run_steps(3);
     assert!(has_label(&h, "Copy JSON (2 documents)"));
     assert!(!has_label(&h, "Edit Document…"), "single-document actions hidden");
-    h.get_by_label("Delete 2 Documents…").click();
+    h.get_by_label_contains("Delete 2 Documents…").click();
     h.run_steps(5);
     h.get_by_label("Yes").click();
     wait_until(&mut h, "documents deleted", Duration::from_secs(15), |h| {
@@ -673,4 +673,79 @@ fn live_connection_test_in_editor() {
     assert!(has_label(&h, "Connect to server"));
     assert!(has_label(&h, "Authentication"));
     assert!(has_label(&h, "List databases"));
+}
+
+#[test]
+fn live_favorite_scripts_and_delete_key() {
+    if !live() {
+        return;
+    }
+    // Documents not expanded: a Shift+click range then holds documents only.
+    let s = AppSettings { connections: vec![local_mongo8()], auto_expand: false, ..Default::default() };
+    let env = env("live-favorites", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "db.fav.drop(); db.fav.insertMany([{ n: 1 }, { n: 2 }, { n: 3 }])".into(),
+        execute: true,
+        title: "numbers".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+
+    // The star asks for a name and files the script under its connection.
+    h.get_by_label("☆").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Add to Favorite Scripts"));
+    replace_text(&mut h, "numbers", "Numbers");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let favs = saved_settings(&env).favorites;
+    assert_eq!((favs.len(), favs[0].name.as_str(), favs[0].db.as_str()), (1, "Numbers", "rrui"));
+    assert_eq!(favs[0].connection, Some(s.connections[0].id));
+    h.state_mut().tabs[0].script = "db.fav.find({})".into();
+    h.run_steps(3);
+    h.get_by_label("★ •").click();
+    h.run_steps(3);
+    assert_eq!(saved_settings(&env).favorites[0].script, "db.fav.find({})");
+
+    // Load it from the manager: select, then Enter.
+    h.get_by_label_contains("Favorite Scripts").click();
+    h.run_steps(3);
+    let entry = |n: &egui_kittest::kittest::AccessKitNode<'_>| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains("Numbers"));
+    h.query_by(entry).expect("favorite entry").click();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().tabs.len(), 2);
+    assert_eq!(h.state().tabs[1].favorite, Some(favs[0].id), "new shell linked to the favorite");
+    assert_eq!(h.state().tabs[1].script, "db.fav.find({})");
+
+    // Delete key on a Shift+click range of documents.
+    h.key_press(Key::F5);
+    wait_until(&mut h, "results", Duration::from_secs(15), |h| h.state().tabs[1].outputs.first().is_some_and(|o| o.docs().len() == 3));
+    h.run_steps(3);
+    h.get_by_label_contains("(1) ").click();
+    h.run_steps(2);
+    h.get_by_label_contains("(3) ").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[1].outputs[0].selected.len(), 3);
+    h.key_press(Key::Delete);
+    h.run_steps(5);
+    assert!(has_label(&h, "Delete 3 documents from \"fav\"?"));
+    h.get_by_label("Yes").click();
+    wait_until(&mut h, "documents deleted", Duration::from_secs(15), |h| {
+        h.state().tabs[1].outputs.first().is_some_and(|o| o.docs().is_empty()) && !h.state().tabs[1].running
+    });
+
+    // Loading a favorite whose connection is closed connects first.
+    h.state_mut().actions.push(rustyrobo::app::Action::Disconnect(sid));
+    h.run_steps(3);
+    assert!(h.state().servers.is_empty() && h.state().tabs.is_empty());
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenFavorite(favs[0].id));
+    wait_until(&mut h, "reconnect and open", Duration::from_secs(20), |h| h.state().tabs.len() == 1);
+    assert_eq!(h.state().tabs[0].title, "Numbers");
 }

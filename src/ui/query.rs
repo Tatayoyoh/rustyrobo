@@ -279,6 +279,18 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
+    // Delete key: the selected documents of the last clicked result pane,
+    // unless a text field or a dialog takes the keys.
+    let modal_open = app.dialog.is_some() || app.conn_list.is_some() || app.conn_editor.is_some() || app.favorites.is_some();
+    if !modal_open && !ui.ctx().egui_wants_keyboard_input() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) {
+        let tab = &app.tabs[idx];
+        let pane = tab.outputs.iter().filter(|o| !o.selected.is_empty()).max_by_key(|o| o.selected.touched);
+        match pane.map(|p| crate::ui::output::delete_selection(p, tab.server, tab.id, fmt)) {
+            Some(Ok(action)) => actions.push(action),
+            Some(Err(why)) => app.log(crate::app::LogLevel::Warn, why),
+            None => {}
+        }
+    }
     app.actions.extend(actions);
 }
 

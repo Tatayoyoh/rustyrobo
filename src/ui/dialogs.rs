@@ -856,6 +856,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+Space", "Autocompletion"),
                         ("Ctrl+F", "Find in the editor"),
                         ("Ctrl+D", "Select the next occurrence"),
+                        ("Del", "Delete the selected documents"),
                         ("Alt+1…9", "Connect to the n-th connection"),
                     ] {
                         ui.label(RichText::new(k).monospace());

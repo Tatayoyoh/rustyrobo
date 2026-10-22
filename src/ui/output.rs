@@ -103,6 +103,8 @@ pub struct Selection {
     items: HashSet<String>,
     /// Start of Shift+click ranges.
     anchor: Option<String>,
+    /// Last click, to know which result pane the Delete key applies to.
+    pub touched: Option<std::time::Instant>,
 }
 
 impl Selection {
@@ -126,6 +128,7 @@ impl Selection {
     /// Click on `path`: Ctrl toggles it, Shift selects the range from the
     /// last clicked row in the visible `order`, otherwise only `path`.
     pub fn click<I: IntoIterator<Item = String>>(&mut self, path: &str, mods: egui::Modifiers, order: impl FnOnce() -> I) {
+        self.touched = Some(std::time::Instant::now());
         if mods.shift
             && let Some(anchor) = self.anchor.clone()
         {
@@ -571,29 +574,49 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     }
     // Deleting needs whole documents selected, not values inside them.
     let whole = targets.iter().all(|t| t.keys.is_none_or(|k| k.is_empty()));
-    let ids: Vec<Bson> = roots.iter().filter_map(|b| b.as_document()?.get("_id").cloned()).collect();
-    if let Some((db, coll)) = pane.source()
-        && whole
-        && !ids.is_empty()
-    {
+    if whole && let Some((n, action)) = delete_documents(pane, cx.server, cx.tab, &indices, cx.fmt) {
         ui.separator();
-        let n = ids.len();
         let plural = if n == 1 { "" } else { "s" };
-        if ui.button(format!("Delete {n} Document{plural}…")).clicked() {
-            out.push(MenuAction::Push(Action::Dialog(Dialog::confirm(
-                "Delete Documents",
-                format!("Delete {n} document{plural} from \"{coll}\"?"),
-                Action::Command {
-                    server: cx.server,
-                    db,
-                    cmd: doc! { "delete": &coll, "deletes": [{ "q": { "_id": { "$in": ids } }, "limit": 0 }] },
-                    label: format!("Delete {n} document{plural}"),
-                    refresh: Refresh::Tab(cx.tab),
-                },
-            ))));
+        if ui.add(egui::Button::new(format!("Delete {n} Document{plural}…")).shortcut_text("Del")).clicked() {
+            out.push(MenuAction::Push(action));
             ui.close();
         }
     }
+}
+
+/// Confirmation dialog deleting the documents at `indices` of the page, by
+/// `_id`, with their count. `None` when the results do not come from a
+/// collection or have no `_id`.
+fn delete_documents(pane: &OutputPane, server: u64, tab: u64, indices: &[usize], fmt: FormatOptions) -> Option<(usize, Action)> {
+    let (db, coll) = pane.source()?;
+    let ids: Vec<Bson> = indices.iter().filter_map(|&i| pane.docs().get(i)?.as_document()?.get("_id").cloned()).collect();
+    let (title, message, filter, label) = match ids.as_slice() {
+        [] => return None,
+        [id] => {
+            let label = bsonfmt::scalar_shell(id, fmt);
+            ("Delete Document", format!("Delete document with _id {label} from \"{coll}\"?"), doc! { "q": { "_id": id }, "limit": 1 }, format!("Delete document {label}"))
+        }
+        _ => {
+            let n = ids.len();
+            ("Delete Documents", format!("Delete {n} documents from \"{coll}\"?"), doc! { "q": { "_id": { "$in": &ids } }, "limit": 0 }, format!("Delete {n} documents"))
+        }
+    };
+    let action = Action::Command { server, db, cmd: doc! { "delete": &coll, "deletes": [filter] }, label, refresh: Refresh::Tab(tab) };
+    Some((ids.len(), Action::Dialog(Dialog::confirm(title, message, action))))
+}
+
+/// Delete key: deletes the selected documents (not values inside them).
+/// `Err` explains why nothing can be deleted.
+pub fn delete_selection(pane: &OutputPane, server: u64, tab: u64, fmt: FormatOptions) -> Result<Action, &'static str> {
+    if pane.mode == ViewMode::Text {
+        return Err("Select documents in the tree or table view to delete them");
+    }
+    if pane.selected.items.iter().any(|p| p.contains('/')) {
+        return Err("Only whole documents can be deleted: the selection contains fields");
+    }
+    let mut indices: Vec<usize> = pane.selected.items.iter().filter_map(|p| p.parse().ok()).collect();
+    indices.sort_unstable();
+    delete_documents(pane, server, tab, &indices, fmt).map(|(_, a)| a).ok_or("These results cannot be deleted: they do not come from a collection or have no _id")
 }
 
 fn copy_value(v: &Bson, fmt: FormatOptions) -> String {
@@ -670,21 +693,11 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
         out.push(MenuAction::Push(Action::Dialog(Dialog::document(DocMode::Insert, cx.server, &db, &coll, "{\n    \n}".into(), None, Some(cx.tab)))));
         ui.close();
     }
-    if ui.add_enabled(editable, egui::Button::new("Delete Document…")).clicked()
-        && let Some(id) = id
+    let delete = delete_documents(pane, cx.server, cx.tab, &[doc], cx.fmt);
+    if ui.add_enabled(delete.is_some(), egui::Button::new("Delete Document…").shortcut_text("Del")).clicked()
+        && let Some((_, action)) = delete
     {
-        let label = bsonfmt::scalar_shell(&id, cx.fmt);
-        out.push(MenuAction::Push(Action::Dialog(Dialog::confirm(
-            "Delete Document",
-            format!("Delete document with _id {label} from \"{coll}\"?"),
-            Action::Command {
-                server: cx.server,
-                db: db.clone(),
-                cmd: doc! { "delete": &coll, "deletes": [{ "q": { "_id": id }, "limit": 1 }] },
-                label: format!("Delete document {label}"),
-                refresh: Refresh::Tab(cx.tab),
-            },
-        ))));
+        out.push(MenuAction::Push(action));
         ui.close();
     }
 }
