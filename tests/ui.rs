@@ -348,6 +348,17 @@ fn document_text(h: &Harness<'_, App>) -> String {
 }
 
 #[test]
+fn document_editor_validates_while_typing() {
+    let _env = env("doc-validate", &AppSettings::default());
+    let mut h = harness();
+    open_document(&mut h, "{ a: 1 }");
+    assert!(!has_label(&h, "Validate"), "no validate button");
+    wait_until(&mut h, "valid", Duration::from_secs(5), |h| has_label(h, "Valid document"));
+    replace_text(&mut h, "{ a: 1 }", "{ a: ");
+    wait_until(&mut h, "error", Duration::from_secs(5), |h| has_label(h, "⚠"));
+}
+
+#[test]
 fn document_editor_find_and_multi_cursor() {
     let _env = env("doc-find", &AppSettings::default());
     let mut h = harness();

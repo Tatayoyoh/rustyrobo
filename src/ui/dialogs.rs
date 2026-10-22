@@ -1,5 +1,9 @@
 //! Modal dialogs other than the connection manager.
 
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use bson::{Bson, Document, doc};
 use egui::{FontId, Id, RichText, Ui};
 use uuid::Uuid;
@@ -17,6 +21,70 @@ pub enum DocMode {
     View,
 }
 
+/// Validation of the document editor, run in the background a moment after
+/// the last edit (parsing takes milliseconds: not on every keystroke).
+#[derive(Clone, Default)]
+pub struct DocCheck {
+    /// Last result, with the hash of the text it is for.
+    checked: Option<CheckResult>,
+    /// Hash of the edited text and time of the edit, not checked yet.
+    pending: Option<(u64, Instant)>,
+    /// Result of the background check, with the hash of the text checked.
+    incoming: Arc<Mutex<Option<CheckResult>>>,
+}
+
+/// Hash of the text checked, and the result.
+type CheckResult = (u64, Result<(), String>);
+
+const CHECK_DELAY: Duration = Duration::from_millis(300);
+
+impl DocCheck {
+    /// Returns the result for `text`, or the previous one while `text` is
+    /// being checked (`None` before the first check).
+    fn poll(&mut self, ctx: &egui::Context, text: &str) -> Option<&Result<(), String>> {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        let hash = h.finish();
+        if let Some(done) = self.incoming.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.checked = Some(done);
+        }
+        if let Some((h, result)) = &self.checked
+            && *h == hash
+        {
+            self.pending = None;
+            return Some(result);
+        }
+        match self.pending {
+            Some((h, at)) if h == hash => {
+                if at.elapsed() >= CHECK_DELAY {
+                    // Far in the future: wait for the result, do not start again.
+                    self.pending = Some((hash, Instant::now() + Duration::from_secs(3600)));
+                    let (text, incoming, ctx) = (text.to_string(), self.incoming.clone(), ctx.clone());
+                    std::thread::spawn(move || {
+                        let result = parse_doc(&text).map(|_| ());
+                        *incoming.lock().unwrap_or_else(|e| e.into_inner()) = Some((hash, result));
+                        ctx.request_repaint();
+                    });
+                } else {
+                    ctx.request_repaint_after(CHECK_DELAY);
+                }
+            }
+            _ => {
+                self.pending = Some((hash, Instant::now()));
+                ctx.request_repaint_after(CHECK_DELAY);
+            }
+        }
+        self.checked.as_ref().map(|(_, r)| r)
+    }
+
+    /// Records a result computed in the foreground (save, format).
+    fn set(&mut self, text: &str, result: Result<(), String>) {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        self.checked = Some((h.finish(), result));
+    }
+}
+
 #[derive(Clone)]
 pub enum Dialog {
     Message { title: String, message: String },
@@ -27,7 +95,7 @@ pub enum Dialog {
     RenameCollection { server: u64, db: String, coll: String, name: String },
     DuplicateCollection { server: u64, db: String, coll: String, name: String },
     CopyCollection { server: u64, db: String, coll: String, target_db: String, target_name: String },
-    Document { mode: DocMode, server: u64, db: String, coll: String, text: String, original_id: Option<Bson>, tab: Option<u64>, error: Option<String>, valid: bool },
+    Document { mode: DocMode, server: u64, db: String, coll: String, text: String, original_id: Option<Bson>, tab: Option<u64>, check: DocCheck },
     User { server: u64, db: String, edit: bool, name: String, password: String, roles: Vec<(String, bool)>, extra_roles: String, error: Option<String> },
     Index(Box<IndexForm>),
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
@@ -175,7 +243,7 @@ impl Dialog {
     }
 
     pub fn document(mode: DocMode, server: u64, db: &str, coll: &str, text: String, original_id: Option<Bson>, tab: Option<u64>) -> Self {
-        Dialog::Document { mode, server, db: db.to_string(), coll: coll.to_string(), text, original_id, tab, error: None, valid: false }
+        Dialog::Document { mode, server, db: db.to_string(), coll: coll.to_string(), text, original_id, tab, check: DocCheck::default() }
     }
 }
 
@@ -514,7 +582,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Outcome::Keep
                 }
             }
-            Dialog::Document { mode, server, db, coll, text, original_id, tab, error, valid } => {
+            Dialog::Document { mode, server, db, coll, text, original_id, tab, check } => {
                 let screen = ui.ctx().content_rect();
                 ui.set_width((screen.width() * 0.6).clamp(420.0, 900.0));
                 let t = match mode {
@@ -526,7 +594,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 let h = (screen.height() * 0.6).clamp(200.0, 700.0);
                 egui::Frame::new().fill(theme.base).stroke(egui::Stroke::new(1.0, theme.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
                     ui.set_height(h);
-                    let before = text.clone();
                     crate::ui::editor::code_editor(
                         ui,
                         Id::new("doc-editor"),
@@ -536,7 +603,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             line_numbers: true,
                             font: FontId::monospace(font),
                             collections: &[],
-                    fields: &std::collections::HashMap::new(),
+                            fields: &std::collections::HashMap::new(),
                             completion: crate::ui::editor::CompletionMode::Off,
                             focus: false,
                             read_only: *mode == DocMode::View,
@@ -545,30 +612,30 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             folding: true,
                         },
                     );
-                    if *text != before {
-                        *valid = false;
-                        *error = None;
-                    }
                 });
-                if *valid {
-                    ui.label(RichText::new("✔ Valid document").color(theme.success));
+                let hint = RichText::new("Ctrl+F find · Ctrl+D select next occurrence · click the gutter to fold").small().color(theme.text_weak);
+                if *mode == DocMode::View {
+                    ui.label(hint);
+                } else {
+                    ui.horizontal(|ui| {
+                        match check.poll(ui.ctx(), text) {
+                            Some(Ok(())) => ui.label(RichText::new("✔ Valid document").color(theme.success)),
+                            Some(Err(e)) => ui.add(egui::Label::new(RichText::new(format!("⚠ {e}")).color(theme.error)).wrap()),
+                            None => ui.label(RichText::new("Checking…").color(theme.text_weak)),
+                        };
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(hint));
+                    });
                 }
-                error_line(ui, &theme, error);
                 let mut out = Outcome::Keep;
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if *mode != DocMode::View {
-                        if ui.button("Validate").clicked() {
-                            match parse_doc(text) {
-                                Ok(_) => *valid = true,
-                                Err(e) => *error = Some(e),
+                    if *mode != DocMode::View && ui.button("Format").clicked() {
+                        match parse_doc(text) {
+                            Ok(d) => {
+                                *text = bsonfmt::doc_to_shell(&d, Default::default());
+                                check.set(text, Ok(()));
                             }
-                        }
-                        if ui.button("Format").clicked() {
-                            match parse_doc(text) {
-                                Ok(d) => *text = bsonfmt::doc_to_shell(&d, Default::default()),
-                                Err(e) => *error = Some(e),
-                            }
+                            Err(e) => check.set(text, Err(e)),
                         }
                     }
                     if ui.button("Copy").clicked() {
@@ -593,7 +660,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                     actions.push(Action::Command { server: *server, db: db.clone(), cmd, label, refresh });
                                     out = Outcome::Close;
                                 }
-                                Err(e) => *error = Some(e),
+                                Err(e) => check.set(text, Err(e)),
                             }
                         }
                         if ui.button("Cancel").clicked() {
