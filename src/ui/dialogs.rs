@@ -851,6 +851,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         }
     });
 
+    // egui repaints after the first sizing pass only: a dialog that settles
+    // on its size a frame later would stay misplaced until the next input.
+    let rect_id = Id::new("app-dialog-rect");
+    if ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)) != Some(resp.response.rect) {
+        ctx.data_mut(|d| d.insert_temp(rect_id, resp.response.rect));
+        ctx.request_repaint();
+    }
     let close = matches!(resp.inner, Outcome::Close) || resp.should_close();
     if !close && app.dialog.is_none() {
         app.dialog = Some(dlg);
