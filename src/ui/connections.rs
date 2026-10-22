@@ -285,12 +285,21 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                         for &i in visible.iter().filter(|&&i| &app.settings.connections[i].group == g) {
                             let c = &app.settings.connections[i];
                             let selected = st.selected == Some(c.id);
+                            // Whole-row highlight, painted under the row once its height is known.
+                            let bg = ui.painter().add(egui::Shape::Noop);
                             color_dot(ui, c.color, 12.0);
                             let name = ui.add(egui::Button::selectable(selected, RichText::new(&c.name).strong()).frame_when_inactive(false));
                             let addr = ui.add(egui::Label::new(RichText::new(c.address_label()).monospace()).sense(egui::Sense::click()));
                             ui.horizontal(|ui| attributes(ui, c, &th));
-                            ui.label(RichText::new(relative_time(c.last_connected)).color(th.text_weak));
+                            let last = ui.label(RichText::new(relative_time(c.last_connected)).color(th.text_weak));
                             ui.end_row();
+                            if selected {
+                                let row = name.rect.union(last.rect);
+                                let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row.y_range()).expand2(egui::vec2(0.0, 1.0));
+                                ui.painter().set(bg, egui::Shape::rect_filled(row, 3, th.selection));
+                                let bar = egui::Rect::from_min_size(row.min, egui::vec2(3.0, row.height()));
+                                ui.painter().rect_filled(bar, 0, th.accent);
+                            }
                             let clicked = name.clicked() || addr.clicked();
                             if clicked || name.secondary_clicked() {
                                 st.selected = Some(c.id);
