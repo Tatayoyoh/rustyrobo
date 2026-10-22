@@ -214,6 +214,7 @@ impl App {
         let (tx, rx) = unbounded();
         let system_dark = cc.egui_ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(true);
         let theme = *theme::resolve(&settings.theme, system_dark);
+        crate::ui::install_icon_font(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, &theme, settings.font_size);
         let mut app = App {
             theme_name: settings.theme.clone(),

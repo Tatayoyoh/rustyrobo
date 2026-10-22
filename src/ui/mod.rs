@@ -15,21 +15,36 @@ use crate::app::{Action, App, LogLevel};
 use crate::settings::{AutocompletionMode, Orientation, TimeZoneMode, UuidEncoding, ViewMode};
 use crate::ui::dialogs::Dialog;
 
-pub const ICON_SERVER: &str = "🖥";
-pub const ICON_DB: &str = "🗄";
-pub const ICON_FOLDER: &str = "📁";
-pub const ICON_COLLECTION: &str = "📄";
-pub const ICON_VIEW: &str = "👁";
-pub const ICON_INDEX: &str = "🔑";
-pub const ICON_USER: &str = "👤";
-pub const ICON_FUNCTION: &str = "ƒ";
-pub const ICON_RUN: &str = "▶";
-pub const ICON_STOP: &str = "⏹";
-pub const ICON_OPEN: &str = "📂";
-pub const ICON_SAVE: &str = "💾";
-pub const ICON_CONNECT: &str = "🔌";
-pub const ICON_FAVORITE: &str = "★";
-pub const ICON_NOT_FAVORITE: &str = "☆";
+/// Icons are glyphs of the Phosphor font, see [`install_icon_font`].
+pub use egui_phosphor::regular as icon;
+
+pub const ICON_SERVER: &str = icon::HARD_DRIVES;
+pub const ICON_DB: &str = icon::DATABASE;
+pub const ICON_FOLDER: &str = icon::FOLDER;
+pub const ICON_COLLECTION: &str = icon::STACK;
+pub const ICON_VIEW: &str = icon::EYE;
+pub const ICON_INDEX: &str = icon::KEY;
+pub const ICON_USER: &str = icon::USER;
+pub const ICON_FUNCTION: &str = icon::FUNCTION;
+pub const ICON_RUN: &str = icon::PLAY;
+pub const ICON_STOP: &str = icon::STOP;
+pub const ICON_OPEN: &str = icon::FOLDER_OPEN;
+pub const ICON_SAVE: &str = icon::FLOPPY_DISK;
+pub const ICON_CONNECT: &str = icon::PLUG;
+pub const ICON_FAVORITE: &str = icon::STAR;
+
+/// Adds the Phosphor icon font (regular only: one font, ~0.5 MB) as a
+/// fallback of the text and monospace fonts.
+pub fn install_icon_font(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+        // Second, like in the proportional family: after the text font,
+        // before egui's emoji fonts.
+        mono.insert(mono.len().min(1), "phosphor".into());
+    }
+    ctx.set_fonts(fonts);
+}
 
 /// Small coloured dot used for connection colour tags.
 pub fn color_dot(ui: &mut Ui, color: Option<[u8; 3]>, size: f32) {
@@ -236,7 +251,7 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
             app.actions.push(Action::ShowConnections);
         }
         // Quick connect menu, like the Robo 3T drop-down next to Connect.
-        ui.menu_button("⏷", |ui| {
+        ui.menu_button(icon::CARET_DOWN, |ui| {
             if app.settings.connections.is_empty() {
                 ui.label(RichText::new("No connections").weak());
             }
@@ -281,8 +296,8 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
             app.actions.push(Action::Stop(t));
         }
         let orient = match app.settings.orientation {
-            Orientation::Vertical => "⬍",
-            Orientation::Horizontal => "⬌",
+            Orientation::Vertical => icon::ROWS,
+            Orientation::Horizontal => icon::COLUMNS,
         };
         if ui.button(orient).on_hover_text("Rotate editor/results (F10)").clicked() {
             app.settings.orientation = match app.settings.orientation {
@@ -316,7 +331,7 @@ fn logs_panel(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.strong("Logs");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("✖").on_hover_text("Hide (Ctrl+L)").clicked() {
+            if ui.small_button(icon::X).on_hover_text("Hide (Ctrl+L)").clicked() {
                 app.settings.show_logs = false;
             }
             if ui.small_button("Clear").clicked() {

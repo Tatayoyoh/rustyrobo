@@ -12,6 +12,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rustyrobo::app::App;
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort};
+use rustyrobo::ui::icon;
 
 /// The settings directory comes from an environment variable: tests that
 /// create an App must not run concurrently.
@@ -135,7 +136,7 @@ fn create_connection_through_the_editor() {
     let env = env("create", &AppSettings::default());
     let mut h = harness();
     h.run_steps(4);
-    h.get_by_label("➕ Create").click();
+    h.get_by_label(&format!("{} Create", icon::PLUS)).click();
     h.run_steps(4);
     assert!(has_label(&h, "New Connection"));
 
@@ -157,7 +158,7 @@ fn validation_blocks_saving() {
     let _env = env("validation", &AppSettings::default());
     let mut h = harness();
     h.run_steps(4);
-    h.get_by_label("➕ Create").click();
+    h.get_by_label(&format!("{} Create", icon::PLUS)).click();
     h.run_steps(4);
     replace_text(&mut h, "New Connection", "");
     h.run_steps(4);
@@ -174,7 +175,7 @@ fn paste_uri_fills_the_form() {
     let env = env("uri", &AppSettings::default());
     let mut h = harness();
     h.run_steps(4);
-    h.get_by_label("➕ Create").click();
+    h.get_by_label(&format!("{} Create", icon::PLUS)).click();
     h.run_steps(4);
     h.get_by_label("Paste URI…").click();
     h.run_steps(4);
@@ -198,7 +199,7 @@ fn editor_sections_and_ssh_options() {
     let _env = env("sections", &AppSettings::default());
     let mut h = harness();
     h.run_steps(4);
-    h.get_by_label("➕ Create").click();
+    h.get_by_label(&format!("{} Create", icon::PLUS)).click();
     h.run_steps(4);
     h.get_by_label_contains("SSH Tunnel").click();
     h.run_steps(3);
@@ -226,7 +227,7 @@ fn cancel_with_changes_asks_to_discard() {
     let env = env("discard", &s);
     let mut h = harness();
     h.run_steps(4);
-    h.get_by_label("✏ Edit").click();
+    h.get_by_label(&format!("{} Edit", icon::PENCIL_SIMPLE)).click();
     h.run_steps(4);
     replace_text(&mut h, "Local Mongo 8", "Renamed");
     h.get_by_label("Cancel").click();
@@ -355,7 +356,7 @@ fn document_editor_validates_while_typing() {
     assert!(!has_label(&h, "Validate"), "no validate button");
     wait_until(&mut h, "valid", Duration::from_secs(5), |h| has_label(h, "Valid document"));
     replace_text(&mut h, "{ a: 1 }", "{ a: ");
-    wait_until(&mut h, "error", Duration::from_secs(5), |h| has_label(h, "⚠"));
+    wait_until(&mut h, "error", Duration::from_secs(5), |h| has_label(h, icon::WARNING));
 }
 
 #[test]
@@ -666,7 +667,7 @@ fn live_connection_test_in_editor() {
     let _env = env("live-test", &s);
     let mut h = harness();
     h.run_steps(3);
-    h.get_by_label("✏ Edit").click();
+    h.get_by_label(&format!("{} Edit", icon::PENCIL_SIMPLE)).click();
     h.run_steps(3);
     h.get_by_label_contains("Test").click();
     wait_until(&mut h, "test result", Duration::from_secs(20), |h| has_label(h, "Connected to MongoDB"));
@@ -697,7 +698,7 @@ fn live_favorite_scripts_and_delete_key() {
     wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
 
     // The star asks for a name and files the script under its connection.
-    h.get_by_label("☆").click();
+    h.get_by_label(rustyrobo::ui::ICON_FAVORITE).click();
     h.run_steps(3);
     assert!(has_label(&h, "Add to Favorite Scripts"));
     replace_text(&mut h, "numbers", "Numbers");
@@ -708,7 +709,7 @@ fn live_favorite_scripts_and_delete_key() {
     assert_eq!(favs[0].connection, Some(s.connections[0].id));
     h.state_mut().tabs[0].script = "db.fav.find({})".into();
     h.run_steps(3);
-    h.get_by_label("★ •").click();
+    h.get_by_label(&format!("{} •", rustyrobo::ui::ICON_FAVORITE)).click();
     h.run_steps(3);
     assert_eq!(saved_settings(&env).favorites[0].script, "db.fav.find({})");
 

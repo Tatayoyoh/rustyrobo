@@ -73,10 +73,12 @@ Key design rules:
 
 ## Gotchas
 
-- egui is 0.35: `eframe::App::ui(&mut self, ui, frame)`, `egui::Panel::{top,left,…}.show(ui, …)`,
+- egui is 0.36 (needs Rust 1.95+): `eframe::App::ui(&mut self, ui, frame)`, `egui::Panel::{top,left,…}.show(ui, …)`,
   `egui::MenuBar::new().ui(…)`, `ui.close()` to close menus, `egui::Modal` for dialogs.
-- Only use glyphs present in egui's bundled fonts (check with `fc-query` on
-  `epaint_default_fonts/fonts/*`); missing ones render as boxes (e.g. `✎`, `⧉`, `→`).
+- Icons are Phosphor glyphs (`ui::icon::*`, regular variant only, loaded by
+  `ui::install_icon_font`), never emoji. Any other symbol must exist in egui's bundled fonts
+  (check with `fc-query` on `epaint_default_fonts/fonts/*`); missing ones render as boxes
+  (e.g. `✎`, `⧉`, `→`, `⏎`).
 - egui's "strong" text colour is `widgets.active.fg_stroke`: keep it equal to the theme text colour.
 - A vertical `Separator` inside `horizontal_top` takes the whole available height: give it a size.
 - In `prelude.js`, top-level `class X` creates a global lexical binding that shadows

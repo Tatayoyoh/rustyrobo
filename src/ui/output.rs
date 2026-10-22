@@ -15,6 +15,7 @@ use crate::theme::{Theme, bson_color};
 use crate::ui::dialogs::{Dialog, DocMode};
 use crate::ui::editing::{FoldedText, fold_text};
 use crate::ui::editor::FoldClick;
+use crate::ui::icon;
 
 pub struct OutputPane {
     pub output: ShellOutput,
@@ -227,9 +228,9 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let (icon, title) = match &pane.output.kind {
                     OutputKind::Docs { spec: Some(s), .. } => (crate::ui::ICON_COLLECTION, s.coll.clone()),
                     OutputKind::Docs { ns: Some(ns), .. } => (crate::ui::ICON_COLLECTION, ns.clone()),
-                    OutputKind::Docs { .. } => ("{}", "Result".to_string()),
-                    OutputKind::Text(_) => ("📝", "Text".to_string()),
-                    OutputKind::Error(_) => ("⚠", "Error".to_string()),
+                    OutputKind::Docs { .. } => (icon::BRACKETS_CURLY, "Result".to_string()),
+                    OutputKind::Text(_) => (icon::TEXT_ALIGN_LEFT, "Text".to_string()),
+                    OutputKind::Error(_) => (icon::WARNING, "Error".to_string()),
                 };
                 let color = if matches!(pane.output.kind, OutputKind::Error(_)) { th.error } else { th.text };
                 ui.label(RichText::new(format!("{icon} {title}")).strong().color(color))
@@ -240,12 +241,12 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     if !matches!(pane.output.kind, OutputKind::Docs { .. }) {
                         return;
                     }
-                    for (mode, label, tip) in [
-                        (ViewMode::Text, "📝 Text", "Text mode (F4)"),
-                        (ViewMode::Table, "☰ Table", "Table mode (F3)"),
-                        (ViewMode::Tree, "⊟ Tree", "Tree mode (F2)"),
+                    for (mode, glyph, name, tip) in [
+                        (ViewMode::Text, icon::TEXT_ALIGN_LEFT, "Text", "Text mode (F4)"),
+                        (ViewMode::Table, icon::TABLE, "Table", "Table mode (F3)"),
+                        (ViewMode::Tree, icon::TREE_VIEW, "Tree", "Tree mode (F2)"),
                     ] {
-                        if ui.selectable_label(pane.mode == mode, label).on_hover_text(tip).clicked() {
+                        if ui.selectable_label(pane.mode == mode, format!("{glyph} {name}")).on_hover_text(tip).clicked() {
                             pane.mode = mode;
                         }
                     }
@@ -266,10 +267,10 @@ fn paging(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     }
     let more = *more;
     // Right-to-left layout: widgets appear in reverse order.
-    let next = ui.add_enabled(more && !pane.loading, egui::Button::new("▶").small()).on_hover_text("Next page");
+    let next = ui.add_enabled(more && !pane.loading, egui::Button::new(icon::CARET_RIGHT).small()).on_hover_text("Next page");
     let size = ui.add(egui::TextEdit::singleline(&mut pane.size_input).desired_width(36.0)).on_hover_text("Page size (limit)");
     let skip = ui.add(egui::TextEdit::singleline(&mut pane.skip_input).desired_width(46.0)).on_hover_text("Skip");
-    let prev = ui.add_enabled(pane.skip > 0 && !pane.loading, egui::Button::new("◀").small()).on_hover_text("Previous page");
+    let prev = ui.add_enabled(pane.skip > 0 && !pane.loading, egui::Button::new(icon::CARET_LEFT).small()).on_hover_text("Previous page");
     let range = if n == 0 { "no documents".to_string() } else { format!("{} – {}", pane.skip + 1, pane.skip + n) };
     ui.label(RichText::new(range).color(cx.theme.text_weak));
 
@@ -420,7 +421,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     ui.add_space(indent * r.depth as f32);
                     if r.container {
                         let open = pane.expanded.contains(&r.path);
-                        let arrow = if open { "⏷" } else { "⏵" };
+                        let arrow = if open { icon::CARET_DOWN } else { icon::CARET_RIGHT };
                         if ui.add(egui::Button::new(RichText::new(arrow).color(th.text_weak)).frame(false).small()).clicked() {
                             toggle = Some(r.path.clone());
                         }

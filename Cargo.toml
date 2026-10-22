@@ -16,6 +16,7 @@ crossbeam-channel = "0.5.17"
 directories = "6.0.0"
 eframe = { version = "0.36.2", features = ["persistence"] }
 egui = "0.36.2"
+egui-phosphor = { version = "0.14", default-features = false, features = ["regular"] }
 egui_extras = "0.36.2"
 futures-util = "0.3.34"
 hex = "0.4"

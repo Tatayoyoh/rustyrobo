@@ -18,7 +18,7 @@ use crate::settings::{
     find_robo3t_configs, import_robo3t,
 };
 use crate::theme::Theme;
-use crate::ui::color_dot;
+use crate::ui::{ICON_SERVER, color_dot, icon};
 
 pub const TAG_COLORS: [[u8; 3]; 9] = [
     [0xE5, 0x48, 0x4D],
@@ -169,7 +169,7 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.heading("MongoDB Connections");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let r = ui.add(egui::TextEdit::singleline(&mut st.filter).hint_text("🔍 Search name, host, group…").desired_width(240.0));
+                let r = ui.add(egui::TextEdit::singleline(&mut st.filter).hint_text(format!("{} Search name, host, group…", icon::MAGNIFYING_GLASS)).desired_width(240.0));
                 if std::mem::take(&mut st.focus_search) {
                     r.request_focus();
                 }
@@ -177,11 +177,11 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.button("➕ Create").on_hover_text("New connection").clicked() {
+            if ui.button(format!("{} Create", icon::PLUS)).on_hover_text("New connection").clicked() {
                 actions.push(Action::NewConnection);
             }
             let has_sel = st.selected.is_some();
-            if ui.add_enabled(has_sel, egui::Button::new("✏ Edit")).clicked()
+            if ui.add_enabled(has_sel, egui::Button::new(format!("{} Edit", icon::PENCIL_SIMPLE))).clicked()
                 && let Some(id) = st.selected
             {
                 actions.push(Action::EditConnection(id));
@@ -195,26 +195,26 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                 c.last_connected = None;
                 app.conn_editor = Some(ConnectionEditor::new(c, true));
             }
-            if ui.add_enabled(has_sel, egui::Button::new("🗑 Remove")).clicked() {
+            if ui.add_enabled(has_sel, egui::Button::new(format!("{} Remove", icon::TRASH))).clicked() {
                 st.confirm_delete = st.selected;
             }
             ui.separator();
             let can_up = sel_index.is_some_and(|i| i > 0) && st.filter.is_empty();
             let can_down = sel_index.is_some_and(|i| i + 1 < app.settings.connections.len()) && st.filter.is_empty();
-            if ui.add_enabled(can_up, egui::Button::new("⏶")).on_hover_text("Move up").clicked()
+            if ui.add_enabled(can_up, egui::Button::new(icon::CARET_UP)).on_hover_text("Move up").clicked()
                 && let Some(i) = sel_index
             {
                 app.settings.connections.swap(i, i - 1);
                 actions.push(Action::SaveSettings);
             }
-            if ui.add_enabled(can_down, egui::Button::new("⏷")).on_hover_text("Move down").clicked()
+            if ui.add_enabled(can_down, egui::Button::new(icon::CARET_DOWN)).on_hover_text("Move down").clicked()
                 && let Some(i) = sel_index
             {
                 app.settings.connections.swap(i, i + 1);
                 actions.push(Action::SaveSettings);
             }
             ui.separator();
-            ui.menu_button("Import ⏷", |ui| {
+            ui.menu_button(format!("Import {}", icon::CARET_DOWN), |ui| {
                 if ui.button("From connection string…").clicked() {
                     let mut e = ConnectionEditor::new(ConnectionSettings::default(), true);
                     e.uri_editing = true;
@@ -254,7 +254,7 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                     ui.label(RichText::new("No connections yet").strong());
                     ui.label(RichText::new("Create one, paste a connection string or import from Robo 3T.").color(th.text_weak));
                     ui.add_space(8.0);
-                    if ui.button("➕ Create connection").clicked() {
+                    if ui.button(format!("{} Create connection", icon::PLUS)).clicked() {
                         actions.push(Action::NewConnection);
                     }
                 });
@@ -429,11 +429,11 @@ impl Section {
 
     fn icon(self) -> &'static str {
         match self {
-            Section::General => "🖥",
-            Section::Auth => "🔒",
-            Section::Ssh => "🔀",
-            Section::Tls => "🛡",
-            Section::Advanced => "⚙",
+            Section::General => ICON_SERVER,
+            Section::Auth => icon::LOCK,
+            Section::Ssh => icon::TERMINAL_WINDOW,
+            Section::Tls => icon::SHIELD_CHECK,
+            Section::Advanced => icon::GEAR,
         }
     }
 }
@@ -612,7 +612,7 @@ fn field_error(ui: &mut Ui, issues: &[Issue], field: &str, th: &Theme, show: boo
         return;
     }
     for i in issues.iter().filter(|i| i.field == field) {
-        ui.label(RichText::new(format!("⚠ {}", i.message)).small().color(th.error));
+        ui.label(RichText::new(format!("{} {}", icon::WARNING, i.message)).small().color(th.error));
     }
 }
 
@@ -642,7 +642,7 @@ fn password_field(ui: &mut Ui, value: &mut String, show: &mut bool, enabled: boo
     ui.horizontal(|ui| {
         let w = ui.available_width() - 40.0;
         ui.add_enabled(enabled, egui::TextEdit::singleline(value).password(!*show).hint_text(hint).desired_width(w.max(120.0)));
-        if ui.add_enabled(enabled, egui::Button::new(if *show { "🙈" } else { "👁" })).on_hover_text(if *show { "Hide" } else { "Show" }).clicked() {
+        if ui.add_enabled(enabled, egui::Button::new(if *show { icon::EYE_SLASH } else { icon::EYE })).on_hover_text(if *show { "Hide" } else { "Show" }).clicked() {
             *show = !*show;
         }
     });
@@ -751,7 +751,7 @@ fn show_editor(app: &mut App, ctx: &egui::Context) {
                     let w = ui.available_width() - 150.0;
                     ui.add_sized([w.max(200.0), 18.0], egui::Label::new(RichText::new(&uri).monospace().color(th.text_weak)).truncate())
                         .on_hover_text(&uri);
-                    if ui.button("📋").on_hover_text("Copy connection string (without password)").clicked() {
+                    if ui.button(icon::COPY).on_hover_text("Copy connection string (without password)").clicked() {
                         ui.ctx().copy_text(build_uri(&ed.conn, None, None, Secrets::Omit));
                         ed.uri_feedback = Some(("Copied to clipboard".into(), true));
                     }
@@ -780,10 +780,10 @@ fn show_editor(app: &mut App, ctx: &egui::Context) {
                         [186.0, 30.0],
                         egui::Button::selectable(selected, RichText::new(format!("{}  {}", s.icon(), s.label())).strong())
                             .right_text(if errs > 0 && show_errors {
-                                RichText::new(format!("⚠ {errs}")).color(th.error)
+                                RichText::new(format!("{} {errs}", icon::WARNING)).color(th.error)
                             } else {
                                 match section_state(&ed.conn, s) {
-                                    Some(true) => RichText::new("✔ on").small().color(th.success),
+                                    Some(true) => RichText::new(format!("{} on", icon::CHECK)).small().color(th.success),
                                     Some(false) => RichText::new("off").small().color(th.text_weak),
                                     None => RichText::new(""),
                                 }
@@ -825,17 +825,17 @@ fn show_editor(app: &mut App, ctx: &egui::Context) {
                     }
                     match &ed.test_result {
                         Some(Ok(m)) => {
-                            ui.label(RichText::new(format!("✔ {m}")).color(th.success));
+                            ui.label(RichText::new(format!("{} {m}", icon::CHECK)).color(th.success));
                         }
                         Some(Err(_)) => {
-                            ui.label(RichText::new("✖ Failed").color(th.error));
+                            ui.label(RichText::new(format!("{} Failed", icon::X)).color(th.error));
                         }
                         None => {}
                     }
                 });
                 for st in &ed.test_steps {
                     ui.horizontal_wrapped(|ui| {
-                        let (icon, c) = if st.ok { ("✔", th.success) } else { ("✖", th.error) };
+                        let (icon, c) = if st.ok { (icon::CHECK, th.success) } else { (icon::X, th.error) };
                         ui.label(RichText::new(icon).color(c));
                         ui.label(RichText::new(st.kind.label()).strong());
                         ui.label(RichText::new(format!("{} ms", st.millis)).color(th.text_weak));
@@ -854,7 +854,7 @@ fn show_editor(app: &mut App, ctx: &egui::Context) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let can_test = !ed.testing && issues.is_empty();
-            if ui.add_enabled(can_test, egui::Button::new("⚡ Test")).on_hover_text("Connect with the current settings without saving").clicked() {
+            if ui.add_enabled(can_test, egui::Button::new(format!("{} Test", icon::LIGHTNING))).on_hover_text("Connect with the current settings without saving").clicked() {
                 start_test = true;
             }
             if !issues.is_empty() && show_errors {
@@ -1018,7 +1018,7 @@ fn general_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th:
                     changed |= ui.add(egui::TextEdit::singleline(&mut h.host).hint_text("host").desired_width(260.0)).changed();
                     ui.label(":");
                     changed |= ui.add(egui::DragValue::new(&mut h.port).range(0..=65535)).changed();
-                    if ui.add_enabled(n > 1, egui::Button::new("✖").small()).on_hover_text("Remove member").clicked() {
+                    if ui.add_enabled(n > 1, egui::Button::new(icon::X).small()).on_hover_text("Remove member").clicked() {
                         remove = Some(i);
                     }
                 });
@@ -1027,14 +1027,14 @@ fn general_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th:
                 c.hosts.remove(i);
                 changed = true;
             }
-            if ui.button("➕ Add member").clicked() {
+            if ui.button(format!("{} Add member", icon::PLUS)).clicked() {
                 let port = c.hosts.last().map(|h| h.port).unwrap_or(27017);
                 c.hosts.push(HostPort { host: String::new(), port });
                 changed = true;
             }
             field_error(ui, issues, "members", th, show);
             if c.ssh.enabled {
-                ui.label(RichText::new("ℹ Through SSH only the first member is reachable; the connection is made directly to it.").small().color(th.warning));
+                ui.label(RichText::new(format!("{} Through SSH only the first member is reachable; the connection is made directly to it.", icon::INFO)).small().color(th.warning));
             }
         }
         ConnectionType::Srv => {
@@ -1179,9 +1179,9 @@ fn ssh_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th: &Th
                         changed |= ui.checkbox(&mut s.ask_password, "Ask for passphrase each time").changed();
                         let missing = show && issues.iter().any(|i| i.field == "passphrase");
                         let status = match state {
-                            KeyFileState::Encrypted => "🔒 This key is encrypted: its passphrase is required to unlock it.",
-                            KeyFileState::Plain => "🔓 This key is not encrypted: leave the passphrase empty.",
-                            _ => "The passphrase is the secret chosen when the key was created (ssh-keygen), not the server password.",
+                            KeyFileState::Encrypted => format!("{} This key is encrypted: its passphrase is required to unlock it.", icon::LOCK),
+                            KeyFileState::Plain => format!("{} This key is not encrypted: leave the passphrase empty.", icon::LOCK_OPEN),
+                            _ => "The passphrase is the secret chosen when the key was created (ssh-keygen), not the server password.".to_string(),
                         };
                         if missing {
                             field_error(ui, issues, "passphrase", th, show);
@@ -1219,7 +1219,7 @@ fn ssh_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th: &Th
             ui.end_row();
         });
         if ed.conn.kind == ConnectionType::Srv {
-            ui.label(RichText::new("ℹ With SRV, the first host is resolved locally; connect directly to a member host instead if possible.").small().color(th.warning));
+            ui.label(RichText::new(format!("{} With SRV, the first host is resolved locally; connect directly to a member host instead if possible.", icon::INFO)).small().color(th.warning));
         }
     });
     changed
@@ -1230,7 +1230,7 @@ fn tls_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th: &Th
     let t = &mut ed.conn.tls;
     changed |= ui.checkbox(&mut t.enabled, RichText::new("Use TLS protocol").strong()).changed();
     if ed.conn.kind == ConnectionType::Srv && !t.enabled {
-        ui.label(RichText::new("ℹ mongodb+srv enables TLS by default.").small().color(th.text_weak));
+        ui.label(RichText::new(format!("{} mongodb+srv enables TLS by default.", icon::INFO)).small().color(th.text_weak));
     }
     ui.add_space(6.0);
     ui.add_enabled_ui(t.enabled, |ui| {
@@ -1256,7 +1256,7 @@ fn tls_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th: &Th
                 changed |= ui.checkbox(&mut t.allow_invalid_certificates, "Allow invalid certificates (self-signed)").changed();
                 changed |= ui.checkbox(&mut t.allow_invalid_hostnames, "Allow invalid hostnames").changed();
                 if t.allow_invalid_certificates || t.allow_invalid_hostnames {
-                    ui.label(RichText::new("⚠ Disabling validation exposes the connection to interception.").small().color(th.warning));
+                    ui.label(RichText::new(format!("{} Disabling validation exposes the connection to interception.", icon::WARNING)).small().color(th.warning));
                 }
             });
             ui.end_row();

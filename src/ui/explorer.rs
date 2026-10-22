@@ -9,7 +9,7 @@ use egui::{Id, Response, RichText, Ui};
 
 use crate::app::{Action, App, Load, Refresh, ServerStatus};
 use crate::ui::dialogs::{Dialog, DocMode};
-use crate::ui::{ICON_COLLECTION, ICON_DB, ICON_FOLDER, ICON_FUNCTION, ICON_INDEX, ICON_SERVER, ICON_USER, ICON_VIEW, color_dot};
+use crate::ui::{ICON_COLLECTION, ICON_DB, ICON_FOLDER, ICON_FUNCTION, ICON_INDEX, ICON_SERVER, ICON_USER, ICON_VIEW, color_dot, icon};
 
 const SYSTEM_DBS: &[&str] = &["admin", "config", "local"];
 
@@ -68,7 +68,7 @@ fn loading_line(ui: &mut Ui) {
 fn failed_line(ui: &mut Ui, err: &str, theme: &crate::theme::Theme) {
     ui.horizontal(|ui| {
         ui.add_space(ui.spacing().indent);
-        ui.label(RichText::new("⚠ ").color(theme.error));
+        ui.label(RichText::new(format!("{} ", icon::WARNING)).color(theme.error));
         ui.add(egui::Label::new(RichText::new(err).color(theme.error).small()).wrap());
     });
 }
@@ -84,7 +84,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.strong("Database Explorer");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("✖").on_hover_text("Hide (Ctrl+E)").clicked() {
+            if ui.small_button(icon::X).on_hover_text("Hide (Ctrl+E)").clicked() {
                 app.settings.show_explorer = false;
             }
         });
@@ -116,12 +116,12 @@ fn server_node(app: &App, s: &crate::app::Server, ui: &mut Ui, actions: &RefCell
     let header = |ui: &mut Ui| {
         ui.horizontal(|ui| {
             color_dot(ui, s.settings.color, 10.0);
-            let (status, color) = match &s.status {
-                ServerStatus::Connecting => ("", th.text_weak),
-                ServerStatus::Connected(_) => ("", th.text),
-                ServerStatus::Failed(_) => ("⚠ ", th.error),
+            let (icon, color) = match &s.status {
+                ServerStatus::Connecting => (ICON_SERVER, th.text_weak),
+                ServerStatus::Connected(_) => (ICON_SERVER, th.text),
+                ServerStatus::Failed(_) => (icon::WARNING, th.error),
             };
-            let r = row(ui, id, RichText::new(format!("{status}{ICON_SERVER} {}", s.label())).color(color).strong());
+            let r = row(ui, id, RichText::new(format!("{icon} {}", s.label())).color(color).strong());
             if matches!(s.status, ServerStatus::Connecting) {
                 ui.spinner();
             }

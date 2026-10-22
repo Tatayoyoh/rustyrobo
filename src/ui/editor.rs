@@ -10,6 +10,7 @@ use egui::text::{CCursor, CCursorRange, CharIndex, LayoutJob, TextFormat};
 use egui::{Color32, FontId, Galley, Id, Key, Modifiers, TextBuffer, Ui};
 
 use crate::theme::Theme;
+use crate::ui::icon;
 use crate::ui::editing::{Edit, FoldedText, MAX_MATCHES, Sel, apply_edit, apply_folded_edit, find_all, fold_text, next_occurrence, selected_text, word_at};
 
 const KEYWORDS: &[&str] = &[
@@ -735,8 +736,8 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             let shift = ui.input(|i| i.modifiers.shift);
             let n = search.matches.len();
-            let prev = ui.add_enabled(n > 0, egui::Button::new("⏶")).on_hover_text("Previous match (Shift+Enter)").clicked() || (enter && shift);
-            let next = ui.add_enabled(n > 0, egui::Button::new("⏷")).on_hover_text("Next match (Enter)").clicked() || (enter && !shift);
+            let prev = ui.add_enabled(n > 0, egui::Button::new(icon::CARET_UP)).on_hover_text("Previous match (Shift+Enter)").clicked() || (enter && shift);
+            let next = ui.add_enabled(n > 0, egui::Button::new(icon::CARET_DOWN)).on_hover_text("Next match (Enter)").clicked() || (enter && !shift);
             if n > 0 && (prev || next) {
                 search.current = if prev { (search.current + n - 1) % n } else { (search.current + 1) % n };
                 search.goto = true;
@@ -750,7 +751,7 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                 n => format!("{} of {n}{}", search.current + 1, if n >= MAX_MATCHES { "+" } else { "" }),
             };
             ui.label(egui::RichText::new(label).color(theme.text_weak));
-            if ui.add(egui::Button::new("✖").frame(false)).on_hover_text("Close (Escape)").clicked() {
+            if ui.add(egui::Button::new(icon::X).frame(false)).on_hover_text("Close (Escape)").clicked() {
                 close = true;
             }
         });
@@ -1079,7 +1080,7 @@ fn fold_gutter(ui: &Ui, rect: egui::Rect, resp: &egui::Response, out: &egui::tex
         let Some(folded) = *mark else { continue };
         let color = if hovered == Some(r) { theme.text } else { theme.text_weak };
         let center = egui::pos2(rect.center().x, top + (r as f32 + 0.5) * row_h);
-        painter.text(center, egui::Align2::CENTER_CENTER, if folded { "⏵" } else { "⏷" }, font.clone(), color);
+        painter.text(center, egui::Align2::CENTER_CENTER, if folded { icon::CARET_RIGHT } else { icon::CARET_DOWN }, font.clone(), color);
     }
     if resp.clicked()
         && let Some(r) = hovered

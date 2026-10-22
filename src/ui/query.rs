@@ -14,7 +14,7 @@ use crate::shell::ShellHandle;
 use crate::ui::dialogs::Dialog;
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
 use crate::ui::output::{PaneCtx, show_pane};
-use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_NOT_FAVORITE, ICON_SERVER, color_dot};
+use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, ICON_STOP, color_dot, icon};
 
 pub struct QueryTab {
     pub id: u64,
@@ -123,16 +123,16 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 if ui.selectable_label(tab.line_numbers, "#").on_hover_text("Line numbers").clicked() {
                     tab.line_numbers = !tab.line_numbers;
                 }
-                let (icon, color, tip) = match favorite {
-                    None => (ICON_NOT_FAVORITE, theme.text_weak, "Add to favorite scripts"),
-                    Some(true) => (ICON_FAVORITE, theme.accent, "Remove from favorite scripts"),
+                let (label, color, tip) = match favorite {
+                    None => (ICON_FAVORITE.to_string(), theme.text_weak, "Add to favorite scripts"),
+                    Some(true) => (ICON_FAVORITE.to_string(), theme.accent, "Remove from favorite scripts"),
                     // Same "modified" dot as the tab titles.
-                    Some(false) => ("★ •", theme.warning, "Save the changes to the favorite script"),
+                    Some(false) => (format!("{ICON_FAVORITE} •"), theme.warning, "Save the changes to the favorite script"),
                 };
-                star_clicked = ui.add(egui::Button::new(RichText::new(icon).color(color)).frame(false)).on_hover_text(tip).clicked();
+                star_clicked = ui.add(egui::Button::new(RichText::new(label).color(color)).frame(false)).on_hover_text(tip).clicked();
                 if tab.running {
                     let secs = tab.started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
-                    if ui.button(RichText::new("⏹ Stop").color(theme.error)).clicked() {
+                    if ui.button(RichText::new(format!("{ICON_STOP} Stop")).color(theme.error)).clicked() {
                         actions.push(Action::Stop(tab.id));
                     }
                     ui.label(RichText::new(format!("{secs:.1} s")).color(theme.text_weak));
@@ -387,7 +387,7 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
                                         ui.close();
                                     }
                                 });
-                                if ui.add(egui::Button::new(RichText::new("✖").small().color(theme.text_weak)).frame(false)).on_hover_text("Close (Ctrl+W)").clicked() {
+                                if ui.add(egui::Button::new(RichText::new(icon::X).small().color(theme.text_weak)).frame(false)).on_hover_text("Close (Ctrl+W)").clicked() {
                                     close = Some(t.id);
                                 }
                             });

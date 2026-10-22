@@ -206,7 +206,7 @@ pub fn short_value(b: &Bson, o: FormatOptions) -> String {
         Bson::Document(d) => format!("{{ {} field{} }}", d.len(), if d.len() == 1 { "" } else { "s" }),
         Bson::Array(a) => format!("[ {} element{} ]", a.len(), if a.len() == 1 { "" } else { "s" }),
         Bson::String(s) => {
-            let one_line: String = s.chars().take(500).map(|c| if c == '\n' { '⏎' } else { c }).collect();
+            let one_line: String = s.chars().take(500).map(|c| if c == '\n' { '↵' } else { c }).collect();
             one_line
         }
         Bson::DateTime(dt) => format_date(dt.timestamp_millis(), o.tz, false),
@@ -280,7 +280,7 @@ mod tests {
             (Bson::Int64(8), "Int64", "8"),
             (Bson::Boolean(true), "Boolean", "true"),
             (Bson::Null, "Null", "null"),
-            (Bson::String("a\nb".into()), "String", "a⏎b"),
+            (Bson::String("a\nb".into()), "String", "a↵b"),
             (Bson::Array(vec![Bson::Int32(1)]), "Array", "[ 1 element ]"),
             (Bson::Document(doc! { "a": 1, "b": 2 }), "Object", "{ 2 fields }"),
             (Bson::MinKey, "MinKey", "MinKey"),

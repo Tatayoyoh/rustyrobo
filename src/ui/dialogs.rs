@@ -13,6 +13,7 @@ use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
 use crate::settings::{AuthMechanism, ConnectionSettings, SshAuthMethod};
 use crate::shell::parse_shell_value;
+use crate::ui::icon;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocMode {
@@ -310,7 +311,7 @@ fn title(ui: &mut Ui, t: &str) {
 
 fn error_line(ui: &mut Ui, app_theme: &crate::theme::Theme, e: &Option<String>) {
     if let Some(e) = e {
-        ui.add(egui::Label::new(RichText::new(format!("⚠ {e}")).color(app_theme.error)).wrap());
+        ui.add(egui::Label::new(RichText::new(format!("{} {e}", icon::WARNING)).color(app_theme.error)).wrap());
     }
 }
 
@@ -621,8 +622,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 } else {
                     ui.horizontal(|ui| {
                         match check.poll(ui.ctx(), text) {
-                            Some(Ok(())) => ui.label(RichText::new("✔ Valid document").color(theme.success)),
-                            Some(Err(e)) => ui.add(egui::Label::new(RichText::new(format!("⚠ {e}")).color(theme.error)).wrap()),
+                            Some(Ok(())) => ui.label(RichText::new(format!("{} Valid document", icon::CHECK)).color(theme.success)),
+                            Some(Err(e)) => ui.add(egui::Label::new(RichText::new(format!("{} {e}", icon::WARNING)).color(theme.error)).wrap()),
                             None => ui.label(RichText::new("Checking…").color(theme.text_weak)),
                         };
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(hint));

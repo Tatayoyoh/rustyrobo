@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::app::{Action, App};
 use crate::settings::{ConnectionSettings, FavoriteScript};
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
-use crate::ui::{ICON_DB, ICON_SERVER};
+use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, icon};
 
 #[derive(Default)]
 pub struct FavoritesManager {
@@ -209,14 +209,14 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 
         let sel_index = st.selected.and_then(|id| app.settings.favorites.iter().position(|f| f.id == id));
         ui.horizontal(|ui| {
-            if ui.button("➕ Add").on_hover_text("New favorite script").clicked() {
+            if ui.button(format!("{} Add", icon::PLUS)).on_hover_text("New favorite script").clicked() {
                 let tab = app.tabs.get(app.active_tab);
                 let db = tab.map(|t| t.db.clone()).unwrap_or_default();
                 let connection = tab.and_then(|t| app.server(t.server)).map(|s| s.settings.id);
                 st.form = Some(Form { fav: FavoriteScript { name: "New script".into(), connection, db, ..Default::default() }, new: true });
             }
             let has_sel = sel_index.is_some();
-            if ui.add_enabled(has_sel, egui::Button::new("✏ Edit")).clicked()
+            if ui.add_enabled(has_sel, egui::Button::new(format!("{} Edit", icon::PENCIL_SIMPLE))).clicked()
                 && let Some(i) = sel_index
             {
                 st.form = Some(Form { fav: app.settings.favorites[i].clone(), new: false });
@@ -230,7 +230,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 app.settings.favorites.insert(i + 1, copy);
                 actions.push(Action::SaveSettings);
             }
-            if ui.add_enabled(has_sel, egui::Button::new("🗑 Delete")).clicked() {
+            if ui.add_enabled(has_sel, egui::Button::new(format!("{} Delete", icon::TRASH))).clicked() {
                 st.confirm_delete = st.selected;
             }
         });
@@ -244,7 +244,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.vertical_centered(|ui| {
                     ui.add_space(list_h * 0.3);
                     ui.label(RichText::new("No favorite scripts yet").strong());
-                    ui.label(RichText::new("Click ☆ in a shell to add its script, or add one here.").color(th.text_weak));
+                    ui.label(RichText::new(format!("Click {ICON_FAVORITE} in a shell to add its script, or add one here.")).color(th.text_weak));
                 });
                 return;
             }

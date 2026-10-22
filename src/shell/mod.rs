@@ -186,7 +186,7 @@ fn block_on_interruptible<T>(
             r = tokio::time::timeout(timeout, fut) => match r {
                 Ok(r) => r,
                 Err(_) => Err(anyhow::anyhow!(
-                    "Operation timed out after {} s (Options → Change Shell Timeout…)",
+                    "Operation timed out after {} s (Options > Change Shell Timeout…)",
                     timeout.as_secs()
                 )),
             },
