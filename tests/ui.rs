@@ -401,6 +401,86 @@ fn document_editor_find_and_multi_cursor() {
     assert_eq!(document_text(&h).matches('y').count(), 1, "single cursor again");
 }
 
+#[test]
+fn favorite_scripts_manager() {
+    let env = env("favorites", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    h.get_by_label_contains("Favorite Scripts").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "No favorite scripts yet"));
+
+    // Add one through the form.
+    h.get_by_label_contains("Add").click();
+    h.run_steps(3);
+    // Database first: `replace_text` types into the first empty field.
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("")).next().expect("database field").focus();
+    h.run_steps(2);
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("")).next().unwrap().type_text("shop");
+    h.run_steps(2);
+    replace_text(&mut h, "New script", "Big orders");
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "shop") && has_label(&h, "Big orders"), "listed under its database");
+    assert_eq!(saved_settings(&env).favorites.len(), 1);
+
+    // Clone it, then delete the copy with the Delete key.
+    h.get_by_label_contains("Big orders").click();
+    h.run_steps(2);
+    h.get_by_label("Clone").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Copy of Big orders"));
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert!(has_label(&h, "Delete favorite script \"Copy of Big orders\"?"));
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(!has_label(&h, "Copy of Big orders"));
+    let saved = saved_settings(&env).favorites;
+    assert_eq!((saved.len(), saved[0].name.as_str(), saved[0].db.as_str()), (1, "Big orders", "shop"));
+    assert!(has_label(&h, "Any connection"), "no shell open: not tied to a connection");
+}
+
+#[test]
+fn favorite_scripts_tree_and_drag_and_drop() {
+    use rustyrobo::settings::FavoriteScript;
+    let conn = local_mongo8();
+    let fav = |name: &str, db: &str| FavoriteScript { name: name.into(), connection: Some(conn.id), db: db.into(), script: format!("// {name}"), ..Default::default() };
+    let s = AppSettings { connections: vec![conn.clone()], favorites: vec![fav("Alpha", "shop"), fav("Beta", "logs")], ..Default::default() };
+    let env = env("favorites-dnd", &s);
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    h.get_by_label_contains("Favorite Scripts").click();
+    h.run_steps(3);
+    // Connection > database > scripts.
+    for l in ["Local Mongo 8", "logs", "shop", "Alpha", "Beta"] {
+        assert!(has_label(&h, l), "{l}");
+    }
+
+    // Drag Beta (logs) onto Alpha (shop): moved before it, into shop.
+    let entry = |name: &'static str| move |n: &egui_kittest::kittest::AccessKitNode<'_>| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains(name));
+    let from = h.query_by(entry("Beta")).unwrap().rect().center();
+    let to = h.query_by(entry("Alpha")).unwrap().rect().center();
+    h.hover_at(from);
+    h.run_steps(2);
+    h.drag_at(from);
+    h.run_steps(2);
+    for k in 1..=10 {
+        h.hover_at(from + (to - from) * (k as f32 / 10.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    let saved = saved_settings(&env).favorites;
+    let shape: Vec<(&str, &str)> = saved.iter().map(|f| (f.name.as_str(), f.db.as_str())).collect();
+    assert_eq!(shape, vec![("Beta", "shop"), ("Alpha", "shop")]);
+    assert!(!has_label(&h, "logs"), "empty database gone");
+}
+
 // ---------------------------------------------------------------- live
 
 fn live() -> bool {

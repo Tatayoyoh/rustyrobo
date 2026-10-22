@@ -101,6 +101,8 @@ pub enum Dialog {
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
     ShellTimeout { value: u32 },
     Preferences { batch_size: u32 },
+    /// Name of the script of a shell being added to the favorites.
+    FavoriteName { tab: u64, name: String },
     About,
     Shortcuts,
 }
@@ -773,6 +775,21 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     actions.push(Action::SaveSettings);
                 }
                 if ok || cancel { Outcome::Close } else { Outcome::Keep }
+            }
+            Dialog::FavoriteName { tab, name } => {
+                ui.set_width(380.0);
+                title(ui, "Add to Favorite Scripts");
+                ui.label("Name:");
+                let r = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                if !r.has_focus() && ui.memory(|m| m.focused().is_none()) {
+                    r.request_focus();
+                }
+                let valid = !name.trim().is_empty();
+                let (ok, cancel) = buttons(ui, "Add", valid);
+                if valid && (ok || enter) {
+                    actions.push(Action::AddFavorite { tab: *tab, name: name.trim().to_string() });
+                }
+                if (valid && (ok || enter)) || cancel { Outcome::Close } else { Outcome::Keep }
             }
             Dialog::Preferences { batch_size } => {
                 title(ui, "Preferences");

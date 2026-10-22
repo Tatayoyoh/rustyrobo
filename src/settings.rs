@@ -383,6 +383,26 @@ pub struct AppSettings {
     pub show_explorer: bool,
     pub show_logs: bool,
     pub tabbed_results: bool,
+    pub favorites: Vec<FavoriteScript>,
+}
+
+/// Script saved in the favorite scripts manager, filed under a connection
+/// and a database. Scripts are listed in the order of the list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FavoriteScript {
+    pub id: uuid::Uuid,
+    pub name: String,
+    /// `None`: loaded on the active connection.
+    pub connection: Option<uuid::Uuid>,
+    pub db: String,
+    pub script: String,
+}
+
+impl Default for FavoriteScript {
+    fn default() -> Self {
+        Self { id: uuid::Uuid::new_v4(), name: String::new(), connection: None, db: String::new(), script: String::new() }
+    }
 }
 
 impl Default for AppSettings {
@@ -407,6 +427,7 @@ impl Default for AppSettings {
             show_explorer: true,
             show_logs: false,
             tabbed_results: false,
+            favorites: Vec::new(),
         }
     }
 }

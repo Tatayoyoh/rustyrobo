@@ -5,6 +5,7 @@ pub mod dialogs;
 pub mod editing;
 pub mod editor;
 pub mod explorer;
+pub mod favorites;
 pub mod output;
 pub mod query;
 
@@ -27,6 +28,8 @@ pub const ICON_STOP: &str = "⏹";
 pub const ICON_OPEN: &str = "📂";
 pub const ICON_SAVE: &str = "💾";
 pub const ICON_CONNECT: &str = "🔌";
+pub const ICON_FAVORITE: &str = "★";
+pub const ICON_NOT_FAVORITE: &str = "☆";
 
 /// Small coloured dot used for connection colour tags.
 pub fn color_dot(ui: &mut Ui, color: Option<[u8; 3]>, size: f32) {
@@ -89,6 +92,9 @@ fn menus(app: &mut App, ui: &mut Ui) {
             }
             if menu_item(ui, "Save As…", "Ctrl+Shift+S") {
                 app.actions.push(Action::SaveFile { save_as: true });
+            }
+            if menu_item(ui, &format!("{ICON_FAVORITE} Favorite Scripts…"), "") {
+                app.actions.push(Action::ShowFavorites);
             }
             ui.separator();
             if menu_item(ui, "Exit", "Ctrl+Q") {
@@ -254,6 +260,9 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         }
         if ui.button(ICON_SAVE).on_hover_text("Save script (Ctrl+S)").clicked() {
             app.actions.push(Action::SaveFile { save_as: false });
+        }
+        if ui.button(format!("{ICON_FAVORITE} Favorite Scripts")).on_hover_text("Manage and load favorite scripts").clicked() {
+            app.actions.push(Action::ShowFavorites);
         }
         ui.separator();
         let tab = app.tabs.get(app.active_tab);

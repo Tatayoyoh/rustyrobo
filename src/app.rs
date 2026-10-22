@@ -110,6 +110,12 @@ pub enum Refresh {
 #[derive(Clone)]
 pub enum Action {
     ShowConnections,
+    ShowFavorites,
+    /// Opens a favorite script in a new shell, on its connection (connecting
+    /// first if needed), or on the active one.
+    OpenFavorite(Uuid),
+    /// Saves the script of a shell as a favorite, under that name.
+    AddFavorite { tab: u64, name: String },
     NewConnection,
     EditConnection(Uuid),
     Connect(Uuid),
@@ -177,6 +183,9 @@ pub struct App {
     pub logs: VecDeque<LogEntry>,
     pub actions: Vec<Action>,
     pub conn_list: Option<ConnectionList>,
+    pub favorites: Option<crate::ui::favorites::FavoritesManager>,
+    /// Favorite to open once its connection is established.
+    pending_favorite: Option<Uuid>,
     pub conn_editor: Option<ConnectionEditor>,
     pub dialog: Option<Dialog>,
     pub toast: Option<(String, Instant, LogLevel)>,
@@ -219,6 +228,8 @@ impl App {
             logs: VecDeque::new(),
             actions: Vec::new(),
             conn_list: None,
+            favorites: None,
+            pending_favorite: None,
             conn_editor: None,
             dialog: None,
             toast: None,
@@ -311,10 +322,18 @@ impl App {
                         if !default_db.is_empty() {
                             self.actions.push(Action::LoadCollections(id, default_db));
                         }
+                        let waiting = self.pending_favorite.and_then(|f| self.settings.favorites.iter().find(|x| x.id == f));
+                        if let Some(f) = waiting
+                            && f.connection == Some(conn_id)
+                        {
+                            self.actions.push(Action::OpenFavorite(f.id));
+                            self.pending_favorite = None;
+                        }
                     }
                     Err(e) => {
                         s.status = ServerStatus::Failed(e.clone());
                         let name = s.settings.name.clone();
+                        self.pending_favorite = None;
                         self.log(LogLevel::Error, format!("Cannot connect to {name}: {e}"));
                         self.dialog = Some(Dialog::message("Cannot connect", format!("Cannot connect to the MongoDB at {name}.\n\nError:\n{e}")));
                     }
@@ -502,6 +521,52 @@ impl App {
     fn run_action(&mut self, action: Action) {
         match action {
             Action::ShowConnections => self.conn_list = Some(ConnectionList::new(&self.settings)),
+            Action::ShowFavorites => {
+                let linked = self.tabs.get(self.active_tab).and_then(|t| t.favorite);
+                self.favorites = Some(crate::ui::favorites::FavoritesManager::new(linked));
+            }
+            Action::OpenFavorite(id) => {
+                let Some(fav) = self.settings.favorites.iter().find(|f| f.id == id).cloned() else { return };
+                let target = fav.connection.filter(|&c| self.settings.connection(c).is_some());
+                let server = match target {
+                    Some(c) => {
+                        let Some(s) = self.servers.iter().find(|s| s.settings.id == c) else {
+                            // Not connected yet: open once connected.
+                            self.pending_favorite = Some(id);
+                            self.actions.push(Action::Connect(c));
+                            return;
+                        };
+                        match s.status {
+                            ServerStatus::Connected(_) => s.id,
+                            ServerStatus::Connecting => {
+                                self.pending_favorite = Some(id);
+                                return;
+                            }
+                            ServerStatus::Failed(_) => {
+                                self.pending_favorite = Some(id);
+                                self.actions.push(Action::Connect(c));
+                                return;
+                            }
+                        }
+                    }
+                    None => {
+                        // The active shell's connection, else the first connected one.
+                        let active = self.tabs.get(self.active_tab).map(|t| t.server).filter(|&s| self.server(s).is_some_and(|s| s.conn().is_some()));
+                        let Some(server) = active.or_else(|| self.servers.iter().find(|s| s.conn().is_some()).map(|s| s.id)) else {
+                            self.log(LogLevel::Warn, format!("Connect to a server to load \"{}\"", fav.name));
+                            return;
+                        };
+                        server
+                    }
+                };
+                let n = self.tabs.len();
+                self.open_shell(server, fav.db, fav.script, false, fav.name, None);
+                if self.tabs.len() > n
+                    && let Some(t) = self.tabs.last_mut()
+                {
+                    t.favorite = Some(id);
+                }
+            }
             Action::NewConnection => self.conn_editor = Some(ConnectionEditor::new(ConnectionSettings::default(), true)),
             Action::EditConnection(id) => {
                 if let Some(c) = self.settings.connection(id) {
@@ -676,6 +741,14 @@ impl App {
                         self.active_tab -= 1;
                     }
                 }
+            }
+            Action::AddFavorite { tab, name } => {
+                let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab) else { return };
+                let connection = self.servers.iter().find(|s| s.id == t.server).map(|s| s.settings.id);
+                let f = crate::settings::FavoriteScript { name, connection, db: t.db.clone(), script: t.script.clone(), ..Default::default() };
+                t.favorite = Some(f.id);
+                self.settings.favorites.push(f);
+                self.actions.push(Action::SaveSettings);
             }
             Action::DuplicateTab(tab_id) => {
                 if let Some(t) = self.tabs.iter().find(|t| t.id == tab_id) {
@@ -872,7 +945,7 @@ impl App {
         let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         let tab_id = self.tabs.get(self.active_tab).map(|t| t.id);
-        let modal_open = self.conn_list.is_some() || self.conn_editor.is_some() || self.dialog.is_some();
+        let modal_open = self.conn_list.is_some() || self.conn_editor.is_some() || self.dialog.is_some() || self.favorites.is_some();
 
         if pressed(cmd, Key::N) {
             self.actions.push(Action::ShowConnections);
@@ -1081,6 +1154,7 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         crate::ui::main_window(self, ui);
         crate::ui::connections::show(self, &ctx);
+        crate::ui::favorites::show(self, &ctx);
         crate::ui::dialogs::show(self, &ctx);
         crate::autotest::tick(self, &ctx);
         self.process_actions();

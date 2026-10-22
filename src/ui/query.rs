@@ -11,9 +11,10 @@ pub use crate::ui::output::OutputPane;
 use crate::app::{Action, App, ServerStatus};
 use crate::settings::{AutocompletionMode, Orientation};
 use crate::shell::ShellHandle;
+use crate::ui::dialogs::Dialog;
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
 use crate::ui::output::{PaneCtx, show_pane};
-use crate::ui::{ICON_DB, ICON_SERVER, color_dot};
+use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_NOT_FAVORITE, ICON_SERVER, color_dot};
 
 pub struct QueryTab {
     pub id: u64,
@@ -36,6 +37,8 @@ pub struct QueryTab {
     pub line_numbers: bool,
     /// Title being edited in the tab bar (double-click or "Rename Shell…").
     pub renaming: Option<String>,
+    /// Favorite script this shell was saved as or loaded from.
+    pub favorite: Option<uuid::Uuid>,
     focus_editor: bool,
 }
 
@@ -61,6 +64,7 @@ impl QueryTab {
             result_tab: 0,
             line_numbers: false,
             renaming: None,
+            favorite: None,
             focus_editor: true,
         }
     }
@@ -100,6 +104,9 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         AutocompletionMode::None => CompletionMode::Off,
     };
     let tab = &mut app.tabs[idx];
+    // Favorite star: None when not a favorite, else whether it is up to date.
+    let favorite = tab.favorite.and_then(|id| app.settings.favorites.iter().find(|f| f.id == id)).map(|f| f.script == tab.script && f.db == tab.db);
+    let mut star_clicked = false;
 
     // Info bar: server and database, like the Robo 3T query header.
     egui::Frame::new().fill(theme.bg).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
@@ -116,6 +123,13 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 if ui.selectable_label(tab.line_numbers, "#").on_hover_text("Line numbers").clicked() {
                     tab.line_numbers = !tab.line_numbers;
                 }
+                let (icon, color, tip) = match favorite {
+                    None => (ICON_NOT_FAVORITE, theme.text_weak, "Add to favorite scripts"),
+                    Some(true) => (ICON_FAVORITE, theme.accent, "Remove from favorite scripts"),
+                    // Same "modified" dot as the tab titles.
+                    Some(false) => ("★ •", theme.warning, "Save the changes to the favorite script"),
+                };
+                star_clicked = ui.add(egui::Button::new(RichText::new(icon).color(color)).frame(false)).on_hover_text(tip).clicked();
                 if tab.running {
                     let secs = tab.started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
                     if ui.button(RichText::new("⏹ Stop").color(theme.error)).clicked() {
@@ -129,6 +143,24 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
             });
         });
     });
+
+    if star_clicked {
+        let favorites = &mut app.settings.favorites;
+        match (favorite, tab.favorite) {
+            (Some(true), Some(id)) => {
+                favorites.retain(|f| f.id != id);
+                tab.favorite = None;
+            }
+            (Some(false), Some(id)) => {
+                if let Some(f) = favorites.iter_mut().find(|f| f.id == id) {
+                    f.script = tab.script.clone();
+                    f.db = tab.db.clone();
+                }
+            }
+            _ => actions.push(Action::Dialog(Dialog::FavoriteName { tab: tab.id, name: tab.title.clone() })),
+        }
+        actions.push(Action::SaveSettings);
+    }
 
     let editor_id = Id::new(("editor", tab.id));
     if let Some(c) = tab.cursor_hint.take() {
