@@ -18,6 +18,7 @@
   add / edit / clone / delete, drag and drop to move or reorder, load with a double-click or
   Enter (connecting first when needed)
 - Tree / Table / Text labels on the result view buttons
+- Real icons (Phosphor) instead of emoji and Unicode symbols, consistent across platforms
 
 ### Fixed
 - F10 rotated the editor and results only one way: the editor then filled the whole area
@@ -26,6 +27,7 @@
   informational dialogs
 - Tree mode button icon
 - Line numbers of document syntax errors were off by one
+- Line breaks in short string values showed as a box
 - A dialog that settled on its size a frame late could stay misplaced until the next input
 
 ## 1.0.0
