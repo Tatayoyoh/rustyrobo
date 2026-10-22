@@ -13,6 +13,7 @@ use crate::settings::ViewMode;
 use crate::shell::{OutputKind, ShellOutput};
 use crate::theme::{Theme, bson_color};
 use crate::ui::dialogs::{Dialog, DocMode};
+use crate::ui::editor::FoldClick;
 
 pub struct OutputPane {
     pub output: ShellOutput,
@@ -25,6 +26,9 @@ pub struct OutputPane {
     /// Derived views, rebuilt only when the page, the expansion state, the
     /// format options or the theme change (not every frame).
     text_cache: Option<(FormatOptions, String)>,
+    /// Folded blocks of the text view (first line of each, in `text_cache`).
+    folded: HashSet<usize>,
+    fold_cache: Option<FoldedText>,
     rows_cache: Option<(FormatOptions, &'static str, Vec<Row>)>,
     columns_cache: Option<(Vec<String>, bool)>,
     skip_input: String,
@@ -53,6 +57,8 @@ impl OutputPane {
             expanded,
             selected: None,
             text_cache: None,
+            folded: HashSet::new(),
+            fold_cache: None,
             rows_cache: None,
             columns_cache: None,
             skip_input: skip.to_string(),
@@ -75,6 +81,8 @@ impl OutputPane {
         self.skip = skip;
         self.skip_input = skip.to_string();
         self.text_cache = None;
+        self.folded.clear();
+        self.fold_cache = None;
         self.rows_cache = None;
         self.columns_cache = None;
         self.selected = None;
@@ -630,10 +638,79 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
             s.push_str("\n\n");
         }
         pane.text_cache = Some((fmt, s));
+        pane.folded.clear();
+        pane.fold_cache = None;
     }
-    if let Some((_, text)) = &pane.text_cache {
-        crate::ui::editor::code_view(ui, Id::new(("out-json", cx.tab, cx.index)), text, cx.theme, FontId::monospace(cx.font_size));
+    let Some((_, text)) = &pane.text_cache else { return };
+    let view = pane.fold_cache.get_or_insert_with(|| fold_text(text, &pane.folded));
+    let click = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size));
+    match click {
+        Some(FoldClick::Toggle(row)) => {
+            let line = view.lines[row];
+            if !pane.folded.remove(&line) {
+                pane.folded.insert(line);
+            }
+        }
+        Some(FoldClick::CollapseAll) => pane.folded = view.documents.iter().copied().collect(),
+        Some(FoldClick::ExpandAll) => pane.folded.clear(),
+        None => return,
     }
+    pane.fold_cache = None;
+}
+
+/// Text view with some blocks folded into one `{ … }` line.
+struct FoldedText {
+    text: String,
+    /// Source line of each displayed line.
+    lines: Vec<usize>,
+    /// `Some(folded)` for displayed lines that open a block.
+    marks: Vec<Option<bool>>,
+    /// First line of each top-level document.
+    documents: Vec<usize>,
+}
+
+/// Folds the shell JSON `text` at the blocks starting on the `folded` lines.
+/// Blocks are found from the brackets ending/starting lines, which is exact
+/// for the output of `to_shell_json` (one key or element per line).
+fn fold_text(text: &str, folded: &HashSet<usize>) -> FoldedText {
+    let src: Vec<&str> = text.lines().collect();
+    let mut ends = vec![None; src.len()];
+    let mut stack = Vec::new();
+    for (i, l) in src.iter().enumerate() {
+        let t = l.trim();
+        if (t.starts_with('}') || t.starts_with(']'))
+            && let Some(open) = stack.pop()
+        {
+            ends[open] = Some(i);
+        }
+        if t.ends_with('{') || t.ends_with('[') {
+            stack.push(i);
+        }
+    }
+    let mut out = FoldedText { text: String::with_capacity(text.len()), lines: Vec::new(), marks: Vec::new(), documents: Vec::new() };
+    let mut i = 0;
+    while i < src.len() {
+        let line = src[i];
+        out.lines.push(i);
+        out.text.push_str(line);
+        if ends[i].is_some() && !line.starts_with(char::is_whitespace) {
+            out.documents.push(i);
+        }
+        match ends[i] {
+            Some(end) if folded.contains(&i) => {
+                out.text.push_str(" … ");
+                out.text.push_str(src[end].trim_start());
+                out.marks.push(Some(true));
+                i = end + 1;
+            }
+            end => {
+                out.marks.push(end.map(|_| false));
+                i += 1;
+            }
+        }
+        out.text.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -704,6 +781,25 @@ mod tests {
         let (_, text) = p.text_cache.as_ref().unwrap();
         assert!(text.len() < TEXT_VIEW_LIMIT + 700 * 1024);
         assert!(text.contains("more document(s) not shown"));
+    }
+
+    #[test]
+    fn text_folding() {
+        let text = bsonfmt::to_shell_json(&docs()[0], 0, FormatOptions::default()) + "\n";
+        let open = fold_text(&text, &HashSet::new());
+        assert_eq!(open.text, text);
+        assert_eq!(open.documents, vec![0]);
+        // `{`, `"a" : {`, `"b" : [` and `{ "c"` open blocks.
+        assert_eq!(open.marks.iter().filter(|m| m.is_some()).count(), 4);
+        let a = text.lines().position(|l| l.contains("\"a\" : {")).unwrap();
+        let folded = fold_text(&text, &HashSet::from([a]));
+        assert!(folded.text.contains("\"a\" : { … },\n"), "{}", folded.text);
+        assert!(!folded.text.contains("\"c\""));
+        assert!(folded.text.contains("\"s\" : \"x\""));
+        assert_eq!(folded.marks[a], Some(true));
+        assert_eq!(folded.lines[a + 1], text.lines().position(|l| l.contains("\"s\"")).unwrap());
+        let doc = fold_text(&text, &HashSet::from([0]));
+        assert_eq!(doc.text, "{ … }\n");
     }
 
     #[test]

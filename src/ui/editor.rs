@@ -688,6 +688,12 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
 
 /// Read-only highlighted text block (results text view, function viewer).
 pub fn code_view(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) {
+    egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
+        read_only_text(ui, id, text, theme, font);
+    });
+}
+
+fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) -> egui::text_edit::TextEditOutput {
     // `&str` is a read-only TextBuffer: no copy of the (possibly large) text.
     let mut view: &str = text;
     let theme_copy = *theme;
@@ -695,16 +701,69 @@ pub fn code_view(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) {
         let job = highlight_cached(ui.ctx(), buf.as_str(), &theme_copy, &font);
         ui.fonts_mut(|f| f.layout_job(job))
     };
+    egui::TextEdit::multiline(&mut view)
+        .id(id.with("t"))
+        .code_editor()
+        .desired_width(f32::INFINITY)
+        .frame(egui::Frame::NONE)
+        .layouter(&mut layouter)
+        .show(ui)
+}
+
+/// What the user did in the fold gutter of [`folding_code_view`].
+pub enum FoldClick {
+    Toggle(usize),
+    CollapseAll,
+    ExpandAll,
+}
+
+/// [`code_view`] with a fold gutter: `marks[i]` is `Some(folded)` when line
+/// `i` opens a block. Only the visible markers are painted.
+pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId) -> Option<FoldClick> {
+    let mut click = None;
+    let row_height = ui.fonts_mut(|f| f.row_height(&font));
     egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
-        ui.add(
-            egui::TextEdit::multiline(&mut view)
-                .id(id.with("t"))
-                .code_editor()
-                .desired_width(f32::INFINITY)
-                .frame(egui::Frame::NONE)
-                .layouter(&mut layouter),
-        );
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let size = egui::vec2(row_height, row_height * marks.len().max(1) as f32);
+            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+            let out = read_only_text(ui, id, text, theme, font.clone());
+            // Rows of the galley are the lines (no wrapping): align on them.
+            let rows = out.galley.rows.len().max(1);
+            let row_h = out.galley.size().y / rows as f32;
+            let top = out.galley_pos.y;
+            let row_at = |y: f32| ((y - top) / row_h).floor().max(0.0) as usize;
+            let clip = ui.clip_rect();
+            let hovered = resp.hover_pos().map(|p| row_at(p.y)).filter(|&r| marks.get(r).is_some_and(|m| m.is_some()));
+            if hovered.is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let painter = ui.painter().with_clip_rect(egui::Rect::from_x_y_ranges(rect.x_range(), clip.y_range()));
+            let (first, last) = (row_at(clip.top()), row_at(clip.bottom()) + 1);
+            for (r, mark) in marks.iter().enumerate().take(last).skip(first) {
+                let Some(folded) = *mark else { continue };
+                let color = if hovered == Some(r) { theme.text } else { theme.text_weak };
+                let center = egui::pos2(rect.center().x, top + (r as f32 + 0.5) * row_h);
+                painter.text(center, egui::Align2::CENTER_CENTER, if folded { "⏵" } else { "⏷" }, font.clone(), color);
+            }
+            if resp.clicked()
+                && let Some(r) = hovered
+            {
+                click = Some(FoldClick::Toggle(r));
+            }
+            resp.context_menu(|ui| {
+                if ui.button("Collapse All").clicked() {
+                    click = Some(FoldClick::CollapseAll);
+                    ui.close();
+                }
+                if ui.button("Expand All").clicked() {
+                    click = Some(FoldClick::ExpandAll);
+                    ui.close();
+                }
+            });
+        });
     });
+    click
 }
 
 #[cfg(test)]
