@@ -159,7 +159,7 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     for (mode, label, tip) in [
                         (ViewMode::Text, "📝", "Text mode (F4)"),
                         (ViewMode::Table, "☰", "Table mode (F3)"),
-                        (ViewMode::Tree, "🌲", "Tree mode (F2)"),
+                        (ViewMode::Tree, "⊟", "Tree mode (F2)"),
                     ] {
                         if ui.selectable_label(pane.mode == mode, label).on_hover_text(tip).clicked() {
                             pane.mode = mode;
