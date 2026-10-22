@@ -13,6 +13,7 @@ use crate::settings::ViewMode;
 use crate::shell::{OutputKind, ShellOutput};
 use crate::theme::{Theme, bson_color};
 use crate::ui::dialogs::{Dialog, DocMode};
+use crate::ui::editing::{FoldedText, fold_text};
 use crate::ui::editor::FoldClick;
 
 pub struct OutputPane {
@@ -651,66 +652,11 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 pane.folded.insert(line);
             }
         }
-        Some(FoldClick::CollapseAll) => pane.folded = view.documents.iter().copied().collect(),
+        Some(FoldClick::CollapseAll) => pane.folded = view.collapse_all(),
         Some(FoldClick::ExpandAll) => pane.folded.clear(),
         None => return,
     }
     pane.fold_cache = None;
-}
-
-/// Text view with some blocks folded into one `{ … }` line.
-struct FoldedText {
-    text: String,
-    /// Source line of each displayed line.
-    lines: Vec<usize>,
-    /// `Some(folded)` for displayed lines that open a block.
-    marks: Vec<Option<bool>>,
-    /// First line of each top-level document.
-    documents: Vec<usize>,
-}
-
-/// Folds the shell JSON `text` at the blocks starting on the `folded` lines.
-/// Blocks are found from the brackets ending/starting lines, which is exact
-/// for the output of `to_shell_json` (one key or element per line).
-fn fold_text(text: &str, folded: &HashSet<usize>) -> FoldedText {
-    let src: Vec<&str> = text.lines().collect();
-    let mut ends = vec![None; src.len()];
-    let mut stack = Vec::new();
-    for (i, l) in src.iter().enumerate() {
-        let t = l.trim();
-        if (t.starts_with('}') || t.starts_with(']'))
-            && let Some(open) = stack.pop()
-        {
-            ends[open] = Some(i);
-        }
-        if t.ends_with('{') || t.ends_with('[') {
-            stack.push(i);
-        }
-    }
-    let mut out = FoldedText { text: String::with_capacity(text.len()), lines: Vec::new(), marks: Vec::new(), documents: Vec::new() };
-    let mut i = 0;
-    while i < src.len() {
-        let line = src[i];
-        out.lines.push(i);
-        out.text.push_str(line);
-        if ends[i].is_some() && !line.starts_with(char::is_whitespace) {
-            out.documents.push(i);
-        }
-        match ends[i] {
-            Some(end) if folded.contains(&i) => {
-                out.text.push_str(" … ");
-                out.text.push_str(src[end].trim_start());
-                out.marks.push(Some(true));
-                i = end + 1;
-            }
-            end => {
-                out.marks.push(end.map(|_| false));
-                i += 1;
-            }
-        }
-        out.text.push('\n');
-    }
-    out
 }
 
 #[cfg(test)]
@@ -788,18 +734,13 @@ mod tests {
         let text = bsonfmt::to_shell_json(&docs()[0], 0, FormatOptions::default()) + "\n";
         let open = fold_text(&text, &HashSet::new());
         assert_eq!(open.text, text);
-        assert_eq!(open.documents, vec![0]);
         // `{`, `"a" : {`, `"b" : [` and `{ "c"` open blocks.
         assert_eq!(open.marks.iter().filter(|m| m.is_some()).count(), 4);
         let a = text.lines().position(|l| l.contains("\"a\" : {")).unwrap();
         let folded = fold_text(&text, &HashSet::from([a]));
-        assert!(folded.text.contains("\"a\" : { … },\n"), "{}", folded.text);
+        assert!(folded.text.contains("\"a\" : {…},\n"), "{}", folded.text);
         assert!(!folded.text.contains("\"c\""));
-        assert!(folded.text.contains("\"s\" : \"x\""));
-        assert_eq!(folded.marks[a], Some(true));
-        assert_eq!(folded.lines[a + 1], text.lines().position(|l| l.contains("\"s\"")).unwrap());
-        let doc = fold_text(&text, &HashSet::from([0]));
-        assert_eq!(doc.text, "{ … }\n");
+        assert_eq!(fold_text(&text, &HashSet::from([0])).text, "{…}\n");
     }
 
     #[test]

@@ -331,6 +331,65 @@ fn f10_rotates_both_ways() {
     assert_eq!(saved_settings(&env).orientation, Orientation::Vertical);
 }
 
+fn open_document(h: &mut Harness<'_, App>, text: &str) {
+    use rustyrobo::ui::dialogs::{Dialog, DocMode};
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    h.state_mut().dialog = Some(Dialog::document(DocMode::Edit, 1, "db", "coll", text.into(), None, None));
+    h.run_steps(3);
+}
+
+fn document_text(h: &Harness<'_, App>) -> String {
+    match &h.state().dialog {
+        Some(rustyrobo::ui::dialogs::Dialog::Document { text, .. }) => text.clone(),
+        _ => panic!("document dialog closed"),
+    }
+}
+
+#[test]
+fn document_editor_find_and_multi_cursor() {
+    let _env = env("doc-find", &AppSettings::default());
+    let mut h = harness();
+    open_document(&mut h, "foo(foo, foo)");
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("foo(foo, foo)")).next().unwrap().focus();
+    h.run_steps(2);
+
+    // Ctrl+F, type, Enter for the next match; Escape closes only the bar.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    h.run_steps(2);
+    h.query_by(|n| is_text_input(n) && n.value().as_deref() == Some("")).expect("find field").type_text("FOO");
+    h.run_steps(3);
+    assert!(has_label(&h, "1 of 3"), "case-insensitive matches");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(has_label(&h, "2 of 3"));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!has_label(&h, "of 3"), "search bar closed");
+    assert!(h.state().dialog.is_some(), "dialog still open");
+
+    // Ctrl+D selects the word, then each next occurrence; typing edits all.
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("foo(foo, foo)")).next().unwrap().focus();
+    h.run_steps(2);
+    for _ in 0..3 {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::D);
+        h.run_steps(2);
+    }
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("foo(foo, foo)")).next().unwrap().type_text("x");
+    h.run_steps(3);
+    assert_eq!(document_text(&h), "x(x, x)");
+    h.key_press(Key::Backspace);
+    h.run_steps(3);
+    assert_eq!(document_text(&h), "(, )");
+    // Escape leaves multi-cursor mode without closing the dialog.
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("(, )")).next().unwrap().type_text("y");
+    h.run_steps(3);
+    assert_eq!(document_text(&h).matches('y').count(), 1, "single cursor again");
+}
+
 // ---------------------------------------------------------------- live
 
 fn live() -> bool {

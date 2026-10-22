@@ -156,6 +156,9 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                     completion,
                     focus: std::mem::take(&mut tab.focus_editor),
                     read_only: false,
+                    search: true,
+                    multi_cursor: true,
+                    folding: false,
                 },
             );
             if r.changed {

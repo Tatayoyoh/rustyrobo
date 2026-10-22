@@ -2,6 +2,7 @@
 
 pub mod connections;
 pub mod dialogs;
+pub mod editing;
 pub mod editor;
 pub mod explorer;
 pub mod output;

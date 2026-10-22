@@ -265,6 +265,9 @@ fn code_box(ui: &mut Ui, id: Id, text: &mut String, theme: &crate::theme::Theme,
                     completion: crate::ui::editor::CompletionMode::Off,
                     focus: false,
                     read_only,
+                    search: true,
+                    multi_cursor: true,
+                    folding: false,
                 },
             );
         });
@@ -537,6 +540,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             completion: crate::ui::editor::CompletionMode::Off,
                             focus: false,
                             read_only: *mode == DocMode::View,
+                            search: true,
+                            multi_cursor: true,
+                            folding: true,
                         },
                     );
                     if *text != before {
@@ -764,6 +770,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+O / Ctrl+S", "Open / save script"),
                         ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
                         ("Ctrl+Space", "Autocompletion"),
+                        ("Ctrl+F", "Find in the editor"),
+                        ("Ctrl+D", "Select the next occurrence"),
                         ("Alt+1…9", "Connect to the n-th connection"),
                     ] {
                         ui.label(RichText::new(k).monospace());

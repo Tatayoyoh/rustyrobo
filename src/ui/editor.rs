@@ -1,12 +1,16 @@
 //! JavaScript code editor: syntax highlighting, line numbers and the
 //! shell autocompletion popup (collections, db/collection/cursor methods).
 
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::sync::Arc;
 
-use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
+use egui::text::{CCursor, CCursorRange, CharIndex, LayoutJob, TextFormat};
 use egui::{Color32, FontId, Galley, Id, Key, Modifiers, TextBuffer, Ui};
 
 use crate::theme::Theme;
+use crate::ui::editing::{Edit, FoldedText, MAX_MATCHES, Sel, apply_edit, apply_folded_edit, find_all, fold_text, next_occurrence, selected_text, word_at};
 
 const KEYWORDS: &[&str] = &[
     "var", "let", "const", "function", "return", "if", "else", "for", "while", "do", "break",
@@ -520,6 +524,12 @@ pub struct EditorOptions<'a> {
     pub completion: CompletionMode,
     pub focus: bool,
     pub read_only: bool,
+    /// Ctrl+F search bar.
+    pub search: bool,
+    /// Ctrl+D selects the word, then adds its next occurrence as a cursor.
+    pub multi_cursor: bool,
+    /// Fold gutter for `{` / `[` blocks.
+    pub folding: bool,
 }
 
 pub struct EditorResponse {
@@ -530,11 +540,248 @@ pub struct EditorResponse {
     pub want_fields: Option<String>,
 }
 
+#[derive(Clone, Default)]
+struct SearchState {
+    open: bool,
+    query: String,
+    focus: bool,
+    current: usize,
+    matches: Arc<Vec<(Range<usize>, usize)>>,
+    /// (text hash, query) the matches were computed for.
+    key: (u64, String),
+    /// Select and scroll to the current match this frame.
+    goto: bool,
+    had_focus: bool,
+}
+
+#[derive(Clone, Default)]
+struct FoldState {
+    folded: HashSet<usize>,
+    /// Folded view, keyed by a hash of the text and the folded lines.
+    cache: Option<(u64, Arc<FoldedText>)>,
+}
+
+fn text_hash(text: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
+fn fold_view(fold: &mut FoldState, text: &str) -> Arc<FoldedText> {
+    let mut lines: Vec<usize> = fold.folded.iter().copied().collect();
+    lines.sort_unstable();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (text, &lines).hash(&mut h);
+    let key = h.finish();
+    match &fold.cache {
+        Some((k, v)) if *k == key => v.clone(),
+        _ => {
+            let v = Arc::new(fold_text(text, &fold.folded));
+            fold.cache = Some((key, v.clone()));
+            v
+        }
+    }
+}
+
+fn set_selection(ctx: &egui::Context, edit_id: Id, (anchor, head): Sel) {
+    let mut state = egui::TextEdit::load_state(ctx, edit_id).unwrap_or_default();
+    state.cursor.set_char_range(Some(CCursorRange { primary: CCursor::new(head), ..CCursorRange::one(CCursor::new(anchor)) }));
+    state.store(ctx, edit_id);
+}
+
+fn current_selection(ctx: &egui::Context, edit_id: Id) -> Option<Sel> {
+    let r = egui::TextEdit::load_state(ctx, edit_id)?.cursor.char_range()?;
+    Some((r.secondary.index.0, r.primary.index.0))
+}
+
 pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: EditorOptions<'_>) -> EditorResponse {
+    let ctx = ui.ctx().clone();
     let comp_id = id.with("completion");
     let mut comp: CompletionState = ui.data(|d| d.get_temp(comp_id)).unwrap_or_default();
     let edit_id = id.with("text");
+    let find_id = id.with("find");
     let focused = ui.memory(|m| m.has_focus(edit_id));
+    let find_focused = ui.memory(|m| m.has_focus(find_id));
+    // egui drops the focus on Escape before the widgets run: Escape is
+    // handled with the focus of the previous frame.
+    let had_focus = ui.data(|d| d.get_temp::<bool>(id.with("had-focus"))).unwrap_or(false);
+    let mut search: SearchState = if opts.search { ui.data(|d| d.get_temp(id.with("search"))).unwrap_or_default() } else { SearchState::default() };
+    let multi_enabled = opts.multi_cursor && !opts.read_only;
+    let mut multi: Vec<Sel> = if multi_enabled { ui.data(|d| d.get_temp(id.with("multi"))).unwrap_or_default() } else { Vec::new() };
+    let mut fold: FoldState = if opts.folding { ui.data(|d| d.get_temp(id.with("fold"))).unwrap_or_default() } else { FoldState::default() };
+    let mut changed = false;
+
+    // Ctrl+D: select the word under the cursor, then add the next occurrence.
+    if multi_enabled && focused && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::D)) {
+        if fold.folded.is_empty() {
+            if multi.is_empty() {
+                multi.push(current_selection(&ctx, edit_id).unwrap_or_default());
+            }
+            let last = multi.len() - 1;
+            if multi[last].0 == multi[last].1 {
+                if let Some(w) = word_at(text, multi[last].1) {
+                    multi[last] = (w.start, w.end);
+                }
+            } else if let Some(r) = next_occurrence(text, &multi) {
+                multi.push((r.start, r.end));
+            }
+            set_selection(&ctx, edit_id, multi[multi.len() - 1]);
+            if multi.len() == 1 {
+                // A single selection is the TextEdit's own.
+                multi.clear();
+            }
+        } else {
+            // Positions in the folded text do not match the source: unfold first.
+            fold.folded.clear();
+        }
+    }
+
+    // With several cursors, editing keys are applied here, not by the TextEdit.
+    if multi.len() > 1 && (focused || had_focus) {
+        let mut exit = false;
+        let events = ui.input_mut(|i| {
+            let mut taken = Vec::new();
+            i.events.retain(|e| {
+                let take = match e {
+                    egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut => true,
+                    egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                        let plain = !modifiers.command && !modifiers.shift && !modifiers.alt;
+                        let edit = matches!(key, Key::Backspace | Key::Delete | Key::Enter | Key::Tab | Key::ArrowLeft | Key::ArrowRight | Key::Escape);
+                        if !modifiers.is_none() || matches!(key, Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::PageUp | Key::PageDown) {
+                            exit = true;
+                        }
+                        plain && edit
+                    }
+                    egui::Event::PointerButton { pressed: true, .. } => {
+                        exit = true;
+                        false
+                    }
+                    _ => false,
+                };
+                if take {
+                    taken.push(e.clone());
+                }
+                !take
+            });
+            taken
+        });
+        for e in events {
+            let edit = match &e {
+                egui::Event::Text(t) | egui::Event::Paste(t) => Some(Edit::Insert(t)),
+                egui::Event::Copy => {
+                    ctx.copy_text(selected_text(text, &multi));
+                    None
+                }
+                egui::Event::Cut => {
+                    ctx.copy_text(selected_text(text, &multi));
+                    Some(Edit::Insert(""))
+                }
+                egui::Event::Key { key: Key::Backspace, .. } => Some(Edit::Backspace),
+                egui::Event::Key { key: Key::Delete, .. } => Some(Edit::Delete),
+                egui::Event::Key { key: Key::Enter, .. } => Some(Edit::Insert("\n")),
+                egui::Event::Key { key: Key::Tab, .. } => Some(Edit::Insert("\t")),
+                egui::Event::Key { key: Key::ArrowLeft, .. } => Some(Edit::Left),
+                egui::Event::Key { key: Key::ArrowRight, .. } => Some(Edit::Right),
+                _ => {
+                    // Escape: back to one cursor, keeping the focus egui dropped.
+                    ui.memory_mut(|m| m.request_focus(edit_id));
+                    exit = true;
+                    None
+                }
+            };
+            if let Some(edit) = edit {
+                changed |= !matches!(edit, Edit::Left | Edit::Right);
+                apply_edit(text, &mut multi, edit);
+            }
+        }
+        if let Some(&last) = multi.last() {
+            set_selection(&ctx, edit_id, last);
+        }
+        if exit {
+            multi.clear();
+        }
+        comp.open = false;
+    }
+
+    let view = opts.folding.then(|| fold_view(&mut fold, text));
+    let folds_on = view.is_some() && !fold.folded.is_empty();
+    let shown_hash = |text: &str| text_hash(view.as_ref().filter(|_| folds_on).map_or(text, |v| v.text.as_str()));
+
+    // Ctrl+F: search bar, prefilled with the selection.
+    if opts.search && (focused || find_focused) && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
+        search.open = true;
+        search.focus = true;
+        let shown = view.as_ref().filter(|_| folds_on).map_or(text.as_str(), |v| v.text.as_str());
+        if let Some((a, h)) = current_selection(&ctx, edit_id)
+            && a != h
+        {
+            let sel = selected_text(shown, &[(a, h)]);
+            if !sel.contains('\n') {
+                search.query = sel;
+            }
+        }
+    }
+    let mut scroll_to = None;
+    if search.open {
+        // Escape closes the search bar, not the dialog around the editor.
+        let escape = (find_focused || search.had_focus || had_focus) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+        let mut close = escape;
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut search.query).id(find_id).hint_text("Find").desired_width(220.0));
+            if std::mem::take(&mut search.focus) {
+                r.request_focus();
+            }
+            search.had_focus = r.has_focus();
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            let shift = ui.input(|i| i.modifiers.shift);
+            let n = search.matches.len();
+            let prev = ui.add_enabled(n > 0, egui::Button::new("⏶")).on_hover_text("Previous match (Shift+Enter)").clicked() || (enter && shift);
+            let next = ui.add_enabled(n > 0, egui::Button::new("⏷")).on_hover_text("Next match (Enter)").clicked() || (enter && !shift);
+            if n > 0 && (prev || next) {
+                search.current = if prev { (search.current + n - 1) % n } else { (search.current + 1) % n };
+                search.goto = true;
+            }
+            if enter {
+                r.request_focus();
+            }
+            let label = match n {
+                _ if search.query.is_empty() => String::new(),
+                0 => "No results".to_string(),
+                n => format!("{} of {n}{}", search.current + 1, if n >= MAX_MATCHES { "+" } else { "" }),
+            };
+            ui.label(egui::RichText::new(label).color(theme.text_weak));
+            if ui.add(egui::Button::new("✖").frame(false)).on_hover_text("Close (Escape)").clicked() {
+                close = true;
+            }
+        });
+        if close {
+            search.open = false;
+            search.had_focus = false;
+            ui.memory_mut(|m| m.request_focus(edit_id));
+        } else {
+            let key = (shown_hash(text), search.query.clone());
+            if search.key != key {
+                let shown = view.as_ref().filter(|_| folds_on).map_or(text.as_str(), |v| v.text.as_str());
+                let query_changed = search.key.1 != search.query;
+                search.matches = Arc::new(find_all(shown, &search.query));
+                search.key = key;
+                if query_changed {
+                    // First match from the selection start.
+                    let from = current_selection(&ctx, edit_id).map_or(0, |(a, h)| a.min(h));
+                    search.current = search.matches.iter().position(|m| m.0.start >= from).unwrap_or(0);
+                    search.goto = !search.matches.is_empty();
+                } else {
+                    search.current = search.current.min(search.matches.len().saturating_sub(1));
+                }
+            }
+            if std::mem::take(&mut search.goto)
+                && let Some((r, _)) = search.matches.get(search.current)
+            {
+                set_selection(&ctx, edit_id, (r.start, r.end));
+                scroll_to = Some(search.current);
+            }
+        }
+    }
 
     // Keys for the popup must be consumed before the TextEdit sees them.
     let mut accept = std::mem::take(&mut comp.pending_accept);
@@ -564,22 +811,43 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
     };
 
     let row_height = ui.fonts_mut(|f| f.row_height(&opts.font));
-    let mut out_changed = false;
     let mut selection = None;
     let mut has_focus = false;
     let mut want_fields = None;
+    let mut fold_click = None;
+
+    // The TextEdit works on the folded text when blocks are folded; edits
+    // are mapped back to the source afterwards. Read-only text is a `&str`
+    // buffer: selectable and searchable, but not editable.
+    let shown_view = view.clone().filter(|_| folds_on);
+    let mut read_only_text: &str;
+    let mut folded_text = String::new();
+    let buf: &mut dyn TextBuffer = if opts.read_only {
+        read_only_text = shown_view.as_ref().map_or(text.as_str(), |v| v.text.as_str());
+        &mut read_only_text
+    } else if let Some(v) = &shown_view {
+        folded_text = v.text.clone();
+        &mut folded_text
+    } else {
+        text
+    };
 
     egui::ScrollArea::both()
         .id_salt(id.with("scroll"))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
+                let lines = match &view {
+                    Some(v) => v.lines.len(),
+                    None => buf.as_str().lines().count().max(1) + usize::from(buf.as_str().ends_with('\n')),
+                };
                 if opts.line_numbers {
-                    let lines = text.lines().count().max(1) + usize::from(text.ends_with('\n'));
-                    let width = (lines.to_string().len() as f32 + 1.0) * row_height * 0.6;
+                    let last = view.as_ref().and_then(|v| v.lines.last()).map_or(lines, |l| l + 1);
+                    let width = (last.to_string().len() as f32 + 1.0) * row_height * 0.6;
                     let mut numbers = String::with_capacity(lines * 4);
-                    for n in 1..=lines {
-                        numbers.push_str(&format!("{n}\n"));
+                    for n in 0..lines {
+                        let line = view.as_ref().map_or(n, |v| v.lines[n]);
+                        numbers.push_str(&format!("{}\n", line + 1));
                     }
                     ui.add_sized(
                         [width, row_height * lines as f32],
@@ -588,8 +856,13 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                             .selectable(false),
                     );
                 }
+                let gutter = opts.folding.then(|| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.allocate_exact_size(egui::vec2(row_height, row_height * lines as f32), egui::Sense::click())
+                });
+                let highlights = ui.painter().add(egui::Shape::Noop);
                 let available = ui.available_size();
-                let output = egui::TextEdit::multiline(text)
+                let output = egui::TextEdit::multiline(buf)
                     .id(edit_id)
                     .font(opts.font.clone())
                     .code_editor()
@@ -597,40 +870,77 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                     .desired_width(f32::INFINITY)
                     .desired_rows(((available.y / row_height) as usize).max(4))
                     .frame(egui::Frame::NONE)
-                    .interactive(!opts.read_only)
                     .layouter(&mut layouter)
                     .show(ui);
                 if opts.focus {
                     output.response.request_focus();
                 }
                 has_focus = output.response.has_focus();
-                out_changed = output.response.changed();
+                changed |= output.response.changed();
+                if let (Some((rect, resp)), Some(v)) = (&gutter, &view) {
+                    let click = fold_gutter(ui, *rect, resp, &output, &v.marks, theme, &opts.font);
+                    // Folding would move the extra cursors' positions.
+                    if multi.len() < 2 {
+                        fold_click = click;
+                    }
+                }
+
+                // Search matches and extra selections, under the text.
+                let offset = output.galley_pos.to_vec2();
+                let span = |r: &Range<usize>| {
+                    let (a, b) = (output.galley.pos_from_cursor(CCursor::new(r.start)), output.galley.pos_from_cursor(CCursor::new(r.end)));
+                    (a.min.y == b.min.y).then(|| egui::Rect::from_min_max(a.min, b.max).translate(offset))
+                };
+                let mut shapes = Vec::new();
+                if search.open && !search.matches.is_empty() {
+                    let rows = output.galley.rows.len().max(1);
+                    let row_h = output.galley.size().y / rows as f32;
+                    let clip = ui.clip_rect();
+                    let first = ((clip.top() - output.galley_pos.y) / row_h).floor().max(0.0) as usize;
+                    let last = ((clip.bottom() - output.galley_pos.y) / row_h).ceil().max(0.0) as usize;
+                    let start = search.matches.partition_point(|m| m.1 < first);
+                    for (i, (r, _)) in search.matches.iter().enumerate().skip(start).take_while(|(_, m)| m.1 <= last) {
+                        if let Some(rect) = span(r) {
+                            let current = i == search.current;
+                            shapes.push(egui::Shape::rect_filled(rect, 2, theme.warning.gamma_multiply(if current { 0.6 } else { 0.3 })));
+                        }
+                    }
+                    if let Some(rect) = scroll_to.and_then(|i| search.matches.get(i)).and_then(|m| span(&m.0)) {
+                        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                    }
+                }
+                for &(a, h) in multi.iter().rev().skip(1) {
+                    if let Some(rect) = span(&(a.min(h)..a.max(h))) {
+                        shapes.push(egui::Shape::rect_filled(rect, 0, theme.selection));
+                        let x = if h >= a { rect.right() } else { rect.left() };
+                        ui.painter().rect_filled(egui::Rect::from_x_y_ranges(x - 1.0..=x, rect.y_range()), 0, theme.text);
+                    }
+                }
+                ui.painter().set(highlights, egui::Shape::Vec(shapes));
 
                 let cursor_range = output.cursor_range;
                 if let Some(r) = cursor_range {
                     let (a, b) = (r.primary.index.0, r.secondary.index.0);
                     if a != b {
-                        let (lo, hi) = (a.min(b), a.max(b));
-                        selection = Some(text.chars().skip(lo).take(hi - lo).collect());
+                        selection = Some(selected_text(buf.as_str(), &[(a, b)]));
                     }
                 }
 
                 let cursor = cursor_range.map(|r| r.primary.index.0);
                 if accept && comp.open {
                     if let (Some(cur), Some(item)) = (cursor, comp.items.get(comp.selected).cloned()) {
-                        let byte_start = text.char_indices().nth(comp.start).map(|(b, _)| b).unwrap_or(text.len());
-                        let byte_end = text.char_indices().nth(cur).map(|(b, _)| b).unwrap_or(text.len());
-                        text.replace_range(byte_start..byte_end, &item);
+                        buf.delete_char_range(CharIndex(comp.start)..CharIndex(cur));
+                        buf.insert_text(&item, CharIndex(comp.start));
                         let new_cursor = comp.start + item.chars().count();
                         let mut state = output.state.clone();
                         state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(new_cursor))));
                         state.store(ui.ctx(), edit_id);
-                        out_changed = true;
+                        changed = true;
                     }
                     comp.open = false;
-                } else if (out_changed || manual_trigger) && has_focus {
+                } else if (changed || manual_trigger) && has_focus && multi.len() < 2 {
                     let cx = CompletionCtx { collections: opts.collections, fields: opts.fields, mode: opts.completion };
-                    let comp_res = cursor.map(|c| complete(text, c, &cx)).unwrap_or_default();
+                    let comp_res = cursor.map(|c| complete(buf.as_str(), c, &cx)).unwrap_or_default();
                     want_fields = comp_res.want_fields;
                     match comp_res.result {
                         Some((start, items)) => {
@@ -682,8 +992,39 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
             });
         });
 
-    ui.data_mut(|d| d.insert_temp(comp_id, comp));
-    EditorResponse { changed: out_changed, selection, has_focus, want_fields }
+    if opts.read_only {
+        changed = false;
+    } else if changed && let Some(v) = &shown_view {
+        changed = apply_folded_edit(text, v, &folded_text, &mut fold.folded);
+    }
+    if let Some(v) = &view {
+        match fold_click {
+            Some(FoldClick::Toggle(row)) => {
+                let line = v.lines[row];
+                if !fold.folded.remove(&line) {
+                    fold.folded.insert(line);
+                }
+            }
+            Some(FoldClick::CollapseAll) => fold.folded = v.collapse_all(),
+            Some(FoldClick::ExpandAll) => fold.folded.clear(),
+            None => {}
+        }
+    }
+
+    ui.data_mut(|d| {
+        d.insert_temp(id.with("had-focus"), has_focus);
+        d.insert_temp(comp_id, comp);
+        if opts.search {
+            d.insert_temp(id.with("search"), search);
+        }
+        if multi_enabled {
+            d.insert_temp(id.with("multi"), multi);
+        }
+        if opts.folding {
+            d.insert_temp(id.with("fold"), fold);
+        }
+    });
+    EditorResponse { changed, selection, has_focus, want_fields }
 }
 
 /// Read-only highlighted text block (results text view, function viewer).
@@ -710,11 +1051,52 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) 
         .show(ui)
 }
 
-/// What the user did in the fold gutter of [`folding_code_view`].
+/// What the user did in a fold gutter.
 pub enum FoldClick {
     Toggle(usize),
     CollapseAll,
     ExpandAll,
+}
+
+/// Paints the fold markers of the visible rows of `out` in the gutter
+/// `rect` and handles clicks on them: `marks[i]` is `Some(folded)` when
+/// line `i` opens a block.
+fn fold_gutter(ui: &Ui, rect: egui::Rect, resp: &egui::Response, out: &egui::text_edit::TextEditOutput, marks: &[Option<bool>], theme: &Theme, font: &FontId) -> Option<FoldClick> {
+    let mut click = None;
+    // Rows of the galley are the lines (no wrapping): align on them.
+    let rows = out.galley.rows.len().max(1);
+    let row_h = out.galley.size().y / rows as f32;
+    let top = out.galley_pos.y;
+    let row_at = |y: f32| ((y - top) / row_h).floor().max(0.0) as usize;
+    let clip = ui.clip_rect();
+    let hovered = resp.hover_pos().map(|p| row_at(p.y)).filter(|&r| marks.get(r).is_some_and(|m| m.is_some()));
+    if hovered.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let painter = ui.painter().with_clip_rect(egui::Rect::from_x_y_ranges(rect.x_range(), clip.y_range()));
+    let (first, last) = (row_at(clip.top()), row_at(clip.bottom()) + 1);
+    for (r, mark) in marks.iter().enumerate().take(last).skip(first) {
+        let Some(folded) = *mark else { continue };
+        let color = if hovered == Some(r) { theme.text } else { theme.text_weak };
+        let center = egui::pos2(rect.center().x, top + (r as f32 + 0.5) * row_h);
+        painter.text(center, egui::Align2::CENTER_CENTER, if folded { "⏵" } else { "⏷" }, font.clone(), color);
+    }
+    if resp.clicked()
+        && let Some(r) = hovered
+    {
+        click = Some(FoldClick::Toggle(r));
+    }
+    resp.context_menu(|ui| {
+        if ui.button("Collapse All").clicked() {
+            click = Some(FoldClick::CollapseAll);
+            ui.close();
+        }
+        if ui.button("Expand All").clicked() {
+            click = Some(FoldClick::ExpandAll);
+            ui.close();
+        }
+    });
+    click
 }
 
 /// [`code_view`] with a fold gutter: `marks[i]` is `Some(folded)` when line
@@ -728,39 +1110,7 @@ pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>]
             let size = egui::vec2(row_height, row_height * marks.len().max(1) as f32);
             let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
             let out = read_only_text(ui, id, text, theme, font.clone());
-            // Rows of the galley are the lines (no wrapping): align on them.
-            let rows = out.galley.rows.len().max(1);
-            let row_h = out.galley.size().y / rows as f32;
-            let top = out.galley_pos.y;
-            let row_at = |y: f32| ((y - top) / row_h).floor().max(0.0) as usize;
-            let clip = ui.clip_rect();
-            let hovered = resp.hover_pos().map(|p| row_at(p.y)).filter(|&r| marks.get(r).is_some_and(|m| m.is_some()));
-            if hovered.is_some() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            let painter = ui.painter().with_clip_rect(egui::Rect::from_x_y_ranges(rect.x_range(), clip.y_range()));
-            let (first, last) = (row_at(clip.top()), row_at(clip.bottom()) + 1);
-            for (r, mark) in marks.iter().enumerate().take(last).skip(first) {
-                let Some(folded) = *mark else { continue };
-                let color = if hovered == Some(r) { theme.text } else { theme.text_weak };
-                let center = egui::pos2(rect.center().x, top + (r as f32 + 0.5) * row_h);
-                painter.text(center, egui::Align2::CENTER_CENTER, if folded { "⏵" } else { "⏷" }, font.clone(), color);
-            }
-            if resp.clicked()
-                && let Some(r) = hovered
-            {
-                click = Some(FoldClick::Toggle(r));
-            }
-            resp.context_menu(|ui| {
-                if ui.button("Collapse All").clicked() {
-                    click = Some(FoldClick::CollapseAll);
-                    ui.close();
-                }
-                if ui.button("Expand All").clicked() {
-                    click = Some(FoldClick::ExpandAll);
-                    ui.close();
-                }
-            });
+            click = fold_gutter(ui, rect, &resp, &out, marks, theme, &font);
         });
     });
     click
