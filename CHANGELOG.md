@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
 ### Added
 - "Cross-script variables" toggle : keep the variables a script declares for the next executions
