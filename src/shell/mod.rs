@@ -1,9 +1,10 @@
 //! Embedded mongo shell.
 //!
 //! Each query tab owns a [`ShellHandle`]: a dedicated thread running a
-//! QuickJS context (so variables persist between executions, like a real
-//! shell). The JavaScript API lives in `prelude.js` and reaches MongoDB
-//! through a single native `runCommand` bridge exchanging canonical EJSON.
+//! QuickJS context. The variables a script declares can be kept for the next
+//! executions, all or some of them (see [`DropVars`]). The JavaScript API
+//! lives in `prelude.js` and reaches MongoDB through a single native
+//! `runCommand` bridge exchanging canonical EJSON.
 
 pub mod split;
 
@@ -99,12 +100,31 @@ pub struct ShellOutput {
     pub elapsed: Duration,
 }
 
+/// A global variable declared by the user's scripts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellVar {
+    pub name: String,
+    /// Short description of the value: `Array(12)`, `"text"`, `42`…
+    pub summary: String,
+}
+
 #[derive(Debug)]
 pub struct ShellReply {
     pub request: u64,
     pub outputs: Vec<ShellOutput>,
     pub current_db: String,
     pub elapsed: Duration,
+    /// Variables declared by the scripts, after this execution.
+    pub vars: Vec<ShellVar>,
+}
+
+/// Variables of the earlier executions to drop before running a script.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DropVars {
+    /// Every script starts from a clean state.
+    All,
+    /// Keep the variables, except these ones.
+    Only(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +135,7 @@ pub struct ShellOptions {
 }
 
 enum Request {
-    Execute { id: u64, script: String },
+    Execute { id: u64, script: String, drop: DropVars },
     SetDb(String),
 }
 
@@ -143,11 +163,11 @@ impl ShellHandle {
         ShellHandle { tx, interrupt, next_id: 1 }
     }
 
-    pub fn execute(&mut self, script: String) -> u64 {
+    pub fn execute(&mut self, script: String, drop: DropVars) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.interrupt.store(false, Ordering::SeqCst);
-        let _ = self.tx.send(Request::Execute { id, script });
+        let _ = self.tx.send(Request::Execute { id, script, drop });
         id
     }
 
@@ -356,18 +376,22 @@ fn shell_thread(
                     .push(format!(".mongorc.js: {}", exception_message(&ctx, e)));
             }
         }
+        let _ = ctx.eval::<(), _>("__markBaseline()");
     });
 
     while let Ok(req) = rx.recv() {
         match req {
             Request::SetDb(name) => context.with(|ctx| set_db(&ctx, &name)),
-            Request::Execute { id, script } => {
+            Request::Execute { id, script, drop } => {
                 let started = Instant::now();
-                let outputs = context.with(|ctx| run_script(&ctx, &state, &script));
-                let current_db = context.with(|ctx| {
-                    ctx.eval::<String, _>("db.getName()").unwrap_or_default()
+                let outputs = context.with(|ctx| {
+                    drop_vars(&ctx, &drop);
+                    run_script(&ctx, &state, &script)
                 });
-                reply(ShellReply { request: id, outputs, current_db, elapsed: started.elapsed() });
+                let (current_db, vars) = context.with(|ctx| {
+                    (ctx.eval::<String, _>("db.getName()").unwrap_or_default(), user_vars(&ctx))
+                });
+                reply(ShellReply { request: id, outputs, current_db, elapsed: started.elapsed(), vars });
             }
         }
     }
@@ -376,6 +400,28 @@ fn shell_thread(
 fn set_db(ctx: &Ctx<'_>, name: &str) {
     let name = serde_json::to_string(name).unwrap_or_else(|_| "\"test\"".into());
     let _ = ctx.eval::<(), _>(format!("globalThis.db = __makeDB({name});"));
+}
+
+fn drop_vars(ctx: &Ctx<'_>, drop: &DropVars) {
+    let names = match drop {
+        DropVars::All => "null".to_string(),
+        DropVars::Only(names) if names.is_empty() => return,
+        DropVars::Only(names) => serde_json::to_string(names).unwrap_or_else(|_| "[]".into()),
+    };
+    let _ = ctx.eval::<(), _>(format!("__dropVars({names})"));
+}
+
+fn user_vars(ctx: &Ctx<'_>) -> Vec<ShellVar> {
+    let json = ctx.eval::<String, _>("__varsInfo()").unwrap_or_default();
+    let list: Vec<(String, String)> = serde_json::from_str(&json).unwrap_or_default();
+    list.into_iter().map(|(name, summary)| ShellVar { name, summary }).collect()
+}
+
+/// Evaluates a statement as indirect `eval` code: its `var`s and functions
+/// become deletable globals (a script's `var`s and functions would not be).
+fn eval_statement<'js>(ctx: &Ctx<'js>, code: String) -> rquickjs::Result<Value<'js>> {
+    let eval: Function = ctx.globals().get("__eval")?;
+    eval.call((code,))
 }
 
 fn run_script(ctx: &Ctx<'_>, state: &Rc<RefCell<NativeState>>, script: &str) -> Vec<ShellOutput> {
@@ -412,10 +458,11 @@ fn run_script(ctx: &Ctx<'_>, state: &Rc<RefCell<NativeState>>, script: &str) -> 
             }
         }
         let stmt = statements[i].clone();
-        let code = rewritten.unwrap_or_else(|| stmt.text.clone());
+        let code = rewritten
+            .or_else(|| split::declarations_to_var(&stmt.text))
+            .unwrap_or_else(|| stmt.text.clone());
         let t0 = Instant::now();
-        let result = ctx
-            .eval_with_options::<Value, _>(code, eval_opts("<shell>"))
+        let result = eval_statement(ctx, code)
             .and_then(|v| {
                 let f: Function = ctx.globals().get("__shellResult")?;
                 f.call::<_, String>((v,))
@@ -730,5 +777,80 @@ mod tests {
         assert!(e.starts_with("TypeError"), "{e}");
         let e = js("(() => { throw 'plain' })()").unwrap_err();
         assert_eq!(e, "Error: \"plain\"");
+    }
+    /// Runs scripts statement by statement in one context without connection,
+    /// like the shell thread does, and returns the last value as a string.
+    fn with_shell(f: impl FnOnce(&mut dyn FnMut(&str, DropVars) -> Result<String, String>, &dyn Fn() -> Vec<String>)) {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            install_natives(&ctx, None, 50).unwrap();
+            ctx.eval_with_options::<(), _>(PRELUDE, eval_opts("<prelude>")).unwrap();
+            ctx.eval::<(), _>("__markBaseline()").unwrap();
+            let mut run = |script: &str, drop: DropVars| {
+                drop_vars(&ctx, &drop);
+                let mut last = String::new();
+                for stmt in split::split_statements(script) {
+                    let code = split::declarations_to_var(&stmt.text).unwrap_or(stmt.text);
+                    let v = eval_statement(&ctx, code).map_err(|e| exception_message(&ctx, e))?;
+                    let string: Function = ctx.globals().get("String").unwrap();
+                    last = string.call((v,)).unwrap();
+                }
+                Ok(last)
+            };
+            let vars = || user_vars(&ctx).into_iter().map(|v| format!("{}={}", v.name, v.summary)).collect();
+            f(&mut run, &vars);
+        });
+    }
+
+    #[test]
+    fn scripts_can_run_again() {
+        with_shell(|run, vars| {
+            let script = "const a = [1, 2]\nlet s = new Set(a)\nclass K { get n() { return s.size } }\nfunction f() { return new K().n }\nf()";
+            assert_eq!(run(script, DropVars::Only(vec![])).unwrap(), "2");
+            assert_eq!(run(script, DropVars::Only(vec![])).unwrap(), "2");
+            assert_eq!(vars(), vec!["a=Array(2)", "s=Set(2)", "K=function", "f=function"]);
+            // Internals and the prelude's globals are not user variables.
+            assert_eq!(run("it = 1; tojson = tojson; __x = 2", DropVars::Only(vec![])).unwrap(), "2");
+            assert_eq!(vars().len(), 5);
+        });
+    }
+
+    #[test]
+    fn variables_can_be_dropped() {
+        with_shell(|run, vars| {
+            run("const a = 1, b = 'x'.repeat(50); c = { k: 1 }", DropVars::All).unwrap();
+            assert_eq!(vars(), vec!["a=1", format!("b=\"{}…", "x".repeat(38)).as_str(), "c=Object(1)"]);
+            assert_eq!(run("typeof a + typeof b", DropVars::Only(vec!["a".into()])).unwrap(), "undefinedstring");
+            assert_eq!(run("typeof b + typeof c + typeof db", DropVars::All).unwrap(), "undefinedundefinedobject");
+            assert!(vars().is_empty());
+            // Without dropping, values carry over.
+            run("let n = 1", DropVars::All).unwrap();
+            assert_eq!(run("n += 1; n", DropVars::Only(vec![])).unwrap(), "2");
+            // Statements still see each other's lexical declarations.
+            assert_eq!(run("const x = 2\nconst y = x * 3\ny", DropVars::All).unwrap(), "6");
+        });
+    }
+
+    #[test]
+    fn console_table() {
+        with_shell(|run, _| {
+            let t = run("console.table([{ a: 1, b: 'x' }, { a: 22 }])", DropVars::All);
+            assert_eq!(t.unwrap(), "undefined");
+        });
+        let t = js("(() => { let out; const p = __n_print; globalThis.__n_print = (s) => (out = s); console.table([{ a: 1, b: 'x' }, { a: 22 }, 3], ['a']); globalThis.__n_print = p; return out; })()").unwrap();
+        assert_eq!(
+            t,
+            "┌─────────┬────┬────────┐\n│ (index) │ a  │ Values │\n├─────────┼────┼────────┤\n│ 0       │ 1  │        │\n│ 1       │ 22 │        │\n│ 2       │    │ 3      │\n└─────────┴────┴────────┘"
+        );
+    }
+
+    #[test]
+    fn statement_errors_are_formatted() {
+        with_shell(|run, _| {
+            let e = run("let a = 1\nnull.x", DropVars::All).unwrap_err();
+            assert!(e.starts_with("TypeError"), "{e}");
+            assert_eq!(e, "TypeError: cannot read property 'x' of null\n    at <eval> (<shell>:1:1)");
+        });
     }
 }

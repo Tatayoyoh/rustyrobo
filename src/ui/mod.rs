@@ -63,6 +63,34 @@ pub fn color_dot(ui: &mut Ui, color: Option<[u8; 3]>, size: f32) {
     }
 }
 
+/// On/off switch followed by its label; clicking either toggles it.
+pub fn toggle_switch(ui: &mut Ui, on: &mut bool, text: &str, theme: &crate::theme::Theme) -> egui::Response {
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    let h = ui.spacing().interact_size.y;
+    let track = egui::vec2(h * 1.6, h * 0.8);
+    let gap = ui.spacing().item_spacing.x;
+    let (rect, mut response) = ui.allocate_exact_size(egui::vec2(track.x + gap + galley.size().x, h), egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, text));
+    if ui.is_rect_visible(rect) {
+        let t = ui.ctx().animate_bool_responsive(response.id, *on);
+        let track_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - track.y / 2.0), track);
+        let radius = track.y / 2.0;
+        let (fill, stroke) = if *on { (theme.accent, theme.accent) } else { (theme.surface, theme.border) };
+        let fill = if response.hovered() && !*on { theme.surface_hover } else { fill };
+        ui.painter().rect(track_rect, radius, fill, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+        let x = egui::lerp((track_rect.left() + radius)..=(track_rect.right() - radius), t);
+        let knob = if *on { theme.on_accent } else { theme.text_weak };
+        ui.painter().circle_filled(egui::pos2(x, track_rect.center().y), radius - 3.0, knob);
+        let pos = egui::pos2(track_rect.right() + gap, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley, theme.text);
+    }
+    response
+}
+
 fn menu_item(ui: &mut Ui, text: &str, shortcut: &str) -> bool {
     let b = if shortcut.is_empty() {
         egui::Button::new(text)

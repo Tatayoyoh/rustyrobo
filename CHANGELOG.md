@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- "Cross-script variables" toggle : keep the variables a script declares for the next executions
+- `console.table()`, `console.debug()`, `console.trace()`
+
+### Changed
+- By default, each script execution starts with no variables from the previous ones
+
+### Fixed
+- Running a script that declares `const`/`let` again failed with `redeclaration of …`
+
 ## 1.1.0
 
 ### Added

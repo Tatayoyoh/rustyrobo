@@ -65,73 +65,22 @@ pub fn split_statements(src: &str) -> Vec<Statement> {
                 i += 1;
                 continue;
             }
-            '/' if chars.get(i + 1) == Some(&'/') => {
-                while i < chars.len() && chars[i] != '\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            '/' if chars.get(i + 1) == Some(&'*') => {
-                i += 2;
-                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
-                    if chars[i] == '\n' {
-                        line += 1;
-                    }
-                    i += 1;
-                }
-                i += 2;
+            '/' if matches!(chars.get(i + 1), Some('/') | Some('*')) => {
+                let end = skip_comment(&chars, i);
+                line += chars[i..end].iter().filter(|c| **c == '\n').count();
+                i = end;
                 continue;
             }
             '"' | '\'' | '`' => {
-                let q = c;
-                i += 1;
-                let mut tdepth = 0;
-                while i < chars.len() {
-                    let d = chars[i];
-                    if d == '\\' {
-                        i += 2;
-                        continue;
-                    }
-                    if d == '\n' {
-                        line += 1;
-                        if q != '`' {
-                            break;
-                        }
-                    }
-                    if q == '`' && d == '$' && chars.get(i + 1) == Some(&'{') {
-                        tdepth += 1;
-                        i += 2;
-                        continue;
-                    }
-                    if q == '`' && d == '}' && tdepth > 0 {
-                        tdepth -= 1;
-                    } else if d == q && tdepth == 0 {
-                        break;
-                    }
-                    i += 1;
-                }
-                i += 1;
-                last_sig = Some(q);
+                let end = skip_string(&chars, i);
+                line += chars[i..end.min(chars.len())].iter().filter(|c| **c == '\n').count();
+                i = end;
+                last_sig = Some(c);
                 last_word.clear();
                 continue;
             }
             '/' if regex_allowed(last_sig, &last_word) => {
-                i += 1;
-                let mut in_class = false;
-                while i < chars.len() && chars[i] != '\n' {
-                    match chars[i] {
-                        '\\' => i += 1,
-                        '[' => in_class = true,
-                        ']' => in_class = false,
-                        '/' if !in_class => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                i += 1;
-                while i < chars.len() && chars[i].is_ascii_alphabetic() {
-                    i += 1;
-                }
+                i = skip_regex(&chars, i);
                 last_word.clear();
                 // Mark as an operand so a following `/` is division.
                 last_sig = Some('x');
@@ -226,6 +175,158 @@ fn should_split_at_newline(chars: &[char], from: usize, last_sig: Option<char>, 
         .take_while(|c| c.is_alphanumeric() || **c == '_')
         .collect();
     !CONTINUE_KEYWORDS.contains(&word.as_str())
+}
+
+/// Index just after the comment starting at `i` (`//` comments stop before
+/// the newline).
+fn skip_comment(chars: &[char], mut i: usize) -> usize {
+    if chars.get(i + 1) == Some(&'/') {
+        while i < chars.len() && chars[i] != '\n' {
+            i += 1;
+        }
+        return i;
+    }
+    i += 2;
+    while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+        i += 1;
+    }
+    i + 2
+}
+
+/// Index just after the string or template literal starting at `i`. An
+/// unterminated quoted string stops after the end of its line.
+fn skip_string(chars: &[char], mut i: usize) -> usize {
+    let q = chars[i];
+    i += 1;
+    let mut tdepth = 0;
+    while i < chars.len() {
+        let d = chars[i];
+        if d == '\\' {
+            i += 2;
+            continue;
+        }
+        if d == '\n' && q != '`' {
+            break;
+        }
+        if q == '`' && d == '$' && chars.get(i + 1) == Some(&'{') {
+            tdepth += 1;
+            i += 2;
+            continue;
+        }
+        if q == '`' && d == '}' && tdepth > 0 {
+            tdepth -= 1;
+        } else if d == q && tdepth == 0 {
+            break;
+        }
+        i += 1;
+    }
+    i + 1
+}
+
+/// Index just after the regex literal (and its flags) starting at `i`.
+fn skip_regex(chars: &[char], mut i: usize) -> usize {
+    i += 1;
+    let mut in_class = false;
+    while i < chars.len() && chars[i] != '\n' {
+        match chars[i] {
+            '\\' => i += 1,
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '/' if !in_class => break,
+            _ => {}
+        }
+        i += 1;
+    }
+    i += 1;
+    while i < chars.len() && chars[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    i
+}
+
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Rewrites the top-level `let`, `const` and `class` declarations of a
+/// statement as `var`s. Statements run as global eval code, where a `var`
+/// becomes a deletable property of the global object while lexical
+/// declarations would stay local to the statement: scripts can then be run
+/// again, and their variables dropped between executions.
+pub fn declarations_to_var(stmt: &str) -> Option<String> {
+    let chars: Vec<char> = stmt.chars().collect();
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut depth: i32 = 0;
+    let mut last_sig: Option<char> = None;
+    let mut last_word = String::new();
+    let mut i = 0;
+    let next_sig = |mut j: usize| {
+        while j < chars.len() && chars[j].is_whitespace() {
+            j += 1;
+        }
+        (j, chars.get(j).copied())
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '/' if matches!(chars.get(i + 1), Some('/') | Some('*')) => {
+                i = skip_comment(&chars, i);
+                continue;
+            }
+            '"' | '\'' | '`' => {
+                i = skip_string(&chars, i);
+                last_sig = Some(c);
+                last_word.clear();
+                continue;
+            }
+            '/' if regex_allowed(last_sig, &last_word) => {
+                i = skip_regex(&chars, i);
+                last_word.clear();
+                last_sig = Some('x');
+                continue;
+            }
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+        if is_ident(c) {
+            let end = (i..chars.len()).find(|&j| !is_ident(chars[j])).unwrap_or(chars.len());
+            let word: String = chars[i..end].iter().collect();
+            let (after, next) = next_sig(end);
+            let declares = next.is_some_and(|n| is_ident(n) || n == '[' || n == '{');
+            if depth == 0 && last_sig != Some('.') && declares {
+                let replace = match word.as_str() {
+                    "let" | "const" => Some("var".to_string()),
+                    // A class declaration, not a class expression.
+                    "class" if matches!(last_sig, None | Some(';') | Some('}')) => {
+                        let name_end = (after..chars.len()).find(|&j| !is_ident(chars[j])).unwrap_or(chars.len());
+                        let name: String = chars[after..name_end].iter().collect();
+                        (name != "extends").then(|| format!("var {name} = class"))
+                    }
+                    _ => None,
+                };
+                if let Some(r) = replace {
+                    out.extend(&chars[copied..i]);
+                    out.push_str(&r);
+                    copied = end;
+                }
+            }
+            last_word = word;
+            last_sig = chars.get(end - 1).copied();
+            i = end;
+            continue;
+        }
+        if !c.is_whitespace() {
+            last_sig = Some(c);
+            last_word.clear();
+        }
+        i += 1;
+    }
+    (copied > 0).then(|| {
+        out.extend(&chars[copied..]);
+        out
+    })
 }
 
 /// Returns true when the code fails to parse only because it is incomplete,
@@ -360,5 +461,23 @@ mod tests {
         assert!(rewrite_shell_command("use").is_none());
         assert!(rewrite_shell_command("show").is_none());
         assert!(rewrite_shell_command("use a b").is_none());
+    }
+    #[test]
+    fn declarations_become_vars() {
+        let v = |s: &str| declarations_to_var(s);
+        assert_eq!(v("const a = 1, b = [2]").unwrap(), "var a = 1, b = [2]");
+        assert_eq!(v("let { x, y } = o").unwrap(), "var { x, y } = o");
+        assert_eq!(v("// c\nconst [a] = l").unwrap(), "// c\nvar [a] = l");
+        assert_eq!(v("class A extends B { m() { const z = 1 } }").unwrap(), "var A = class A extends B { m() { const z = 1 } }");
+        assert_eq!(v("let a = 1; const b = a").unwrap(), "var a = 1; var b = a");
+        // Nested blocks, loops, strings, comments, properties and expressions stay.
+        assert!(v("for (let i = 0; i < 2; i++) { const x = i }").is_none());
+        assert!(v("if (a) { let b = 1 }").is_none());
+        assert!(v("print('const a = 1') // let b = 2").is_none());
+        assert!(v("x = `${1} let y = 2`").is_none());
+        assert!(v("o.let = 1; o.const").is_none());
+        assert!(v("let = 3").is_none());
+        assert!(v("x = class Y {}").is_none());
+        assert!(v("var r = /const a/").is_none());
     }
 }

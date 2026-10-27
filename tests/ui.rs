@@ -11,6 +11,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rustyrobo::app::App;
+use rustyrobo::shell::OutputKind;
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort};
 use rustyrobo::ui::icon;
 
@@ -750,3 +751,59 @@ fn live_favorite_scripts_and_delete_key() {
     wait_until(&mut h, "reconnect and open", Duration::from_secs(20), |h| h.state().tabs.len() == 1);
     assert_eq!(h.state().tabs[0].title, "Numbers");
 }
+
+#[test]
+fn live_cross_script_variables() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let _env = env("live-vars", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "const n = 2\nlet seen = new Set([1])\nn * seen.size".into(),
+        execute: true,
+        title: "vars".into(),
+        cursor: None,
+    });
+    let done = |h: &Harness<'_, App>| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some());
+    wait_until(&mut h, "first run", Duration::from_secs(15), done);
+    let last_text = |h: &Harness<'_, App>| match &h.state().tabs[0].outputs.last().map(|o| &o.output.kind) {
+        Some(OutputKind::Text(t)) => t.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(last_text(&h), "2");
+    assert!(!h.state().tabs[0].keep_vars, "off by default");
+
+    // By default every execution starts clean: running again works.
+    let tab = h.state().tabs[0].id;
+    let run = |h: &mut Harness<'_, App>| {
+        h.state_mut().tabs[0].elapsed = None;
+        h.state_mut().actions.push(rustyrobo::app::Action::Execute(tab));
+        wait_until(h, "run", Duration::from_secs(15), done);
+    };
+    run(&mut h);
+    assert_eq!(last_text(&h), "2");
+
+    // Keep the variables, but drop `n`.
+    h.get_by_label("Cross-script variables").click();
+    h.run_steps(3);
+    assert!(h.state().tabs[0].keep_vars);
+    h.get_by_label(&format!("{} 2/2", icon::LIST_CHECKS)).click();
+    h.run_steps(3);
+    h.get_by_label("n").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Set(1)"), "summary of the kept variable");
+    h.key_press(Key::Escape);
+    h.state_mut().tabs[0].script = "seen.add(typeof n === 'undefined' ? 'dropped' : 'kept'); seen.size + typeof n".into();
+    run(&mut h);
+    // `typeof n` reads a dropped variable: undefined.
+    assert_eq!(last_text(&h), "2undefined");
+    run(&mut h);
+    assert_eq!(last_text(&h), "2undefined", "a Set keeps one 'dropped' entry");
+}
+

@@ -339,7 +339,29 @@ globalThis.hex_md5 = () => { throw new Error("hex_md5 is not supported"); };
 globalThis.quit = globalThis.exit = () => { throw new Error("quit() is not available in rustyrobo"); };
 globalThis.version = () => "rustyrobo-shell";
 globalThis.Object.bsonsize = (o) => JSON.stringify(__toEJ(o)).length;
-globalThis.console = { log: print, info: print, warn: print, error: print, dir: printjson };
+// console.table(data, columns), drawn like Node's.
+function __table(data, columns) {
+    if (data === null || typeof data !== "object") return print(data);
+    const cell = (v) => (v === undefined ? "" : typeof v === "string" ? "'" + v + "'" : tojsononeline(v));
+    const entries = data instanceof Map ? [...data.entries()] : data instanceof Set ? [...data].map((v, i) => [i, v]) : Object.entries(data);
+    let keys = columns ? [...columns] : [];
+    let values = false;
+    for (const [, row] of entries) {
+        if (row !== null && typeof row === "object" && !(row instanceof Date)) {
+            if (!columns) for (const k of Object.keys(row)) if (!keys.includes(k)) keys.push(k);
+        } else values = true;
+    }
+    const head = ["(index)", ...keys, ...(values ? ["Values"] : [])];
+    const rows = entries.map(([i, row]) => {
+        const obj = row !== null && typeof row === "object" && !(row instanceof Date);
+        return [String(i), ...keys.map((k) => (obj && k in row ? cell(row[k]) : "")), ...(values ? [obj ? "" : cell(row)] : [])];
+    });
+    const w = head.map((h, c) => Math.max(h.length, ...rows.map((r) => r[c].length)));
+    const line = (l, m, r) => l + w.map((n) => "─".repeat(n + 2)).join(m) + r;
+    const row = (r) => "│" + r.map((v, c) => " " + v + " ".repeat(w[c] - v.length) + " ").join("│") + "│";
+    __n_print([line("┌", "┬", "┐"), row(head), line("├", "┼", "┤"), ...rows.map(row), line("└", "┴", "┘")].join("\n"));
+}
+globalThis.console = { log: print, info: print, debug: print, trace: print, warn: print, error: print, dir: printjson, table: __table };
 
 function __text(s) { return { __shellText: String(s) }; }
 
@@ -1072,12 +1094,43 @@ globalThis.__fmtErr = function (e) {
     if (e instanceof Error) {
         let s = (e.name && e.name !== "Error" ? e.name + ": " : "Error: ") + e.message;
         if (!(e instanceof MongoServerError) && e.stack) {
-            const frames = String(e.stack).split("\n").filter((l) => l.trim() && !l.includes("<prelude>")).slice(0, 5);
+            // Statements run through __eval: hide its frame, name the code <shell>.
+            const frames = String(e.stack).split("\n")
+                .filter((l) => l.trim() && !l.includes("<prelude>") && !l.includes("eval (native)"))
+                .map((l) => l.replace("(<input>:", "(<shell>:"))
+                .slice(0, 5);
             if (frames.length) s += "\n" + frames.join("\n");
         }
         return s;
     }
     return "Error: " + tojson(e);
 };
+
+// ------------------------------------------------------------ script variables
+
+// The globals declared by the user's scripts are the ones added after the
+// prelude and .mongorc.js (see __markBaseline). Shell internals start with __.
+let __baseline = new Set();
+// Kept apart: the shell evaluates statements with it, and scripts may shadow eval.
+globalThis.__eval = globalThis.eval;
+globalThis.__markBaseline = () => { __baseline = new Set(Object.getOwnPropertyNames(globalThis)); };
+globalThis.__userVars = () => Object.getOwnPropertyNames(globalThis).filter((n) => !__baseline.has(n) && !n.startsWith("__"));
+// Drops the given variables, or all of them.
+globalThis.__dropVars = function (names) {
+    for (const n of names || __userVars()) if (!delete globalThis[n]) globalThis[n] = undefined;
+};
+function __varSummary(v) {
+    if (v === null || v === undefined) return String(v);
+    if (Array.isArray(v)) return "Array(" + v.length + ")";
+    if (v instanceof Set || v instanceof Map) return v.constructor.name + "(" + v.size + ")";
+    if (v instanceof DBQuery || v instanceof DBCommandCursor) return "cursor";
+    if (v instanceof DBCollection) return v.getFullName();
+    if (v instanceof DB) return v.getName();
+    if (typeof v === "function") return "function";
+    if (typeof v === "object" && __isPlain(v)) return "Object(" + Object.keys(v).length + ")";
+    const s = typeof v === "string" ? JSON.stringify(v) : tojsononeline(v);
+    return s.length > 40 ? s.slice(0, 39) + "…" : s;
+}
+globalThis.__varsInfo = () => JSON.stringify(__userVars().map((n) => [n, __varSummary(globalThis[n])]));
 
 globalThis.db = __makeDB("test");

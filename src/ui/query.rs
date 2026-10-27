@@ -14,7 +14,7 @@ use crate::shell::ShellHandle;
 use crate::ui::dialogs::Dialog;
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
 use crate::ui::output::{PaneCtx, show_pane};
-use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, ICON_STOP, color_dot, icon};
+use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, ICON_STOP, color_dot, icon, toggle_switch};
 
 pub struct QueryTab {
     pub id: u64,
@@ -39,7 +39,20 @@ pub struct QueryTab {
     pub renaming: Option<String>,
     /// Favorite script this shell was saved as or loaded from.
     pub favorite: Option<uuid::Uuid>,
+    /// Keep the variables declared by a script for the next executions
+    /// ("Cross-script variables"); otherwise every execution starts clean.
+    pub keep_vars: bool,
+    /// Variables declared by the scripts, as of the last execution.
+    pub vars: Vec<TabVar>,
     focus_editor: bool,
+}
+
+/// A variable declared by a shell's scripts.
+pub struct TabVar {
+    pub name: String,
+    pub summary: String,
+    /// Kept for the next executions, when the shell keeps its variables.
+    pub keep: bool,
 }
 
 impl QueryTab {
@@ -65,9 +78,43 @@ impl QueryTab {
             line_numbers: false,
             renaming: None,
             favorite: None,
+            keep_vars: false,
+            vars: Vec::new(),
             focus_editor: true,
         }
     }
+}
+
+/// Variables kept for the next executions, chosen one by one.
+fn variables_menu(ui: &mut Ui, tab: &mut QueryTab, theme: &crate::theme::Theme) {
+    use egui::containers::menu::{MenuButton, MenuConfig};
+    let kept = tab.vars.iter().filter(|v| v.keep).count();
+    let config = MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (response, _) = MenuButton::new(format!("{} {kept}/{}", icon::LIST_CHECKS, tab.vars.len())).config(config).ui(ui, |ui| {
+        if tab.vars.is_empty() {
+            ui.label(RichText::new("No variables declared yet").color(theme.text_weak));
+            return;
+        }
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            egui::Grid::new("script-vars").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                for v in &mut tab.vars {
+                    ui.checkbox(&mut v.keep, RichText::new(&v.name).monospace());
+                    ui.label(RichText::new(&v.summary).monospace().color(theme.text_weak));
+                    ui.end_row();
+                }
+            });
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            for (label, keep) in [("Keep all", true), ("Drop all", false)] {
+                let button = egui::Button::new(label).fill(theme.surface).stroke(egui::Stroke::new(1.0, theme.border));
+                if ui.add(button.min_size(egui::vec2(80.0, 0.0))).clicked() {
+                    tab.vars.iter_mut().for_each(|v| v.keep = keep);
+                }
+            }
+        });
+    });
+    response.on_hover_text("Variables kept for the next executions (unchecked ones are dropped)");
 }
 
 pub fn work_area(app: &mut App, ui: &mut Ui) {
@@ -130,6 +177,14 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                     Some(false) => (format!("{ICON_FAVORITE} •"), theme.warning, "Save the changes to the favorite script"),
                 };
                 star_clicked = ui.add(egui::Button::new(RichText::new(label).color(color)).frame(false)).on_hover_text(tip).clicked();
+                // Shown once a script declared variables.
+                if tab.keep_vars || !tab.vars.is_empty() {
+                    if tab.keep_vars {
+                        variables_menu(ui, tab, &theme);
+                    }
+                    let tip = "Keep the variables declared by a script for the next executions";
+                    toggle_switch(ui, &mut tab.keep_vars, "Cross-script variables", &theme).on_hover_text(tip);
+                }
                 if tab.running {
                     let secs = tab.started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
                     if ui.button(RichText::new(format!("{ICON_STOP} Stop")).color(theme.error)).clicked() {

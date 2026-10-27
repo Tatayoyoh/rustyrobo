@@ -17,11 +17,11 @@ use uuid::Uuid;
 use crate::bsonfmt::FormatOptions;
 use crate::mongo::{self, ConnectSecrets, Connection, StepReport};
 use crate::settings::{AppSettings, ConnectionSettings, Orientation, ViewMode};
-use crate::shell::{OutputKind, ShellHandle, ShellOptions, ShellReply};
+use crate::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellReply};
 use crate::theme::{self, Theme};
 use crate::ui::connections::{ConnectionEditor, ConnectionList};
 use crate::ui::dialogs::Dialog;
-use crate::ui::query::{OutputPane, QueryTab};
+use crate::ui::query::{OutputPane, QueryTab, TabVar};
 
 pub enum Load<T> {
     Idle,
@@ -432,6 +432,12 @@ impl App {
                     if !reply.current_db.is_empty() {
                         tab.db = reply.current_db.clone();
                     }
+                    // New variables are kept, the others keep their choice.
+                    let vars = reply.vars.into_iter().map(|v| {
+                        let keep = tab.vars.iter().find(|o| o.name == v.name).is_none_or(|o| o.keep);
+                        TabVar { name: v.name, summary: v.summary, keep }
+                    });
+                    tab.vars = vars.collect();
                     tab.outputs = reply
                         .outputs
                         .into_iter()
@@ -876,8 +882,13 @@ impl App {
         if script.trim().is_empty() {
             return;
         }
+        let drop = if tab.keep_vars {
+            DropVars::Only(tab.vars.iter().filter(|v| !v.keep).map(|v| v.name.clone()).collect())
+        } else {
+            DropVars::All
+        };
         let Some(shell) = &mut tab.shell else { return };
-        tab.pending = Some(shell.execute(script.clone()));
+        tab.pending = Some(shell.execute(script.clone(), drop));
         tab.running = true;
         tab.started = Some(Instant::now());
         tab.notice = None;

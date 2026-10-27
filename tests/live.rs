@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use bson::{Bson, doc};
 use rustyrobo::mongo::{ConnectSecrets, Connection, StepKind};
 use rustyrobo::settings::{ConnectionSettings, Credentials, HostPort, SshAuthMethod};
-use rustyrobo::shell::{OutputKind, ShellHandle, ShellOptions, ShellOutput, fetch_page};
+use rustyrobo::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellOutput, fetch_page};
 
 fn live() -> bool {
     if std::env::var("RR_LIVE").is_err() {
@@ -92,7 +92,7 @@ impl Shell {
     }
 
     fn run(&mut self, script: &str) -> Vec<ShellOutput> {
-        self.handle.execute(script.into());
+        self.handle.execute(script.into(), DropVars::Only(vec![]));
         self.rx.recv_timeout(Duration::from_secs(30)).expect("shell reply").outputs
     }
 
@@ -281,6 +281,20 @@ fn shell_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
     assert!(matches!(&outs[0].kind, OutputKind::Error(e) if e.contains("unknown top level operator")));
     // A statement split across lines by the heuristic is merged back.
     assert_eq!(sh.text("if (true)\n  print('merged')"), "merged");
+    // A script declaring constants runs again (here keeping its variables),
+    // and console.table draws its rows.
+    let script = "const ages = new Set(db.people.distinct('age'))\n\
+        const rows = db.people.aggregate([{ $group: { _id: null, n: { $sum: 1 } } }]).toArray()\n\
+        rows.forEach(r => r.ages = ages.size)\n\
+        console.table(rows, ['n', 'ages'])";
+    let table = sh.text(script);
+    assert!(table.starts_with('┌') && table.contains("│ n "), "{table}");
+    assert_eq!(sh.text(script), table);
+    // Dropped variables are gone at the next execution.
+    sh.handle.execute("typeof ages".into(), DropVars::All);
+    let outs = sh.rx.recv_timeout(Duration::from_secs(30)).expect("shell reply");
+    assert!(outs.vars.is_empty(), "{:?}", outs.vars);
+    assert!(matches!(&outs.outputs[0].kind, OutputKind::Text(t) if t == "undefined"), "{:?}", outs.outputs);
 
     sh.ok("db.dropDatabase()");
 }
@@ -321,14 +335,14 @@ fn stop_interrupts_a_running_script() {
     let mut sh = Shell::new(&rt, c, "rr_e2e_stop", Duration::from_secs(60));
     // A pure JavaScript loop is interrupted by the QuickJS interrupt handler.
     let started = Instant::now();
-    sh.handle.execute("while (true) {}".into());
+    sh.handle.execute("while (true) {}".into(), DropVars::All);
     std::thread::sleep(Duration::from_millis(300));
     sh.handle.interrupt();
     let reply = sh.rx.recv_timeout(Duration::from_secs(5)).expect("interrupted in time");
     assert!(matches!(&reply.outputs[0].kind, OutputKind::Error(e) if e.contains("interrupted")), "{:?}", reply.outputs);
     assert!(started.elapsed() < Duration::from_secs(5));
     // sleep() also honours the interruption.
-    sh.handle.execute("sleep(20000); 1".into());
+    sh.handle.execute("sleep(20000); 1".into(), DropVars::All);
     std::thread::sleep(Duration::from_millis(200));
     sh.handle.interrupt();
     let reply = sh.rx.recv_timeout(Duration::from_secs(5)).expect("sleep interrupted");

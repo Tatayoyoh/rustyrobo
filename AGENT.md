@@ -84,8 +84,11 @@ Key design rules:
 - In `prelude.js`, top-level `class X` creates a global lexical binding that shadows
   `globalThis.X`. Callable constructors (`ObjectId()`, `NumberLong()`…) are functions wrapping
   classes named `*T`.
-- User code is evaluated as global script (`strict = false`) so `let`/`const` persist between
-  statements and executions.
+- Each statement runs as indirect `eval` code (`__eval`, sloppy mode), with top-level `let`/`const`/
+  `class` rewritten as `var` (`split::declarations_to_var`): user variables are then deletable
+  globals. Before each execution, the shell drops all of them (default) or, with "Cross-script
+  variables" on, only the ones unchecked in the tab's variable list. User variables = globals added
+  after the prelude and `.mongorc.js` (`__markBaseline`), minus `__*` internals.
 - Statement splitting is heuristic; chunks that fail to parse are merged with the next one.
 - Theme colours must pass the WCAG checks in `theme::tests` (text ≥ 4.5:1, syntax ≥ 3:1).
 
