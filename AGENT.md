@@ -78,7 +78,7 @@ Key design rules:
 - egui is 0.36 (needs Rust 1.95+): `eframe::App::ui(&mut self, ui, frame)`, `egui::Panel::{top,left,…}.show(ui, …)`,
   `egui::MenuBar::new().ui(…)`, `ui.close()` to close menus, `egui::Modal` for dialogs.
 - Icons are Phosphor glyphs (`ui::icon::*`, regular variant only, loaded by
-  `ui::install_icon_font`), never emoji. Any other symbol must exist in egui's bundled fonts
+  `fonts::bundled`), never emoji. Any other symbol must exist in egui's bundled fonts
   (check with `fc-query` on `epaint_default_fonts/fonts/*`); missing ones render as boxes
   (e.g. `✎`, `⧉`, `→`, `⏎`).
 - Non-Latin text relies on the fonts of the system (`fonts.rs`): nothing is bundled, a CJK font alone
