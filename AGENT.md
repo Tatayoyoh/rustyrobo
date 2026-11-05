@@ -34,6 +34,8 @@ src/
   app.rs           App state, Action → tokio task → AppEvent loop, shortcuts
   settings.rs      ConnectionSettings / AppSettings (JSON, 0600), Robo 3T import
   theme.rs         colour themes + egui Visuals; contrast-checked by tests
+  fonts.rs         bundled fonts, system fonts as fallbacks (scan in background, mmap), user's choice
+  bidi.rs          right-to-left text in visual order, for read-only views
   bsonfmt.rs       BSON → shell syntax, short values, type names, legacy UUIDs
   autotest.rs      scripted UI walkthrough (RUSTYROBO_AUTOTEST)
   mongo/
@@ -79,6 +81,13 @@ Key design rules:
   `ui::install_icon_font`), never emoji. Any other symbol must exist in egui's bundled fonts
   (check with `fc-query` on `epaint_default_fonts/fonts/*`); missing ones render as boxes
   (e.g. `✎`, `⧉`, `→`, `⏎`).
+- Non-Latin text relies on the fonts of the system (`fonts.rs`): nothing is bundled, a CJK font alone
+  is 20 MB. Never load a font file in memory, map it.
+- egui has no bidi (emilk/egui#1016): it shapes each font run in the direction of its script, then
+  lays out the runs from left to right. `bidi.rs` works around it in read-only views by giving it the
+  pieces in visual order, each in its own section (`LayoutJob::append` would merge them). Editors keep
+  the logical order: right-to-left sentences read in reverse there, and cursors are off on these rows
+  (emilk/egui#8576). Check both when upgrading egui: native bidi would make `bidi.rs` double-reverse.
 - egui's "strong" text colour is `widgets.active.fg_stroke`: keep it equal to the theme text colour.
 - A vertical `Separator` inside `horizontal_top` takes the whole available height: give it a size.
 - In `prelude.js`, top-level `class X` creates a global lexical binding that shadows

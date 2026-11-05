@@ -15,7 +15,7 @@ use crate::app::{Action, App, LogLevel};
 use crate::settings::{AutocompletionMode, Orientation, TimeZoneMode, UuidEncoding, ViewMode};
 use crate::ui::dialogs::Dialog;
 
-/// Icons are glyphs of the Phosphor font, see [`install_icon_font`].
+/// Icons are glyphs of the Phosphor font, see [`crate::fonts::bundled`].
 pub use egui_phosphor::regular as icon;
 
 pub const ICON_SERVER: &str = icon::HARD_DRIVES;
@@ -32,19 +32,6 @@ pub const ICON_OPEN: &str = icon::FOLDER_OPEN;
 pub const ICON_SAVE: &str = icon::FLOPPY_DISK;
 pub const ICON_CONNECT: &str = icon::PLUG;
 pub const ICON_FAVORITE: &str = icon::STAR;
-
-/// Adds the Phosphor icon font (regular only: one font, ~0.5 MB) as a
-/// fallback of the text and monospace fonts.
-pub fn install_icon_font(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-        // Second, like in the proportional family: after the text font,
-        // before egui's emoji fonts.
-        mono.insert(mono.len().min(1), "phosphor".into());
-    }
-    ctx.set_fonts(fonts);
-}
 
 /// Small coloured dot used for connection colour tags.
 pub fn color_dot(ui: &mut Ui, color: Option<[u8; 3]>, size: f32) {
@@ -230,7 +217,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
                 app.actions.push(Action::Dialog(Dialog::ShellTimeout { value: app.settings.shell_timeout_secs }));
             }
             if menu_item(ui, "Preferences…", "") {
-                app.actions.push(Action::Dialog(Dialog::Preferences { batch_size: app.settings.batch_size }));
+                app.actions.push(Action::Dialog(Dialog::Preferences { batch_size: app.settings.batch_size, fonts: app.settings.fonts.clone() }));
             }
         });
         ui.menu_button("Window", |ui| {

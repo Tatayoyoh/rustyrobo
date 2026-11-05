@@ -7,13 +7,19 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use bson::{Bson, doc};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use rustyrobo::app::App;
-use rustyrobo::shell::OutputKind;
-use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort};
+use rustyrobo::bsonfmt::FormatOptions;
+use rustyrobo::shell::{OutputKind, ShellOutput};
+use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort, ViewMode};
+use rustyrobo::ui::editor::code_view;
 use rustyrobo::ui::icon;
+use rustyrobo::ui::output::{PaneCtx, show_pane};
+use rustyrobo::ui::query::OutputPane;
+use rustyrobo::{fonts, theme};
 
 /// The settings directory comes from an environment variable: tests that
 /// create an App must not run concurrently.
@@ -481,6 +487,164 @@ fn favorite_scripts_tree_and_drag_and_drop() {
     let shape: Vec<(&str, &str)> = saved.iter().map(|f| (f.name.as_str(), f.db.as_str())).collect();
     assert_eq!(shape, vec![("Beta", "shop"), ("Alpha", "shop")]);
     assert!(!has_label(&h, "logs"), "empty database gone");
+}
+
+// -------------------------------------------------------- fonts and RTL
+
+#[test]
+fn preferences_choose_fonts() {
+    let env = env("fonts", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    wait_until(&mut h, "system fonts", Duration::from_secs(20), |_| fonts::lists().is_some());
+    let Some(family) = fonts::lists().and_then(|l| l.all.first()).cloned() else { return };
+    let open_preferences = |h: &mut Harness<'_, App>| {
+        h.get_by_label("Options").click();
+        h.run_steps(2);
+        h.get_by_label("Preferences…").click();
+        h.run_steps(3);
+        assert!(has_label(h, "Interface font:"));
+        assert!(has_label(h, "Monospace font:"));
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).next().expect("font picker").click();
+        h.run_steps(3);
+        h.get_by_label(&family).click();
+        h.run_steps(3);
+    };
+
+    open_preferences(&mut h);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.fonts, fonts::FontChoice::default(), "cancelled");
+
+    open_preferences(&mut h);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.fonts.ui.as_ref(), Some(&family));
+    assert_eq!(saved_settings(&env).fonts.ui.as_ref(), Some(&family));
+    // The font is loaded in the background and comes first in its family.
+    wait_until(&mut h, "chosen font", Duration::from_secs(20), |h| {
+        h.ctx.fonts(|f| f.definitions().families[&egui::FontFamily::Proportional][0] != "Ubuntu-Light")
+    });
+}
+
+fn docs_output(docs: Vec<Bson>) -> ShellOutput {
+    ShellOutput { statement: "db.x.find({})".into(), line: 1, kind: OutputKind::Docs { docs, spec: None, ns: None, more: false }, elapsed: Duration::ZERO }
+}
+
+/// Results outside the App: they need no server.
+fn pane_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, OutputPane> {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
+        |ui, pane: &mut OutputPane| {
+            let mut actions = Vec::new();
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, actions: &mut actions };
+            show_pane(ui, pane, &mut cx);
+        },
+        OutputPane::new(docs_output(docs), mode, 50, true),
+    );
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn rtl_results_read_from_right_to_left() {
+    // Labels hold the text in visual order: the last word first.
+    let sentence = "שלום עולם";
+    let drawn = "עולם שלום";
+    let key = "שם מלא";
+    let drawn_key = "מלא שם";
+    for mode in [ViewMode::Tree, ViewMode::Table] {
+        let docs = vec![Bson::Document(doc! { "_id": 1, key: sentence, "latin": "Plain text" })];
+        let h = pane_harness(docs, mode);
+        let has = |text: &str| h.query_all_by_label_contains(text).next().is_some();
+        assert!(has(drawn), "{mode:?}: value");
+        assert!(!has(sentence), "{mode:?}: value");
+        assert!(has(drawn_key), "{mode:?}: key");
+        assert!(!has(key), "{mode:?}: key");
+        assert!(has("Plain text"), "{mode:?}: other text is untouched");
+    }
+}
+
+#[test]
+fn long_rtl_values_keep_their_start_visible() {
+    // Wider than its column: it starts on the right, so it must end past the
+    // left of the cell and not overflow on the right.
+    let long = "שלום עולם ".repeat(60);
+    let long = long.trim_end();
+    let docs = vec![Bson::Document(doc! { "_id": 1, "note": long, "next": "after" })];
+    let h = pane_harness(docs, ViewMode::Tree);
+    let value = h.query_all_by_label_contains("עולם שלום").next().expect("value");
+    let (value_right, value_left) = (value.rect().right(), value.rect().left());
+    let header = h.get_by_label("Value").rect();
+    let type_header = h.get_by_label("Type").rect();
+    assert!(value_right <= type_header.left(), "{value_right} stays in its column");
+    assert!(value_left < header.left(), "{value_left} goes past the left of the cell");
+}
+
+#[test]
+fn rtl_text_view_reads_from_right_to_left_and_copies_the_real_text() {
+    let text = "// note\n\"name\" : \"שלום עולם\",\n";
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).build_ui_state(
+        |ui, text: &mut String| {
+            code_view(ui, egui::Id::new("view"), text, theme::resolve(theme::DEFAULT_THEME, true), egui::FontId::monospace(13.0));
+        },
+        text.to_string(),
+    );
+    h.ctx.set_fonts(fonts::definitions(&Default::default()));
+    h.run_steps(3);
+    let view = h.get_by_role(egui::accesskit::Role::MultilineTextInput);
+    assert_eq!(view.value().as_deref(), Some(text), "the buffer is not reordered");
+    view.click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.step();
+    let copied = h.output().platform_output.commands.iter().find_map(|c| match c {
+        egui::OutputCommand::CopyText(t) => Some(t.clone()),
+        _ => None,
+    });
+    assert_eq!(copied.as_deref(), Some(text));
+}
+
+#[test]
+fn rtl_text_in_an_editor_does_not_break_it() {
+    // egui counts too many glyphs in right-to-left runs, so that cursors are off
+    // on these rows (emilk/egui#8576). It must stay harmless: no panic on cursors
+    // past the end of the text, and no loss of text.
+    let text = "שָׁלוֹם עוֹלָם لا إله abc\nسلام 123";
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).build_ui_state(
+        |ui, text: &mut String| {
+            ui.add(egui::TextEdit::multiline(text).desired_width(f32::INFINITY));
+        },
+        text.to_string(),
+    );
+    h.ctx.set_fonts(fonts::definitions(&Default::default()));
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+    h.run_steps(2);
+    for key in [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End] {
+        for _ in 0..text.chars().count() {
+            h.key_press(key);
+            h.key_press_modifiers(Modifiers::SHIFT, key);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state(), text);
+    }
+    // Typing past the end of the text, and deleting there.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::End);
+    h.run_steps(1);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(1);
+    assert_eq!(h.state().chars().count(), text.chars().count() + 1);
+    h.key_press(Key::Backspace);
+    h.key_press(Key::Delete);
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.key_press(Key::Backspace);
+    h.run_steps(2);
+    assert_eq!(h.state(), "");
 }
 
 // ---------------------------------------------------------------- live

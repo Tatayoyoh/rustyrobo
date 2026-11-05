@@ -45,6 +45,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Improved document view/edit modal
 - Field-name and operator autocompletion
 - Real colour themes
+- All languages: uses the fonts of your system, with right-to-left text in the results
 - Native single binary, light on resources
 - Multi document selection
 - A favorite script manager

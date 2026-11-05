@@ -326,6 +326,27 @@ fn legacy_server_shell_api() {
 }
 
 #[test]
+fn non_latin_text_round_trips() {
+    if !live() {
+        return;
+    }
+    let rt = rt();
+    for (settings, db) in [(mongo8(), "rr_e2e_utf8_modern"), (mongo42(), "rr_e2e_utf8_legacy")] {
+        let c = Arc::new(open(&rt, &settings).unwrap());
+        let mut sh = Shell::new(&rt, c, db, Duration::from_secs(20));
+        sh.ok("db.dropDatabase()");
+        for text in ["שלום עולם", "שָׁלוֹם", "مرحبا بالعالم", "你好世界", "한국어", "😀"] {
+            sh.ok(&format!("db.t.insertOne({{ _id: '{text}', '{text}': '{text}' }})"));
+            // Fetched natively by the driver, then through the JS bridge.
+            let d = sh.docs(&format!("db.t.find({{ _id: '{text}' }})"));
+            assert_eq!(field(&d[0], text), &Bson::String(text.into()));
+            assert_eq!(sh.text(&format!("db.t.findOne({{ _id: '{text}' }})['{text}']")), text);
+        }
+        sh.ok("db.dropDatabase()");
+    }
+}
+
+#[test]
 fn stop_interrupts_a_running_script() {
     if !live() {
         return;

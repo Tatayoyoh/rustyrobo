@@ -379,6 +379,7 @@ pub struct AppSettings {
     pub shell_timeout_secs: u32,
     pub batch_size: u32,
     pub font_size: f32,
+    pub fonts: crate::fonts::FontChoice,
     pub orientation: Orientation,
     pub show_explorer: bool,
     pub show_logs: bool,
@@ -423,6 +424,7 @@ impl Default for AppSettings {
             shell_timeout_secs: 15,
             batch_size: 50,
             font_size: 13.0,
+            fonts: Default::default(),
             orientation: Orientation::Vertical,
             show_explorer: true,
             show_logs: false,
@@ -625,6 +627,15 @@ pub fn parse_host_port(s: &str) -> Option<HostPort> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_without_fonts_load_with_the_bundled_ones() {
+        let settings: AppSettings = serde_json::from_str(r#"{"theme":"Nord"}"#).unwrap();
+        assert_eq!(settings.fonts, crate::fonts::FontChoice::default());
+        let fonts = crate::fonts::FontChoice { ui: Some("Arial".into()), mono: None };
+        let json = serde_json::to_string(&AppSettings { fonts: fonts.clone(), ..Default::default() }).unwrap();
+        assert_eq!(serde_json::from_str::<AppSettings>(&json).unwrap().fonts, fonts);
+    }
 
     #[test]
     fn host_port_parsing() {

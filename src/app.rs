@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 
 use bson::{Bson, Document, doc};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use egui::{Key, KeyboardShortcut, Modifiers};
+use egui::{FontDefinitions, Key, KeyboardShortcut, Modifiers};
 use uuid::Uuid;
 
 use crate::bsonfmt::FormatOptions;
+use crate::fonts::FontChoice;
 use crate::mongo::{self, ConnectSecrets, Connection, StepReport};
 use crate::settings::{AppSettings, ConnectionSettings, Orientation, ViewMode};
 use crate::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellReply};
@@ -140,6 +141,7 @@ pub enum Action {
     SaveFile { save_as: bool },
     SaveSettings,
     ApplyTheme,
+    ApplyFonts,
 }
 
 pub enum AppEvent {
@@ -156,6 +158,7 @@ pub enum AppEvent {
     CommandDone { server: u64, label: String, result: Result<Document, String>, refresh: Refresh },
     Test(u64, StepReport),
     TestDone(u64, Result<String, String>),
+    Fonts(FontChoice, FontDefinitions),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -214,7 +217,7 @@ impl App {
         let (tx, rx) = unbounded();
         let system_dark = cc.egui_ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(true);
         let theme = *theme::resolve(&settings.theme, system_dark);
-        crate::ui::install_icon_font(&cc.egui_ctx);
+        cc.egui_ctx.set_fonts(crate::fonts::bundled());
         theme::apply(&cc.egui_ctx, &theme, settings.font_size);
         let mut app = App {
             theme_name: settings.theme.clone(),
@@ -245,7 +248,18 @@ impl App {
         app.log(LogLevel::Info, format!("Rustyrobo {} started", env!("CARGO_PKG_VERSION")));
         // Like Robo 3T: open the connection manager at startup.
         app.conn_list = Some(ConnectionList::new(&app.settings));
+        app.load_fonts();
         app
+    }
+
+    /// The system fonts are scanned once, in the background.
+    fn load_fonts(&self) {
+        let choice = self.settings.fonts.clone();
+        self.spawn(async move {
+            let for_task = choice.clone();
+            let fonts = tokio::task::spawn_blocking(move || crate::fonts::definitions(&for_task)).await;
+            AppEvent::Fonts(choice, fonts.unwrap_or_else(|_| crate::fonts::bundled()))
+        });
     }
 
     pub fn next_id(&mut self) -> u64 {
@@ -303,6 +317,12 @@ impl App {
 
     fn handle_event(&mut self, ev: AppEvent) {
         match ev {
+            // Unless the choice has changed again in the meantime.
+            AppEvent::Fonts(choice, fonts) => {
+                if choice == self.settings.fonts {
+                    self.ctx.set_fonts(fonts);
+                }
+            }
             AppEvent::Step(server, step) => {
                 let name = self.server(server).map(|s| s.settings.name.clone()).unwrap_or_default();
                 let level = if step.ok { LogLevel::Info } else { LogLevel::Error };
@@ -807,6 +827,7 @@ impl App {
                 theme::apply(&self.ctx, &self.theme, self.settings.font_size);
                 self.actions.push(Action::SaveSettings);
             }
+            Action::ApplyFonts => self.load_fonts(),
         }
     }
 

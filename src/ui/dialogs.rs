@@ -101,7 +101,7 @@ pub enum Dialog {
     Index(Box<IndexForm>),
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
     ShellTimeout { value: u32 },
-    Preferences { batch_size: u32 },
+    Preferences { batch_size: u32, fonts: crate::fonts::FontChoice },
     /// Name of the script of a shell being added to the favorites.
     FavoriteName { tab: u64, name: String },
     About,
@@ -792,7 +792,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
                 if (valid && (ok || enter)) || cancel { Outcome::Close } else { Outcome::Keep }
             }
-            Dialog::Preferences { batch_size } => {
+            Dialog::Preferences { batch_size, fonts } => {
                 title(ui, "Preferences");
                 egui::Grid::new("prefs").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label("Batch size (documents per page):");
@@ -800,6 +800,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.end_row();
                     ui.label("Font size:");
                     ui.add(egui::DragValue::new(&mut app.settings.font_size).range(9.0..=24.0).speed(0.25));
+                    ui.end_row();
+                    let lists = crate::fonts::lists();
+                    ui.label("Interface font:");
+                    font_picker(ui, "pref-ui-font", &mut fonts.ui, lists.map_or(&[], |l| &l.all));
+                    ui.end_row();
+                    ui.label("Monospace font:");
+                    font_picker(ui, "pref-mono-font", &mut fonts.mono, lists.map_or(&[], |l| &l.mono));
                     ui.end_row();
                     ui.label("Theme:");
                     let mut theme_name = app.settings.theme.clone();
@@ -818,6 +825,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 if ok {
                     app.settings.batch_size = *batch_size;
                     actions.push(Action::ApplyTheme);
+                    if *fonts != app.settings.fonts {
+                        app.settings.fonts = fonts.clone();
+                        actions.push(Action::ApplyFonts);
+                    }
                 }
                 if ok || cancel { Outcome::Close } else { Outcome::Keep }
             }
@@ -882,6 +893,20 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.dialog = Some(dlg);
     }
     app.actions.extend(actions);
+}
+
+fn font_picker(ui: &mut Ui, id: &str, font: &mut Option<String>, families: &[String]) {
+    const DEFAULT: &str = "Default";
+    egui::ComboBox::from_id_salt(id).selected_text(font.as_deref().unwrap_or(DEFAULT)).width(220.0).height(320.0).show_ui(ui, |ui| {
+        if ui.selectable_label(font.is_none(), DEFAULT).clicked() {
+            *font = None;
+        }
+        for family in families {
+            if ui.selectable_label(font.as_ref() == Some(family), family).clicked() {
+                *font = Some(family.clone());
+            }
+        }
+    });
 }
 
 fn index_dialog(ui: &mut Ui, f: &mut IndexForm, theme: &crate::theme::Theme, font: f32, actions: &mut Vec<Action>) -> Outcome {

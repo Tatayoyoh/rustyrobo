@@ -3,7 +3,9 @@
 pub mod app;
 pub mod assets;
 pub mod autotest;
+pub mod bidi;
 pub mod bsonfmt;
+pub mod fonts;
 pub mod mongo;
 pub mod settings;
 pub mod shell;

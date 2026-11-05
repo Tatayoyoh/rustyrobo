@@ -176,6 +176,15 @@ pub fn highlight_cached(ctx: &egui::Context, code: &str, theme: &Theme, font: &F
     ctx.memory_mut(|m| m.caches.cache::<Cache>().get((font, theme.name, code)).clone())
 }
 
+#[derive(Default)]
+struct ReadOnlyHighlighter;
+
+impl egui::cache::ComputerMut<(&FontId, &str, &str), LayoutJob> for ReadOnlyHighlighter {
+    fn compute(&mut self, key: (&FontId, &str, &str)) -> LayoutJob {
+        crate::bidi::reorder_sections(Highlighter.compute(key))
+    }
+}
+
 pub fn highlight(src: &str, theme: &Theme, font: FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
     for (s, e, tok) in tokenize(src) {
@@ -1040,7 +1049,8 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) 
     let mut view: &str = text;
     let theme_copy = *theme;
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
-        let job = highlight_cached(ui.ctx(), buf.as_str(), &theme_copy, &font);
+        type Cache = egui::cache::FrameCache<LayoutJob, ReadOnlyHighlighter>;
+        let job = ui.ctx().memory_mut(|m| m.caches.cache::<Cache>().get((&font, theme_copy.name, buf.as_str())).clone());
         ui.fonts_mut(|f| f.layout_job(job))
     };
     egui::TextEdit::multiline(&mut view)

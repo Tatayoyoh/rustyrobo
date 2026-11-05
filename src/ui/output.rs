@@ -383,6 +383,31 @@ fn expand_all(set: &mut HashSet<String>, b: &Bson, path: String) {
     set.insert(path);
 }
 
+/// Single-line label of a result cell, cut at the width of the cell. Text that
+/// reads from right to left is cut on the left, to show its start.
+fn cell_label(ui: &mut Ui, text: &str, font: &FontId, color: egui::Color32) {
+    use crate::bidi;
+    if !bidi::has_rtl(text) {
+        ui.add(egui::Label::new(RichText::new(text).font(font.clone()).color(color)).selectable(false).truncate());
+        return;
+    }
+    let job = bidi::layout_job(text, font.clone(), color);
+    if !bidi::starts_rtl(text) {
+        ui.add(egui::Label::new(job).selectable(false).truncate());
+        return;
+    }
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let rect = ui.available_rect_before_wrap();
+    if galley.size().x <= rect.width() {
+        ui.add(egui::Label::new(galley).selectable(false));
+    } else {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.shrink_clip_rect(rect);
+            ui.add(egui::Label::new(galley).selectable(false));
+        });
+    }
+}
+
 fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let rows = match pane.rows_cache.take() {
         Some((f, t, rows)) if f == cx.fmt && t == cx.theme.name => rows,
@@ -429,10 +454,10 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                         ui.add_space(indent);
                     }
                     let key_color = if r.depth == 0 { th.text } else { th.syntax.property };
-                    ui.add(egui::Label::new(RichText::new(&r.key).font(font.clone()).color(key_color)).selectable(false).truncate());
+                    cell_label(ui, &r.key, &font, key_color);
                 });
                 row.col(|ui| {
-                    ui.add(egui::Label::new(RichText::new(&r.value).font(mono.clone()).color(r.color)).selectable(false).truncate());
+                    cell_label(ui, &r.value, &mono, r.color);
                 });
                 row.col(|ui| {
                     ui.add(egui::Label::new(RichText::new(r.tname).color(th.text_weak)).selectable(false).truncate());
@@ -734,6 +759,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let row_h = cx.font_size + 8.0;
     let th = cx.theme;
     let mono = FontId::monospace(cx.font_size);
+    let header_font = FontId::proportional(cx.font_size);
     let fmt = cx.fmt;
     let menu = cx_parts(cx);
     let mut menu_actions = Vec::new();
@@ -757,7 +783,12 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
             });
             for c in &columns {
                 h.col(|ui| {
-                    ui.strong(c);
+                    if crate::bidi::has_rtl(c) {
+                        let color = ui.visuals().strong_text_color();
+                        cell_label(ui, c, &header_font, color);
+                    } else {
+                        ui.strong(c);
+                    }
                 });
             }
         })
@@ -774,11 +805,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     row.col(|ui| {
                         let v = if scalar_mode { Some(d) } else { d.as_document().and_then(|doc| doc.get(c)) };
                         if let Some(v) = v {
-                            ui.add(
-                                egui::Label::new(RichText::new(bsonfmt::short_value(v, fmt)).font(mono.clone()).color(bson_color(th, v)))
-                                    .selectable(false)
-                                    .truncate(),
-                            );
+                            cell_label(ui, &bsonfmt::short_value(v, fmt), &mono, bson_color(th, v));
                         }
                     });
                 }
