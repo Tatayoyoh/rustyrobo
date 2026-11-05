@@ -6,10 +6,8 @@
 - Preferences: choose the interface font and the monospace font among the installed fonts
 
 ### Fixed
-- Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the
-  system are now used for the characters missing from the bundled fonts
-- Right-to-left text reads in the right order in the tree, table and text views, and a value too long
-  for its column keeps its start visible
+- Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts
+- Right-to-left text reads in the right order in the tree, table and text views, and a value too long for its column keeps its start visible
 
 ### Known issues
 - Editors (scripts, documents): right-to-left sentences show their words in reverse order and the
