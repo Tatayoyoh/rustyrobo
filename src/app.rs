@@ -194,6 +194,8 @@ pub struct App {
     pub toast: Option<(String, Instant, LogLevel)>,
     next_id: u64,
     theme_name: String,
+    /// `None` until the system fonts are loaded.
+    fonts_applied: Option<FontChoice>,
     system_dark: bool,
     pub theme: Theme,
     fullscreen: bool,
@@ -221,6 +223,7 @@ impl App {
         theme::apply(&cc.egui_ctx, &theme, settings.font_size);
         let mut app = App {
             theme_name: settings.theme.clone(),
+            fonts_applied: None,
             settings,
             rt,
             tx,
@@ -319,8 +322,9 @@ impl App {
         match ev {
             // Unless the choice has changed again in the meantime.
             AppEvent::Fonts(choice, fonts) => {
-                if choice == self.settings.fonts {
+                if choice == self.settings.fonts && self.fonts_applied.as_ref() != Some(&choice) {
                     self.ctx.set_fonts(fonts);
+                    self.fonts_applied = Some(choice);
                 }
             }
             AppEvent::Step(server, step) => {

@@ -113,6 +113,12 @@ pub fn definitions(choice: &FontChoice) -> FontDefinitions {
     let mono = named(&mut fonts, &choice.mono);
     let fallbacks: Vec<String> = system.fallbacks.iter().filter_map(|&id| add_face(&system.db, &mut fonts, id)).collect();
     chain_fonts(&mut fonts, ui, mono, &fallbacks);
+    // `Context::set_fonts` compares the definitions on the UI thread, byte by
+    // byte in the order of the names: reading a CJK font on the way takes 0.5 s
+    // and 20 MB of memory. This unused entry, named after the choice and sorted
+    // first, ends the comparison of two different choices at once.
+    let marker = Arc::clone(&fonts.font_data["phosphor"]);
+    fonts.font_data.insert(format!("\0{choice:?}"), marker);
     fonts
 }
 
@@ -342,6 +348,20 @@ mod tests {
             let id = egui::FontId::proportional(13.0);
             assert!(!ctx.fonts_mut(|f| f.has_glyph(&id, c)), "{c} is already bundled");
         }
+    }
+
+    #[test]
+    fn different_choices_differ_on_their_first_font_name() {
+        // `set_fonts` then stops comparing before reading any font.
+        let choice = |ui: &str, mono: &str| FontChoice { ui: Some(ui.into()), mono: Some(mono.into()) };
+        let first = |c: &FontChoice| definitions(c).font_data.into_keys().next().unwrap();
+        let names = [first(&FontChoice::default()), first(&choice("a", "b")), first(&choice("a", "c")), first(&choice("b", "c"))];
+        for (i, name) in names.iter().enumerate() {
+            assert!(name.starts_with('\0'), "{name:?} is not sorted first");
+            assert!(!names[..i].contains(name), "{name:?} is not unique");
+        }
+        let fonts = definitions(&choice("a", "b"));
+        assert!(!fonts.families.values().flatten().any(|name| name.starts_with('\0')), "the marker is not a font to use");
     }
 
     #[test]
