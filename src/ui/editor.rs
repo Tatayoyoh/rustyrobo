@@ -737,34 +737,14 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
         // Escape closes the search bar, not the dialog around the editor.
         let escape = (find_focused || search.had_focus || had_focus) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
         let mut close = escape;
-        ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut search.query).id(find_id).hint_text("Find").desired_width(220.0));
-            if std::mem::take(&mut search.focus) {
-                r.request_focus();
-            }
-            search.had_focus = r.has_focus();
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            let shift = ui.input(|i| i.modifiers.shift);
+        let bar = find_bar(ui, find_id, &mut search.query, &mut search.focus, search.matches.len(), search.current, theme);
+        search.had_focus = bar.has_focus;
+        close |= bar.close;
+        if let Some(next) = bar.step {
             let n = search.matches.len();
-            let prev = ui.add_enabled(n > 0, egui::Button::new(icon::CARET_UP)).on_hover_text("Previous match (Shift+Enter)").clicked() || (enter && shift);
-            let next = ui.add_enabled(n > 0, egui::Button::new(icon::CARET_DOWN)).on_hover_text("Next match (Enter)").clicked() || (enter && !shift);
-            if n > 0 && (prev || next) {
-                search.current = if prev { (search.current + n - 1) % n } else { (search.current + 1) % n };
-                search.goto = true;
-            }
-            if enter {
-                r.request_focus();
-            }
-            let label = match n {
-                _ if search.query.is_empty() => String::new(),
-                0 => "No results".to_string(),
-                n => format!("{} of {n}{}", search.current + 1, if n >= MAX_MATCHES { "+" } else { "" }),
-            };
-            ui.label(egui::RichText::new(label).color(theme.text_weak));
-            if ui.add(egui::Button::new(icon::X).frame(false)).on_hover_text("Close (Escape)").clicked() {
-                close = true;
-            }
-        });
+            search.current = if next { (search.current + 1) % n } else { (search.current + n - 1) % n };
+            search.goto = true;
+        }
         if close {
             search.open = false;
             search.had_focus = false;
@@ -897,25 +877,10 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                 }
 
                 // Search matches and extra selections, under the text.
-                let offset = output.galley_pos.to_vec2();
-                let span = |r: &Range<usize>| {
-                    let (a, b) = (output.galley.pos_from_cursor(CCursor::new(r.start)), output.galley.pos_from_cursor(CCursor::new(r.end)));
-                    (a.min.y == b.min.y).then(|| egui::Rect::from_min_max(a.min, b.max).translate(offset))
-                };
+                let span = |r: &Range<usize>| text_span(&output, r);
                 let mut shapes = Vec::new();
                 if search.open && !search.matches.is_empty() {
-                    let rows = output.galley.rows.len().max(1);
-                    let row_h = output.galley.size().y / rows as f32;
-                    let clip = ui.clip_rect();
-                    let first = ((clip.top() - output.galley_pos.y) / row_h).floor().max(0.0) as usize;
-                    let last = ((clip.bottom() - output.galley_pos.y) / row_h).ceil().max(0.0) as usize;
-                    let start = search.matches.partition_point(|m| m.1 < first);
-                    for (i, (r, _)) in search.matches.iter().enumerate().skip(start).take_while(|(_, m)| m.1 <= last) {
-                        if let Some(rect) = span(r) {
-                            let current = i == search.current;
-                            shapes.push(egui::Shape::rect_filled(rect, 2, theme.warning.gamma_multiply(if current { 0.6 } else { 0.3 })));
-                        }
-                    }
+                    shapes = match_shapes(ui, &output, &search.matches, search.current, theme);
                     if let Some(rect) = scroll_to.and_then(|i| search.matches.get(i)).and_then(|m| span(&m.0)) {
                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                     }
@@ -1036,6 +1001,68 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
         }
     });
     EditorResponse { changed, selection, has_focus, want_fields }
+}
+
+/// What the user did in a find bar.
+pub struct FindBar {
+    pub has_focus: bool,
+    /// Go to the next match (`true`) or to the previous one.
+    pub step: Option<bool>,
+    pub close: bool,
+}
+
+/// Search bar: a query, buttons to go through its `matches` and their count.
+/// `focus` asks to give it the focus.
+pub fn find_bar(ui: &mut Ui, id: Id, query: &mut String, focus: &mut bool, matches: usize, current: usize, theme: &Theme) -> FindBar {
+    let mut bar = FindBar { has_focus: false, step: None, close: false };
+    ui.horizontal(|ui| {
+        let r = ui.add(egui::TextEdit::singleline(query).id(id).hint_text("Find").desired_width(220.0));
+        if std::mem::take(focus) {
+            r.request_focus();
+        }
+        bar.has_focus = r.has_focus();
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        let shift = ui.input(|i| i.modifiers.shift);
+        let prev = ui.add_enabled(matches > 0, egui::Button::new(icon::CARET_UP)).on_hover_text("Previous match (Shift+Enter)").clicked() || (enter && shift);
+        let next = ui.add_enabled(matches > 0, egui::Button::new(icon::CARET_DOWN)).on_hover_text("Next match (Enter)").clicked() || (enter && !shift);
+        if matches > 0 && (prev || next) {
+            bar.step = Some(!prev);
+        }
+        if enter {
+            r.request_focus();
+        }
+        let label = match matches {
+            _ if query.is_empty() => String::new(),
+            0 => "No results".to_string(),
+            n => format!("{} of {n}{}", current + 1, if n >= MAX_MATCHES { "+" } else { "" }),
+        };
+        ui.label(egui::RichText::new(label).color(theme.text_weak));
+        bar.close = ui.add(egui::Button::new(icon::X).frame(false)).on_hover_text("Close (Escape)").clicked();
+    });
+    bar
+}
+
+/// Rectangle of a range of chars on one line.
+fn text_span(output: &egui::text_edit::TextEditOutput, r: &Range<usize>) -> Option<egui::Rect> {
+    let (a, b) = (output.galley.pos_from_cursor(CCursor::new(r.start)), output.galley.pos_from_cursor(CCursor::new(r.end)));
+    (a.min.y == b.min.y).then(|| egui::Rect::from_min_max(a.min, b.max).translate(output.galley_pos.to_vec2()))
+}
+
+/// Highlights of the visible search matches, to paint under the text.
+fn match_shapes(ui: &Ui, output: &egui::text_edit::TextEditOutput, matches: &[(Range<usize>, usize)], current: usize, theme: &Theme) -> Vec<egui::Shape> {
+    let rows = output.galley.rows.len().max(1);
+    let row_h = output.galley.size().y / rows as f32;
+    let clip = ui.clip_rect();
+    let first = ((clip.top() - output.galley_pos.y) / row_h).floor().max(0.0) as usize;
+    let last = ((clip.bottom() - output.galley_pos.y) / row_h).ceil().max(0.0) as usize;
+    let start = matches.partition_point(|m| m.1 < first);
+    matches
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take_while(|(_, m)| m.1 <= last)
+        .filter_map(|(i, (r, _))| Some(egui::Shape::rect_filled(text_span(output, r)?, 2, theme.warning.gamma_multiply(if i == current { 0.6 } else { 0.3 }))))
+        .collect()
 }
 
 /// Read-only highlighted text block (results text view, function viewer).
