@@ -856,11 +856,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     font_picker(ui, "pref-mono-font", &mut edit.fonts.mono, lists.map_or(&[], |l| &l.mono));
                     ui.end_row();
                     ui.label("Theme:");
-                    egui::ComboBox::from_id_salt("pref-theme").selected_text(edit.theme.as_str()).show_ui(ui, |ui| {
-                        for n in crate::theme::names() {
-                            ui.selectable_value(&mut edit.theme, n.to_string(), n);
-                        }
-                    });
+                    if let Some(name) = combo(ui, "pref-theme", &edit.theme, crate::theme::names()) {
+                        edit.theme = name.to_string();
+                    }
                     ui.end_row();
                 });
                 let (ok, cancel) = buttons(ui, "Save", true);
@@ -939,16 +937,46 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 
 fn font_picker(ui: &mut Ui, id: &str, font: &mut Option<String>, families: &[String]) {
     const DEFAULT: &str = "Default";
-    egui::ComboBox::from_id_salt(id).selected_text(font.as_deref().unwrap_or(DEFAULT)).width(220.0).height(320.0).show_ui(ui, |ui| {
-        if ui.selectable_label(font.is_none(), DEFAULT).clicked() {
-            *font = None;
+    let items = std::iter::once(DEFAULT).chain(families.iter().map(String::as_str));
+    if let Some(picked) = combo(ui, id, font.as_deref().unwrap_or(DEFAULT), items) {
+        *font = (picked != DEFAULT).then(|| picked.to_string());
+    }
+}
+
+/// A combo box that takes the focus when clicked, and whose selection follows Up
+/// and Down when it has it. Returns the item to select.
+fn combo<'a>(ui: &mut Ui, id: &str, current: &str, items: impl Iterator<Item = &'a str> + Clone) -> Option<&'a str> {
+    // The id of the button, known before it is shown: so that it shows the new item.
+    let button = ui.make_persistent_id(egui::IdSalt::new(id));
+    // Otherwise the arrows move the focus to the next widget.
+    ui.memory_mut(|m| m.set_focus_lock_filter(button, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
+    let mut picked = None;
+    if ui.memory(|m| m.has_focus(button)) {
+        let count = |key| ui.input_mut(|i| i.count_and_consume_key(egui::Modifiers::NONE, key) as isize);
+        let step = count(egui::Key::ArrowDown) - count(egui::Key::ArrowUp);
+        if step != 0 {
+            let at = items.clone().position(|item| item == current);
+            picked = items.clone().nth(at.map_or(0, |at| at.saturating_add_signed(step)));
         }
-        for family in families {
-            if ui.selectable_label(font.as_ref() == Some(family), family).clicked() {
-                *font = Some(family.clone());
+    }
+    let stepped = picked.is_some();
+    let shown = picked.unwrap_or(current);
+    let response = egui::ComboBox::from_id_salt(id).selected_text(shown).width(220.0).height(320.0).show_ui(ui, |ui| {
+        for item in items {
+            let row = ui.selectable_label(item == shown, item);
+            if stepped && item == shown {
+                row.scroll_to_me(None);
+            }
+            if row.clicked() {
+                picked = Some(item);
             }
         }
     });
+    // A click in the list takes the focus away from the button.
+    if response.response.clicked() || picked.is_some() {
+        response.response.request_focus();
+    }
+    picked
 }
 
 fn index_dialog(ui: &mut Ui, f: &mut IndexForm, theme: &crate::theme::Theme, font: f32, actions: &mut Vec<Action>) -> Outcome {

@@ -6,6 +6,7 @@
 - Preferences: choose the interface font and the monospace font among the installed fonts
 - Preferences: fonts, font size and theme change right away; Cancel, Escape or closing the window restores them
 - Preferences: font size slider
+- Preferences: Up and Down select the previous and next item of the focused list
 
 ### Fixed
 - Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts

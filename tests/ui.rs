@@ -615,6 +615,61 @@ fn closing_the_window_does_not_save_what_preferences_show() {
 }
 
 #[test]
+fn up_and_down_walk_the_focused_combo_box() {
+    let _env = env("arrows", &AppSettings::default());
+    let mut h = app_harness();
+    let Some(families) = fonts::lists().map(|l| &l.all).filter(|l| l.len() >= 3) else { return };
+    let font = |h: &Harness<'_, App>| h.state().settings.fonts.ui.clone();
+    open_preferences(&mut h);
+
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(font(&h), None, "no combo box has the focus");
+
+    // With the keyboard.
+    combo_box(&h, 0).focus();
+    h.run_steps(2);
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(font(&h).as_ref(), Some(&families[0]), "after Default");
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(font(&h).as_ref(), Some(&families[1]));
+    assert_eq!(combo_box(&h, 0).value().as_ref(), Some(&families[1]), "the combo box shows it");
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(font(&h).as_ref(), Some(&families[0]));
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(font(&h), None);
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(font(&h), None, "stops on the first item");
+
+    // After choosing with the mouse, the focus stays on the combo box.
+    combo_box(&h, 0).click();
+    h.run_steps(3);
+    h.get_by_label(&families[0]).click();
+    h.run_steps(3);
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(font(&h).as_ref(), Some(&families[1]));
+
+    // The list stays open, on the new item.
+    combo_box(&h, 0).click();
+    h.run_steps(3);
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(font(&h).as_ref(), Some(&families[2]));
+    assert!(h.query_by_label("Default").is_some(), "the list is open");
+    press(&mut h, Key::Enter);
+    assert!(h.query_by_label("Default").is_none(), "Enter closes the list");
+    assert_eq!(font(&h).as_ref(), Some(&families[2]));
+
+    // Each combo box has its own focus, and stops on its last item.
+    combo_box(&h, 2).focus();
+    h.run_steps(2);
+    let themes: Vec<_> = theme::names().collect();
+    for _ in 0..themes.len() + 1 {
+        press(&mut h, Key::ArrowDown);
+    }
+    assert_eq!(h.state().settings.theme, *themes.last().unwrap());
+    assert_eq!(font(&h).as_ref(), Some(&families[2]), "the other combo box does not move");
+}
+
+#[test]
 fn font_size_slider_stays_under_the_pointer_during_a_drag() {
     let _env = env("slider", &AppSettings::default());
     let mut h = app_harness();

@@ -413,7 +413,7 @@ pub const THEMES: &[Theme] = &[
 ];
 
 /// Theme names offered in View → Theme. "System" follows the OS preference.
-pub fn names() -> impl Iterator<Item = &'static str> {
+pub fn names() -> impl Iterator<Item = &'static str> + Clone {
     std::iter::once("System").chain(THEMES.iter().map(|t| t.name))
 }
 
