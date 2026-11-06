@@ -583,6 +583,13 @@ class DBCollection {
     tojson() { return this.getFullName(); }
     getCollection(sub) { return this._db.getCollection(this._name + "." + sub); }
     _run(cmd) { return __cmd(this._db.getName(), cmd); }
+    // A command name applies to this collection: db.c.runCommand("collStats").
+    runCommand(cmd, params) {
+        if (typeof cmd !== "string") return this._db.runCommand(cmd);
+        const c = {}; c[cmd] = this._name;
+        return this._db.runCommand(Object.assign(c, params || {}));
+    }
+    runReadCommand(cmd, params) { return this.runCommand(cmd, params); }
 
     find(filter, projection) { return new DBQuery(this, filter, projection); }
     findOne(filter, projection, options) {
@@ -836,8 +843,9 @@ class DB {
     }
     getSiblingDB(name) { return __makeDB(name); }
     getSisterDB(name) { return __makeDB(name); }
-    getMongo() { return { getDB: (n) => __makeDB(n), getDBNames: () => __cmd("admin", { listDatabases: 1, nameOnly: true }).databases.map((d) => d.name), toString: () => "connection" }; }
+    getMongo() { return { getDB: (n) => __makeDB(n), runCommand: (n, cmd) => __runCommand(n, cmd), adminCommand: (cmd, extra) => __runCommand("admin", cmd, extra), getDBNames: () => __cmd("admin", { listDatabases: 1, nameOnly: true }).databases.map((d) => d.name), toString: () => "connection" }; }
     runCommand(cmd, extra) { return __runCommand(this._name, cmd, extra); }
+    runReadCommand(cmd, extra) { return this.runCommand(cmd, extra); }
     adminCommand(cmd, extra) { return __runCommand("admin", cmd, extra); }
     _adminCommand(cmd) { return this.adminCommand(cmd); }
     getCollectionInfos(filter, nameOnly) {

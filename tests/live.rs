@@ -339,8 +339,17 @@ fn run_command_works_like_in_the_mongo_shell() {
         // On a database, with a document or a name.
         assert_eq!(sh.text("db.runCommand({ ping: 1 }).ok"), "1");
         assert_eq!(sh.text("db.runCommand('ping').ok"), "1");
+        assert_eq!(sh.text("db.runReadCommand({ ping: 1 }).ok"), "1");
         assert_eq!(sh.text("db.adminCommand('ping').ok"), "1");
         assert_eq!(sh.text("db.runCommand({ count: 'c', query: { a: { $gt: NumberLong(1) } } }).n"), "2");
+        assert_eq!(sh.text("db.getMongo().adminCommand({ ping: 1 }).ok"), "1");
+        assert_eq!(sh.text("db.getMongo().runCommand('admin', { ping: 1 }).ok"), "1");
+
+        // On a collection: a name applies to the collection.
+        assert_eq!(sh.text("db.c.runCommand('count').n"), "3");
+        assert_eq!(sh.text("db.getCollection('c').runCommand('count', { query: { a: 1 } }).n"), "1");
+        assert_eq!(sh.text("db.c.runCommand({ count: 'c' }).n"), "3");
+        assert_eq!(sh.text("db.c.runReadCommand('count').n"), "3");
 
         // A refused command returns the reply of the server, and the script goes on.
         let outs = sh.run("var r = db.runCommand({ nope: 1 }); print(r.ok, r.code, r.codeName); print(r.errmsg.includes('nope'))");
@@ -354,6 +363,7 @@ fn run_command_works_like_in_the_mongo_shell() {
         assert_eq!(reply.get_i32("code").unwrap(), 59);
         assert!(reply.get_str("errmsg").unwrap().contains("nope"));
         assert_eq!(sh.text("db.adminCommand({ nope: 1 }).ok"), "0");
+        assert_eq!(sh.text("db.c.runCommand('nope').ok"), "0");
         // Mistakes in the script still stop it, and so do the helpers of the shell.
         let outs = sh.run("db.runCommand(null)");
         assert!(matches!(&outs[0].kind, OutputKind::Error(e) if e.contains("command document")), "{:?}", outs[0].kind);

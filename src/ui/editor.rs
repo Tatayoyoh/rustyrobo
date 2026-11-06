@@ -200,7 +200,7 @@ pub fn highlight(src: &str, theme: &Theme, font: FontId) -> LayoutJob {
 
 const DB_METHODS: &[&str] = &[
     "getCollection", "getCollectionNames", "getCollectionInfos", "getSiblingDB", "getName",
-    "runCommand", "adminCommand", "stats", "version", "serverStatus", "serverBuildInfo", "hostInfo",
+    "runCommand", "runReadCommand", "adminCommand", "stats", "version", "serverStatus", "serverBuildInfo", "hostInfo",
     "currentOp", "killOp", "createCollection", "createView", "dropDatabase", "getUsers", "getUser",
     "createUser", "updateUser", "dropUser", "changeUserPassword", "grantRolesToUser",
     "revokeRolesFromUser", "getRoles", "createRole", "dropRole", "printCollectionStats", "isMaster",
@@ -215,7 +215,8 @@ const COLLECTION_METHODS: &[&str] = &[
     "createIndex", "createIndexes", "ensureIndex", "getIndexes", "dropIndex", "dropIndexes",
     "hideIndex", "unhideIndex", "reIndex", "drop", "renameCollection", "stats", "dataSize",
     "storageSize", "totalIndexSize", "totalSize", "isCapped", "validate", "exists", "getName",
-    "getFullName", "getDB", "getShardVersion", "getShardDistribution", "latencyStats",
+    "getFullName", "getDB", "getShardVersion", "getShardDistribution", "latencyStats", "runCommand",
+    "runReadCommand",
 ];
 const CURSOR_METHODS: &[&str] = &[
     "sort", "skip", "limit", "batchSize", "projection", "hint", "collation", "maxTimeMS",
