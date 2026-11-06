@@ -444,8 +444,9 @@ fn new_version_shows_a_chip_and_a_dialog() {
 
     // The commands, by system.
     h.get_by_label("Update manually").click();
-    h.run_steps(4);
-    for (os, command) in [("Linux", "tar xzf"), ("Windows", "Expand-Archive"), ("macOS", "ditto")] {
+    // Unfolding is animated: until it ends, the tabs move under the clicks.
+    h.run_steps(30);
+    for (os, command) in [("Windows", "Expand-Archive"), ("Linux", "tar xzf"), ("macOS", "ditto")] {
         h.get_by_label(os).click();
         h.run_steps(3);
         assert!(text_field_shows(&h, command), "{os}");
