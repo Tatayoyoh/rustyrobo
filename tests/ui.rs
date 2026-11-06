@@ -824,6 +824,8 @@ fn preferences_show_fonts_at_once_and_save_them_on_save() {
         assert_eq!(h.state().settings.fonts.ui.as_ref(), Some(&family), "applied before Save");
         // The font is loaded in the background and comes first in its family.
         wait_until(h, "chosen font", Duration::from_secs(20), |h| first_ui_font(h) != "Ubuntu-Light");
+        // The buttons move with the new font: clicks need their new place.
+        h.run_steps(3);
         assert_eq!(saved_settings(&env).fonts, fonts::FontChoice::default(), "not saved yet");
     };
 
