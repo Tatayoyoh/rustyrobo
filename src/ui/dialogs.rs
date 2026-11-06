@@ -131,7 +131,7 @@ pub enum Dialog {
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
     ShellTimeout { value: u32 },
     /// The appearance follows `edit`, and goes back to `original` unless saved.
-    Preferences { edit: Preferences, original: Preferences },
+    Preferences { edit: Preferences, original: Preferences, frozen_style: Option<Arc<egui::Style>> },
     /// Name of the script of a shell being added to the favorites.
     FavoriteName { tab: u64, name: String },
     About,
@@ -169,7 +169,7 @@ const ADMIN_ROLES: &[&str] = &[
 impl Dialog {
     pub fn preferences(settings: &AppSettings) -> Self {
         let edit = Preferences::of(settings);
-        Dialog::Preferences { original: edit.clone(), edit }
+        Dialog::Preferences { original: edit.clone(), edit, frozen_style: None }
     }
 
     pub fn message(title: &str, message: impl Into<String>) -> Self {
@@ -827,14 +827,26 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
                 if (valid && (ok || enter)) || cancel { Outcome::Close } else { Outcome::Keep }
             }
-            Dialog::Preferences { edit, original } => {
+            Dialog::Preferences { edit, original, frozen_style } => {
+                // During a drag the font size changes everywhere but here: the
+                // dialog would resize and move the slider under the pointer,
+                // which would change the size again.
+                if let Some(style) = frozen_style {
+                    ui.set_style(Arc::clone(style));
+                }
                 title(ui, "Preferences");
                 egui::Grid::new("prefs").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label("Batch size (documents per page):");
                     ui.add(egui::DragValue::new(&mut edit.batch_size).range(1..=10_000));
                     ui.end_row();
                     ui.label("Font size:");
-                    ui.add(egui::DragValue::new(&mut edit.font_size).range(9.0..=24.0).speed(0.25));
+                    ui.spacing_mut().slider_width = 150.0;
+                    let size = ui.add(egui::Slider::new(&mut edit.font_size, 9.0..=24.0).integer().suffix(" pt"));
+                    if size.dragged() {
+                        frozen_style.get_or_insert_with(|| Arc::clone(ui.style()));
+                    } else if frozen_style.take().is_some() {
+                        ui.ctx().request_repaint();
+                    }
                     ui.end_row();
                     let lists = crate::fonts::lists();
                     ui.label("Interface font:");

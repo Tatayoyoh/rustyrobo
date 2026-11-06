@@ -525,6 +525,10 @@ fn first_ui_font(h: &Harness<'_, App>) -> String {
     h.ctx.fonts(|f| f.definitions().families[&egui::FontFamily::Proportional][0].clone())
 }
 
+fn body_size(h: &Harness<'_, App>) -> f32 {
+    h.ctx.global_style().text_styles[&egui::TextStyle::Body].size
+}
+
 fn wait_for_bundled_font(h: &mut Harness<'_, App>) {
     wait_until(h, "bundled font", Duration::from_secs(20), |h| first_ui_font(h) == "Ubuntu-Light");
 }
@@ -567,7 +571,7 @@ fn preferences_show_fonts_at_once_and_save_them_on_save() {
 }
 
 #[test]
-fn preferences_show_the_theme_at_once_and_cancel_restores_it() {
+fn preferences_show_theme_and_font_size_at_once_and_cancel_restores_them() {
     let env = env("appearance", &AppSettings::default());
     let mut h = app_harness();
     open_preferences(&mut h);
@@ -577,13 +581,24 @@ fn preferences_show_the_theme_at_once_and_cancel_restores_it() {
     h.get_by_label("Nord").click();
     h.run_steps(3);
     assert_eq!(h.state().theme.name, "Nord");
-    assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME, "not saved yet");
+
+    h.get_by_role(egui::accesskit::Role::Slider).focus();
+    h.run_steps(2);
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(h.state().settings.font_size, 14.0);
+    assert_eq!(body_size(&h), 14.0);
+
+    let saved = saved_settings(&env);
+    assert_eq!((saved.theme.as_str(), saved.font_size), (theme::DEFAULT_THEME, 13.0), "not saved yet");
 
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().settings.theme, theme::DEFAULT_THEME);
     assert_ne!(h.state().theme.name, "Nord");
-    assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME);
+    assert_eq!(h.state().settings.font_size, 13.0);
+    assert_eq!(body_size(&h), 13.0);
+    let saved = saved_settings(&env);
+    assert_eq!((saved.theme.as_str(), saved.font_size), (theme::DEFAULT_THEME, 13.0));
 }
 
 #[test]
@@ -591,13 +606,47 @@ fn closing_the_window_does_not_save_what_preferences_show() {
     let env = env("exit", &AppSettings::default());
     let mut h = app_harness();
     open_preferences(&mut h);
-    combo_box(&h, 2).click();
-    h.run_steps(3);
-    h.get_by_label("Nord").click();
-    h.run_steps(3);
-    assert_eq!(h.state().settings.theme, "Nord");
+    h.get_by_role(egui::accesskit::Role::Slider).focus();
+    h.run_steps(2);
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(h.state().settings.font_size, 14.0);
     eframe::App::on_exit(h.state_mut());
-    assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME);
+    assert_eq!(saved_settings(&env).font_size, 13.0);
+}
+
+#[test]
+fn font_size_slider_stays_under_the_pointer_during_a_drag() {
+    let _env = env("slider", &AppSettings::default());
+    let mut h = app_harness();
+    open_preferences(&mut h);
+    let slider = |h: &Harness<'_, App>| h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let rail = slider(&h);
+    let at = |x: f32| egui::pos2(rail.left() + x * rail.width(), rail.center().y);
+
+    h.hover_at(at(0.1));
+    h.drag_at(at(0.1));
+    h.run_steps(3);
+    let start = h.state().settings.font_size;
+    let left = slider(&h).left();
+
+    // The pointer stays still: the size must not move anymore.
+    h.hover_at(at(0.9));
+    let mut sizes = Vec::new();
+    for _ in 0..8 {
+        h.step();
+        sizes.push(h.state().settings.font_size);
+        assert_eq!(slider(&h).left(), left, "the slider moved under the pointer: {sizes:?}");
+    }
+    let end = *sizes.last().unwrap();
+    assert!(end > start + 5.0, "from {start} to {end}");
+    assert!(sizes[1..].iter().all(|&s| s == end), "the size runs away: {sizes:?}");
+    assert_eq!(body_size(&h), end, "the app follows during the drag");
+
+    // At the end of the drag, the dialog follows too.
+    h.drop_at(at(0.9));
+    h.run_steps(4);
+    assert_eq!(h.state().settings.font_size, end);
+    assert_ne!(slider(&h).left(), left, "the dialog is laid out with the new size");
 }
 
 fn docs_output(docs: Vec<Bson>) -> ShellOutput {
