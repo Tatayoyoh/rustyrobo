@@ -864,6 +864,30 @@ fn pane_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, OutputPane>
     h
 }
 
+#[test]
+fn copy_value_menu_shows_its_shortcut() {
+    let mut h = pane_harness(vec![Bson::Document(doc! { "_id": 1, "a": "x", "b": "y" })], ViewMode::Tree);
+    let menu_has = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+C")));
+
+    // One row.
+    h.get_by_label("x").click_secondary();
+    h.run_steps(3);
+    assert!(menu_has(&h, "Copy Value"));
+    assert!(!menu_has(&h, "Copy Name"), "this shortcut does not copy the name");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // Several rows.
+    h.get_by_label("x").click();
+    h.run_steps(2);
+    h.get_by_label("y").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    h.get_by_label("y").click_secondary();
+    h.run_steps(3);
+    assert!(menu_has(&h, "Copy Values"));
+    assert!(!menu_has(&h, "Copy JSON"), "this shortcut copies the values");
+}
+
 // ------------------------------------------------------ find in the results
 
 /// Opens the search of the pane and types a query.

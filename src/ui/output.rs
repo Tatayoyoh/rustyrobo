@@ -903,7 +903,7 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     }
     // Values inside documents (not the documents themselves): one per line.
     if values.iter().all(|(t, _)| t.keys.is_some_and(|k| !k.is_empty())) {
-        if ui.button("Copy Values").clicked() {
+        if ui.add(egui::Button::new("Copy Values").shortcut_text("Ctrl+C")).clicked() {
             ui.ctx().copy_text(values_text(&values.iter().map(|(_, v)| *v).collect::<Vec<_>>(), cx.fmt));
             ui.close();
         }
@@ -1021,7 +1021,7 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
         }
         if !keys.is_empty()
             && let Some(v) = value {
-                if ui.button("Copy Value").clicked() {
+                if ui.add(egui::Button::new("Copy Value").shortcut_text("Ctrl+C")).clicked() {
                     ui.ctx().copy_text(copy_value(v, cx.fmt));
                     ui.close();
                 }
