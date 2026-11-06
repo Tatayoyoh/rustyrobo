@@ -7,6 +7,7 @@
 - Preferences: fonts, font size and theme change right away; Cancel, Escape or closing the window restores them
 - Preferences: font size slider
 - Preferences: Up and Down select the previous and next item of the focused list
+- Preferences: "Reset to Default" button
 
 ### Fixed
 - Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts

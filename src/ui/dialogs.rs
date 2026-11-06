@@ -861,7 +861,17 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.end_row();
                 });
-                let (ok, cancel) = buttons(ui, "Save", true);
+                let defaults = Preferences::of(&AppSettings::default());
+                let (mut ok, mut cancel) = (false, false);
+                button_row(ui, |ui| {
+                    ok = ui.button(RichText::new("Save").strong()).clicked();
+                    cancel = ui.button("Cancel").clicked();
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if ui.add_enabled(*edit != defaults, egui::Button::new("Reset to Default")).clicked() {
+                            *edit = defaults;
+                        }
+                    });
+                });
                 edit.apply(&mut app.settings, &mut actions);
                 if ok {
                     *original = edit.clone();

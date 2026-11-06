@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use bson::{Bson, doc};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use rustyrobo::app::App;
 use rustyrobo::bsonfmt::FormatOptions;
 use rustyrobo::shell::{OutputKind, ShellOutput};
@@ -667,6 +667,51 @@ fn up_and_down_walk_the_focused_combo_box() {
     }
     assert_eq!(h.state().settings.theme, *themes.last().unwrap());
     assert_eq!(font(&h).as_ref(), Some(&families[2]), "the other combo box does not move");
+}
+
+#[test]
+fn reset_to_default_shows_the_defaults_and_save_keeps_them() {
+    let custom = AppSettings {
+        batch_size: 200,
+        font_size: 18.0,
+        theme: "Nord".into(),
+        fonts: fonts::FontChoice { ui: Some("Missing Font".into()), mono: Some("Missing Mono".into()) },
+        connections: vec![ConnectionSettings::default()],
+        show_logs: true,
+        ..AppSettings::default()
+    };
+    let env = env("reset", &custom);
+    let mut h = app_harness();
+    let defaults = AppSettings::default();
+    let reset_shown = |h: &Harness<'_, App>| {
+        let s = &h.state().settings;
+        (s.batch_size, s.font_size, s.theme.clone(), s.fonts.clone()) == (defaults.batch_size, defaults.font_size, defaults.theme.clone(), defaults.fonts.clone())
+    };
+    open_preferences(&mut h);
+    assert!(!h.get_by_label("Reset to Default").accesskit_node().is_disabled());
+    h.get_by_label("Reset to Default").click();
+    h.run_steps(3);
+    assert!(reset_shown(&h), "applied at once");
+    assert_eq!(body_size(&h), defaults.font_size);
+    assert_eq!(saved_settings(&env).batch_size, 200, "not saved yet");
+    assert!(h.get_by_label("Reset to Default").accesskit_node().is_disabled(), "nothing left to reset");
+
+    // The dialog follows the font size, then is centered again.
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    let s = &h.state().settings;
+    assert_eq!((s.batch_size, s.font_size, s.theme.as_str(), &s.fonts), (200, 18.0, "Nord", &custom.fonts), "cancelled");
+
+    open_preferences(&mut h);
+    h.get_by_label("Reset to Default").click();
+    h.run_steps(6);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    let saved = saved_settings(&env);
+    assert_eq!((saved.batch_size, saved.font_size, saved.theme.as_str(), &saved.fonts), (50, 13.0, theme::DEFAULT_THEME, &defaults.fonts));
+    assert_eq!(saved.connections.len(), 1, "only the preferences of the dialog are reset");
+    assert!(saved.show_logs, "only the preferences of the dialog are reset");
 }
 
 #[test]
