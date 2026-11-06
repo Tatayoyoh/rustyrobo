@@ -254,7 +254,10 @@ fn install_natives<'js>(ctx: &Ctx<'js>, state: Option<Rc<RefCell<NativeState>>>,
             state.session = session;
             match res {
                 Ok(doc) => Bson::Document(doc).into_canonical_extjson().to_string(),
-                Err(e) => format!("\u{1}{}", crate::mongo::error_message(&e)),
+                Err(e) => match crate::mongo::command_failure(&e) {
+                    Some(reply) => format!("\u{2}{}", Bson::Document(reply).into_canonical_extjson()),
+                    None => format!("\u{1}{}", crate::mongo::error_message(&e)),
+                },
             }
         })?,
     )?;

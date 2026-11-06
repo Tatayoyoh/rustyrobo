@@ -98,6 +98,8 @@ Key design rules:
   globals. Before each execution, the shell drops all of them (default) or, with "Cross-script
   variables" on, only the ones unchecked in the tab's variable list. User variables = globals added
   after the prelude and `.mongorc.js` (`__markBaseline`), minus `__*` internals.
+- `db.runCommand()` returns the `{ ok: 0, ... }` reply of a refused command, like the mongo shell (`__runCommand`). The shell's own
+  helpers go through `__cmd`, which throws it.
 - Statement splitting is heuristic; chunks that fail to parse are merged with the next one.
 - Theme colours must pass the WCAG checks in `theme::tests` (text ≥ 4.5:1, syntax ≥ 3:1).
 

@@ -342,6 +342,24 @@ fn run_command_works_like_in_the_mongo_shell() {
         assert_eq!(sh.text("db.adminCommand('ping').ok"), "1");
         assert_eq!(sh.text("db.runCommand({ count: 'c', query: { a: { $gt: NumberLong(1) } } }).n"), "2");
 
+        // A refused command returns the reply of the server, and the script goes on.
+        let outs = sh.run("var r = db.runCommand({ nope: 1 }); print(r.ok, r.code, r.codeName); print(r.errmsg.includes('nope'))");
+        let texts: Vec<_> = outs.iter().map(|o| match &o.kind {
+            OutputKind::Text(t) => t.clone(),
+            other => panic!("unexpected output {other:?}"),
+        }).collect();
+        assert_eq!(texts, ["0 59 CommandNotFound", "true"]);
+        let OutputKind::Docs { docs, .. } = sh.ok("db.runCommand({ nope: 1 })") else { panic!("expected a document") };
+        let reply = docs[0].as_document().unwrap();
+        assert_eq!(reply.get_i32("code").unwrap(), 59);
+        assert!(reply.get_str("errmsg").unwrap().contains("nope"));
+        assert_eq!(sh.text("db.adminCommand({ nope: 1 }).ok"), "0");
+        // Mistakes in the script still stop it, and so do the helpers of the shell.
+        let outs = sh.run("db.runCommand(null)");
+        assert!(matches!(&outs[0].kind, OutputKind::Error(e) if e.contains("command document")), "{:?}", outs[0].kind);
+        let outs = sh.run("rs.status()");
+        assert!(matches!(&outs[0].kind, OutputKind::Error(e) if e.contains("NoReplicationEnabled")), "{:?}", outs[0].kind);
+
         // Cursors opened by a command, continued and killed in the following ones.
         assert_eq!(sh.text("var r = db.runCommand({ find: 'c', batchSize: 1 }); db.runCommand({ getMore: r.cursor.id, collection: 'c', batchSize: 1 }).cursor.nextBatch.length"), "1");
         assert_eq!(sh.text("var r = db.runCommand({ find: 'c', batchSize: 1 }); db.runCommand({ killCursors: 'c', cursors: [r.cursor.id] }).cursorsKilled.length"), "1");

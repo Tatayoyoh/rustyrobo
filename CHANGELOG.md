@@ -13,6 +13,7 @@
 ### Fixed
 - Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts
 - Right-to-left text reads in the right order in the tree, table and text views, and a value too long for its column keeps its start visible
+- `db.runCommand()` and `db.adminCommand()` return the reply of a refused command (`{ ok: 0, errmsg, code, codeName }`), like the mongo shell, instead of stopping the script
 - `killCursors` was refused by the driver, also when the shell closed its own cursors
 
 ### Known issues

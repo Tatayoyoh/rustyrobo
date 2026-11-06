@@ -410,6 +410,19 @@ pub async fn collect_cursor(
 
 /// Short, user-facing message for a driver error: `BadValue (2): unknown
 /// top level operator…` instead of the driver's debug dump.
+/// The reply of a command refused by the server, which the drivers turn into
+/// an error: what `db.runCommand()` returns in the mongo shell.
+pub fn command_failure(e: &anyhow::Error) -> Option<Document> {
+    let reply = |message: &str, code: i32, name: &str| bson::doc! { "ok": 0.0, "errmsg": message, "code": code, "codeName": name };
+    if let Some(me) = e.downcast_ref::<mongodb::error::Error>() {
+        let mongodb::error::ErrorKind::Command(c) = me.kind.as_ref() else { return None };
+        return Some(reply(&c.message, c.code, &c.code_name));
+    }
+    let me = e.downcast_ref::<mongodb_legacy::error::Error>()?;
+    let mongodb_legacy::error::ErrorKind::Command(c) = me.kind.as_ref() else { return None };
+    Some(reply(&c.message, c.code, &c.code_name))
+}
+
 pub fn error_message(e: &anyhow::Error) -> String {
     if let Some(me) = e.downcast_ref::<mongodb::error::Error>() {
         use mongodb::error::ErrorKind as K;

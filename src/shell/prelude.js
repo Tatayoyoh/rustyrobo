@@ -292,7 +292,25 @@ class MongoServerError extends Error {
 function __cmd(dbName, command) {
     const r = __n_cmd(dbName, JSON.stringify(__toEJ(command)));
     if (r.charCodeAt(0) === 1) throw new MongoServerError(r.substring(1));
+    if (r.charCodeAt(0) === 2) {
+        const reply = __fromEJ(JSON.parse(r.substring(1)));
+        const e = new MongoServerError(reply.codeName + " (" + reply.code + "): " + reply.errmsg);
+        e.reply = reply;
+        throw e;
+    }
     return __fromEJ(JSON.parse(r));
+}
+
+// Like the mongo shell: a command refused by the server returns { ok: 0, errmsg, ... }.
+function __runCommand(dbName, cmd, extra) {
+    if (typeof cmd === "string") { const o = {}; o[cmd] = 1; cmd = Object.assign(o, extra || {}); }
+    if (cmd === null || typeof cmd !== "object") throw new Error("runCommand: provide a command document or a command name");
+    try {
+        return __cmd(dbName, cmd);
+    } catch (e) {
+        if (e.reply) return e.reply;
+        throw e;
+    }
 }
 
 // ------------------------------------------------------------ pretty print
@@ -819,14 +837,8 @@ class DB {
     getSiblingDB(name) { return __makeDB(name); }
     getSisterDB(name) { return __makeDB(name); }
     getMongo() { return { getDB: (n) => __makeDB(n), getDBNames: () => __cmd("admin", { listDatabases: 1, nameOnly: true }).databases.map((d) => d.name), toString: () => "connection" }; }
-    runCommand(cmd, extra) {
-        if (typeof cmd === "string") { const o = {}; o[cmd] = 1; cmd = Object.assign(o, extra || {}); }
-        return __cmd(this._name, cmd);
-    }
-    adminCommand(cmd, extra) {
-        if (typeof cmd === "string") { const o = {}; o[cmd] = 1; cmd = Object.assign(o, extra || {}); }
-        return __cmd("admin", cmd);
-    }
+    runCommand(cmd, extra) { return __runCommand(this._name, cmd, extra); }
+    adminCommand(cmd, extra) { return __runCommand("admin", cmd, extra); }
     _adminCommand(cmd) { return this.adminCommand(cmd); }
     getCollectionInfos(filter, nameOnly) {
         const cmd = { listCollections: 1, filter: filter || {}, cursor: {} };
