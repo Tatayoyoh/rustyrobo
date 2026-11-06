@@ -13,7 +13,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native("rustyrobo", options, Box::new(|cc| {
         let app = rustyrobo::app::App::new(cc);
         // Here and not in `App::new`: tests must not reach the network.
-        if app.autotest.is_none() {
+        if app.autotest.is_none() && app.settings.check_updates {
             app.check_for_update();
         }
         Ok(Box::new(app))

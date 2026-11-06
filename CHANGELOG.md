@@ -12,7 +12,7 @@
 - Results: Ctrl+F finds in the tree, table and text views of the page, opening the nodes to show what it finds
 - Results: Ctrl+C copies the value under the pointer, or the selection
 - Results: Ctrl+Shift+C copies them with their names (`"name" : value`), also in the menus as "Copy Name and Value"
-- A chip in the toolbar tells when a new version is available, with its changelog, a download button and the commands to update by hand
+- A chip in the toolbar tells when a new version is available, with its changelog, a download button and the commands to update by hand; Options > "Check for updates at startup" turns it off
 - Shell: `db.collection.runCommand()` and `runReadCommand()`, `db.runReadCommand()`, `db.getMongo().runCommand()` and `adminCommand()`
 
 ### Fixed

@@ -110,6 +110,7 @@ pub enum Refresh {
 
 #[derive(Clone)]
 pub enum Action {
+    CheckForUpdate,
     ShowConnections,
     ShowFavorites,
     /// Opens a favorite script in a new shell, on its connection (connecting
@@ -335,7 +336,12 @@ impl App {
 
     fn handle_event(&mut self, ev: AppEvent) {
         match ev {
-            AppEvent::Update(Ok(found)) => self.update = found.map(Arc::new),
+            // Unless the check has been turned off in the meantime.
+            AppEvent::Update(Ok(found)) => {
+                if self.settings.check_updates {
+                    self.update = found.map(Arc::new);
+                }
+            }
             AppEvent::Update(Err(e)) => self.log(LogLevel::Info, format!("Could not check for updates: {e}")),
             // Unless the choice has changed again in the meantime.
             AppEvent::Fonts(choice, fonts) => {
@@ -837,6 +843,7 @@ impl App {
             Action::Dialog(d) => self.dialog = Some(d),
             Action::OpenFile => self.open_file(),
             Action::SaveFile { save_as } => self.save_file(save_as),
+            Action::CheckForUpdate => self.check_for_update(),
             Action::SaveSettings => {
                 if let Err(e) = self.settings.save() {
                     self.log(LogLevel::Error, format!("Cannot save settings: {e}"));

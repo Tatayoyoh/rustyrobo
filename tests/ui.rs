@@ -471,6 +471,35 @@ fn new_version_shows_a_chip_and_a_dialog() {
 }
 
 #[test]
+fn update_check_can_be_turned_off() {
+    let env = env("update-off", &AppSettings::default());
+    let mut h = app_harness();
+    assert!(h.state().settings.check_updates, "on by default");
+    h.state_mut().update = Some(std::sync::Arc::new(rustyrobo::update::Release { version: "9.9.9".into(), notes: String::new(), asset: None }));
+    h.run_steps(2);
+    assert!(h.query_all_by_label_contains("v9.9.9").next().is_some());
+
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    h.get_by_label("Check for updates at startup").click();
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("v9.9.9").next().is_none(), "the chip goes away");
+    assert!(!saved_settings(&env).check_updates, "saved");
+
+    // A check still running when the option was turned off.
+    let late = rustyrobo::update::Release { version: "9.9.9".into(), notes: String::new(), asset: None };
+    h.state().tx.send(rustyrobo::app::AppEvent::Update(Ok(Some(late)))).unwrap();
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("v9.9.9").next().is_none(), "its answer is ignored");
+}
+
+#[test]
+fn settings_without_the_update_option_keep_the_check_on() {
+    let s: AppSettings = serde_json::from_str("{}").unwrap();
+    assert!(s.check_updates);
+}
+
+#[test]
 fn f10_rotates_both_ways() {
     use rustyrobo::settings::Orientation;
     let env = env("rotate", &AppSettings::default());

@@ -219,6 +219,14 @@ fn menus(app: &mut App, ui: &mut Ui) {
             changed |= check_item(ui, &mut s.line_numbers, "Show line numbers by default");
             changed |= check_item(ui, &mut s.disable_connection_shortcuts, "Disable connection shortcuts");
             changed |= check_item(ui, &mut s.auto_exec, "Automatically execute code in new tab");
+            if check_item(ui, &mut s.check_updates, "Check for updates at startup") {
+                changed = true;
+                if s.check_updates {
+                    app.actions.push(Action::CheckForUpdate);
+                } else {
+                    app.update = None;
+                }
+            }
             if changed {
                 app.actions.push(Action::SaveSettings);
             }
