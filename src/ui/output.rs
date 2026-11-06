@@ -921,6 +921,11 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
             ui.ctx().copy_text(values.iter().filter_map(|(t, _)| t.keys.map(dotted_path)).collect::<Vec<_>>().join("\n"));
             ui.close();
         }
+        if ui.add(egui::Button::new("Copy Names and Values").shortcut_text("Ctrl+Shift+C")).clicked() {
+            let named: Vec<(&[String], &Bson)> = values.iter().filter_map(|(t, v)| Some((t.keys?, *v))).collect();
+            ui.ctx().copy_text(named_values_text(&named, cx.fmt));
+            ui.close();
+        }
         ui.separator();
     }
 
@@ -1051,6 +1056,10 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
                 }
                 if ui.button("Copy Path").clicked() {
                     ui.ctx().copy_text(dotted_path(keys));
+                    ui.close();
+                }
+                if ui.add(egui::Button::new("Copy Name and Value").shortcut_text("Ctrl+Shift+C")).clicked() {
+                    ui.ctx().copy_text(named_value(keys, v, cx.fmt));
                     ui.close();
                 }
                 ui.separator();

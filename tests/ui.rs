@@ -868,12 +868,14 @@ fn pane_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, OutputPane>
 fn copy_value_menu_shows_its_shortcut() {
     let mut h = pane_harness(vec![Bson::Document(doc! { "_id": 1, "a": "x", "b": "y" })], ViewMode::Tree);
     let menu_has = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+C")));
+    let names_shortcut = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+Shift+C")));
 
     // One row.
     h.get_by_label("x").click_secondary();
     h.run_steps(3);
     assert!(menu_has(&h, "Copy Value"));
     assert!(!menu_has(&h, "Copy Name"), "this shortcut does not copy the name");
+    assert!(names_shortcut(&h, "Copy Name and Value"));
     h.key_press(Key::Escape);
     h.run_steps(3);
 
@@ -886,6 +888,7 @@ fn copy_value_menu_shows_its_shortcut() {
     h.run_steps(3);
     assert!(menu_has(&h, "Copy Values"));
     assert!(!menu_has(&h, "Copy JSON"), "this shortcut copies the values");
+    assert!(names_shortcut(&h, "Copy Names and Values"));
 }
 
 // ------------------------------------------------------ find in the results
