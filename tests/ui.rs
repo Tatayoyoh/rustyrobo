@@ -396,6 +396,20 @@ fn keyboard_shortcuts_open_dialogs() {
 }
 
 #[test]
+fn shortcuts_dialog_lists_the_copy_shortcuts() {
+    let _env = env("shortcuts-help", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    h.state_mut().actions.push(rustyrobo::app::Action::Dialog(rustyrobo::ui::dialogs::Dialog::Shortcuts));
+    h.run_steps(3);
+    assert!(has_label(&h, "Keyboard Shortcuts"));
+    assert!(has_label(&h, "Ctrl+C"));
+    assert!(has_label(&h, "Ctrl+Shift+C"));
+}
+
+#[test]
 fn f10_rotates_both_ways() {
     use rustyrobo::settings::Orientation;
     let env = env("rotate", &AppSettings::default());

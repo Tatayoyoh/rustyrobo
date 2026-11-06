@@ -922,6 +922,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+Space", "Autocompletion"),
                         ("Ctrl+F", "Find in the editor or the results"),
                         ("Ctrl+C", "Copy the value under the pointer, or the selection"),
+                        ("Ctrl+Shift+C", "Copy them with their names"),
                         ("Ctrl+D", "Select the next occurrence"),
                         ("Del", "Delete the selected documents"),
                         ("Alt+1…9", "Connect to the n-th connection"),
