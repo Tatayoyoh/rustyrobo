@@ -1,7 +1,9 @@
 //! Result panes: tree / table / text views of documents, paging and the
 //! document context menu (view, edit, insert, delete, copy).
 
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use bson::{Bson, doc};
 use egui::{Align, FontId, Id, Layout, RichText, Ui};
@@ -13,8 +15,8 @@ use crate::settings::ViewMode;
 use crate::shell::{OutputKind, ShellOutput};
 use crate::theme::{Theme, bson_color};
 use crate::ui::dialogs::{Dialog, DocMode};
-use crate::ui::editing::{FoldedText, fold_text};
-use crate::ui::editor::FoldClick;
+use crate::ui::editing::{FoldedText, MAX_MATCHES, find_all, fold_text};
+use crate::ui::editor::{FoldClick, TextMatches};
 use crate::ui::icon;
 
 pub struct OutputPane {
@@ -35,6 +37,179 @@ pub struct OutputPane {
     columns_cache: Option<(Vec<String>, bool)>,
     skip_input: String,
     size_input: String,
+    /// The pointer was over this pane in the last frame.
+    pub pointer_over: bool,
+    find: PaneFind,
+}
+
+/// Ctrl+F in a result pane.
+#[derive(Default)]
+struct PaneFind {
+    open: bool,
+    query: String,
+    focus: bool,
+    /// Escape closes the bar, but egui drops the focus before the widgets run.
+    had_focus: bool,
+    current: usize,
+    /// Frames left to bring the current match into view: a row has to be
+    /// scrolled to before its cell can be.
+    scroll: u8,
+    /// What `hits` were computed for.
+    key: Option<(String, ViewMode, FormatOptions)>,
+    /// The page or the shown text has changed.
+    stale: bool,
+    hits: Hits,
+}
+
+/// Matches of a search, in the terms of the current view.
+#[derive(Default)]
+enum Hits {
+    #[default]
+    None,
+    Rows { list: Vec<RowHit>, by_path: HashMap<String, usize> },
+    Cells { list: Vec<(usize, String)>, by_cell: HashMap<(usize, String), usize> },
+    Text(Vec<(Range<usize>, usize)>),
+}
+
+impl Hits {
+    fn len(&self) -> usize {
+        match self {
+            Hits::None => 0,
+            Hits::Rows { list, .. } => list.len(),
+            Hits::Cells { list, .. } => list.len(),
+            Hits::Text(list) => list.len(),
+        }
+    }
+}
+
+/// A row of the tree, shown or not, whose key or value holds the query.
+struct RowHit {
+    doc: usize,
+    keys: Vec<String>,
+    path: String,
+    in_key: bool,
+    in_value: bool,
+}
+
+impl PaneFind {
+    /// Computes the hits again if needed. True when the query has changed:
+    /// then the first hit is to be shown.
+    fn update(&mut self, mode: ViewMode, fmt: FormatOptions, compute: impl FnOnce(&str) -> Hits) -> bool {
+        let same = self.key.as_ref().is_some_and(|(q, m, f)| *q == self.query && *m == mode && *f == fmt);
+        if same && !self.stale {
+            return false;
+        }
+        let query_changed = !self.key.as_ref().is_some_and(|(q, ..)| *q == self.query);
+        self.hits = compute(&self.query);
+        self.key = Some((self.query.clone(), mode, fmt));
+        self.stale = false;
+        self.current = if query_changed { 0 } else { self.current.min(self.hits.len().saturating_sub(1)) };
+        query_changed && self.hits.len() > 0
+    }
+
+    /// Highlight of a hit in a cell. Light, for the coloured value to stay
+    /// readable: the current one has an outline.
+    fn mark(&self, ui: &Ui, index: usize, theme: &Theme) {
+        let stroke = if index == self.current { egui::Stroke::new(1.5, theme.warning) } else { egui::Stroke::NONE };
+        ui.painter().rect(ui.max_rect(), 2, theme.warning.gamma_multiply(0.2), stroke, egui::StrokeKind::Inside);
+    }
+
+    fn row(&self, path: &str) -> Option<(usize, &RowHit)> {
+        let Hits::Rows { list, by_path } = &self.hits else { return None };
+        if !self.open {
+            return None;
+        }
+        by_path.get(path).map(|&i| (i, &list[i]))
+    }
+
+    fn cell(&self, doc: usize, column: &str) -> Option<usize> {
+        let Hits::Cells { by_cell, .. } = &self.hits else { return None };
+        if !self.open || by_cell.is_empty() {
+            return None;
+        }
+        by_cell.get(&(doc, column.to_string())).copied()
+    }
+}
+
+/// Rows of the tree holding `query` (not case-sensitive), expanded or not.
+fn find_rows(docs: &[Bson], query: &str, fmt: FormatOptions) -> Vec<RowHit> {
+    struct Walk<'a> {
+        needle: String,
+        fmt: FormatOptions,
+        out: Vec<RowHit>,
+        keys: Vec<Cow<'a, str>>,
+    }
+    impl<'a> Walk<'a> {
+        fn holds(&self, text: &str) -> bool {
+            text.to_lowercase().contains(&self.needle)
+        }
+
+        fn visit(&mut self, v: &'a Bson, doc: usize, in_key: bool) {
+            if self.out.len() >= MAX_MATCHES {
+                return;
+            }
+            let in_value = match v {
+                Bson::Document(_) | Bson::Array(_) => false,
+                Bson::String(s) => self.holds(s),
+                other => self.holds(&bsonfmt::short_value(other, self.fmt)),
+            };
+            if in_key || in_value {
+                let keys: Vec<String> = self.keys.iter().map(|k| k.to_string()).collect();
+                let mut path = doc.to_string();
+                for k in &keys {
+                    path.push('/');
+                    path.push_str(k);
+                }
+                self.out.push(RowHit { doc, keys, path, in_key, in_value });
+            }
+            match v {
+                Bson::Document(d) => {
+                    for (k, child) in d {
+                        let in_key = self.holds(k);
+                        self.keys.push(Cow::Borrowed(k));
+                        self.visit(child, doc, in_key);
+                        self.keys.pop();
+                    }
+                }
+                Bson::Array(a) => {
+                    for (i, child) in a.iter().enumerate() {
+                        self.keys.push(Cow::Owned(format!("[{i}]")));
+                        self.visit(child, doc, false);
+                        self.keys.pop();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut walk = Walk { needle: query.to_lowercase(), fmt, out: Vec::new(), keys: Vec::new() };
+    for (i, d) in docs.iter().enumerate() {
+        walk.visit(d, i, false);
+    }
+    walk.out
+}
+
+fn row_hits(docs: &[Bson], query: &str, fmt: FormatOptions) -> Hits {
+    let list = find_rows(docs, query, fmt);
+    let by_path = list.iter().enumerate().map(|(i, h)| (h.path.clone(), i)).collect();
+    Hits::Rows { list, by_path }
+}
+
+/// The table shows top-level values: a hit deep inside one is a hit on its cell.
+fn cell_hits(docs: &[Bson], query: &str, fmt: FormatOptions) -> Hits {
+    let mut list = Vec::new();
+    let mut by_cell = HashMap::new();
+    for h in find_rows(docs, query, fmt) {
+        let cell = (h.doc, h.keys.into_iter().next().unwrap_or_else(|| "value".to_string()));
+        by_cell.entry(cell.clone()).or_insert_with(|| {
+            list.push(cell);
+            list.len() - 1
+        });
+    }
+    Hits::Cells { list, by_cell }
 }
 
 impl OutputPane {
@@ -65,13 +240,43 @@ impl OutputPane {
             columns_cache: None,
             skip_input: skip.to_string(),
             size_input: page_size.to_string(),
+            pointer_over: false,
+            find: PaneFind::default(),
         }
     }
 
     pub fn docs(&self) -> &[Bson] {
-        match &self.output.kind {
-            OutputKind::Docs { docs, .. } => docs,
-            _ => &[],
+        docs_of(&self.output)
+    }
+
+    /// Ctrl+F: an error message has nothing to search in.
+    pub fn can_find(&self) -> bool {
+        !matches!(self.output.kind, OutputKind::Error(_))
+    }
+
+    pub fn open_find(&mut self) {
+        self.find.open = true;
+        self.find.focus = true;
+    }
+
+    pub fn find_is_open(&self) -> bool {
+        self.find.open
+    }
+
+    /// Shows the current hit: in the tree, its parents have to be expanded.
+    fn go_to_hit(&mut self) {
+        self.find.scroll = 3;
+        let Hits::Rows { list, .. } = &self.find.hits else { return };
+        let Some(hit) = list.get(self.find.current) else { return };
+        let mut path = hit.doc.to_string();
+        let mut opened = false;
+        for k in &hit.keys {
+            opened |= self.expanded.insert(path.clone());
+            path.push('/');
+            path.push_str(k);
+        }
+        if opened {
+            self.rows_cache = None;
         }
     }
 
@@ -88,6 +293,7 @@ impl OutputPane {
         self.rows_cache = None;
         self.columns_cache = None;
         self.selected.clear();
+        self.find.stale = true;
     }
 
     fn source(&self) -> Option<(String, String)> {
@@ -183,13 +389,35 @@ pub struct PaneCtx<'a> {
     pub actions: &'a mut Vec<Action>,
 }
 
+fn docs_of(output: &ShellOutput) -> &[Bson] {
+    match &output.kind {
+        OutputKind::Docs { docs, .. } => docs,
+        _ => &[],
+    }
+}
+
 pub fn show_pane(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
+    pane.pointer_over = ui.rect_contains_pointer(ui.max_rect());
     header(ui, pane, cx);
     ui.add_space(2.0);
+    if pane.find.open && pane.can_find() {
+        find_row(ui, pane, cx);
+    }
+    // A jump: the row of a far cell has to be there at once, to scroll to the cell.
+    if pane.find.scroll > 0 {
+        ui.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
+    }
     match &pane.output.kind {
         OutputKind::Text(t) => {
             let t = t.clone();
-            crate::ui::editor::code_view(ui, Id::new(("out-text", cx.tab, cx.index)), &t, cx.theme, FontId::monospace(cx.font_size));
+            let mut find = None;
+            if pane.find.open {
+                if pane.find.update(pane.mode, cx.fmt, |q| Hits::Text(find_all(&t, q))) {
+                    pane.go_to_hit();
+                }
+                find = text_matches(&pane.find);
+            }
+            crate::ui::editor::searchable_code_view(ui, Id::new(("out-text", cx.tab, cx.index)), &t, cx.theme, FontId::monospace(cx.font_size), find.as_ref());
         }
         OutputKind::Error(e) => {
             let e = e.clone();
@@ -214,6 +442,46 @@ pub fn show_pane(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 ViewMode::Text => text_view(ui, pane, cx),
             }
         }
+    }
+    if pane.find.scroll > 0 {
+        pane.find.scroll -= 1;
+        ui.ctx().request_repaint();
+    }
+}
+
+fn text_matches(find: &PaneFind) -> Option<TextMatches<'_>> {
+    let Hits::Text(matches) = &find.hits else { return None };
+    Some(TextMatches { matches, current: find.current, scroll: find.scroll > 0 })
+}
+
+/// The search bar of a pane. The tree and the table search the documents of
+/// the page; the text views search their text, in `text_view` or `show_pane`.
+fn find_row(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
+    let id = Id::new(("out-find", cx.tab, cx.index));
+    let find = &mut pane.find;
+    let escape = (find.had_focus || ui.memory(|m| m.has_focus(id))) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    let bar = crate::ui::editor::find_bar(ui, id, &mut find.query, &mut find.focus, find.hits.len(), find.current, cx.theme);
+    find.had_focus = bar.has_focus;
+    if escape || bar.close {
+        find.open = false;
+        find.had_focus = false;
+        return;
+    }
+    let mut go = false;
+    if let Some(next) = bar.step {
+        let n = find.hits.len();
+        find.current = if next { (find.current + 1) % n } else { (find.current + n - 1) % n };
+        go = true;
+    }
+    let (mode, fmt) = (pane.mode, cx.fmt);
+    let docs = docs_of(&pane.output);
+    match (&pane.output.kind, mode) {
+        (OutputKind::Docs { .. }, ViewMode::Tree) => go |= find.update(mode, fmt, |q| row_hits(docs, q, fmt)),
+        (OutputKind::Docs { .. }, ViewMode::Table) => go |= find.update(mode, fmt, |q| cell_hits(docs, q, fmt)),
+        _ => {}
+    }
+    if go {
+        pane.go_to_hit();
     }
 }
 
@@ -420,8 +688,12 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let font = FontId::proportional(cx.font_size);
     let mono = FontId::monospace(cx.font_size);
     let indent = cx.font_size * 1.2;
+    let scroll_row = match &pane.find.hits {
+        Hits::Rows { list, .. } if pane.find.open && pane.find.scroll > 0 => list.get(pane.find.current).and_then(|h| rows.iter().position(|r| r.path == h.path)),
+        _ => None,
+    };
 
-    TableBuilder::new(ui)
+    let mut table = TableBuilder::new(ui)
         .id_salt(("tree", cx.tab, cx.index))
         .striped(true)
         .resizable(true)
@@ -430,7 +702,11 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         .column(Column::initial(280.0).at_least(80.0).clip(true))
         .column(Column::initial(320.0).at_least(80.0).clip(true))
         .column(Column::remainder().at_least(70.0).clip(true))
-        .auto_shrink([false, false])
+        .auto_shrink([false, false]);
+    if let Some(row) = scroll_row {
+        table = table.scroll_to_row(row, Some(Align::Center));
+    }
+    table
         .header(row_h, |mut h| {
             for t in ["Key", "Value", "Type"] {
                 h.col(|ui| {
@@ -442,7 +718,11 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
             body.rows(row_h, rows.len(), |mut row| {
                 let r = &rows[row.index()];
                 row.set_selected(pane.selected.contains(&r.path));
+                let hit = pane.find.row(&r.path);
                 row.col(|ui| {
+                    if let Some((i, _)) = hit.filter(|(_, h)| h.in_key) {
+                        pane.find.mark(ui, i, th);
+                    }
                     ui.add_space(indent * r.depth as f32);
                     if r.container {
                         let open = pane.expanded.contains(&r.path);
@@ -457,6 +737,9 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     cell_label(ui, &r.key, &font, key_color);
                 });
                 row.col(|ui| {
+                    if let Some((i, _)) = hit.filter(|(_, h)| h.in_value) {
+                        pane.find.mark(ui, i, th);
+                    }
                     cell_label(ui, &r.value, &mono, r.color);
                 });
                 row.col(|ui| {
@@ -764,6 +1047,12 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let menu = cx_parts(cx);
     let mut menu_actions = Vec::new();
     let mut click: Option<(String, Option<egui::Modifiers>)> = None;
+    let find = &pane.find;
+    let scrolling_to = match &find.hits {
+        Hits::Cells { list, .. } if find.open && find.scroll > 0 => list.get(find.current),
+        _ => None,
+    };
+    let mut cell_to_show = None;
 
     egui::ScrollArea::horizontal().id_salt(("table-h", cx.tab, cx.index)).show(ui, |ui| {
         let mut tb = TableBuilder::new(ui)
@@ -776,6 +1065,9 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
             .column(Column::exact(44.0));
         for _ in &columns {
             tb = tb.column(Column::initial(160.0).at_least(40.0).clip(true));
+        }
+        if let Some((doc, _)) = scrolling_to {
+            tb = tb.scroll_to_row(*doc, Some(Align::Center));
         }
         tb.header(row_h, |mut h| {
             h.col(|ui| {
@@ -802,12 +1094,18 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     ui.label(RichText::new((pane.skip + i as u64 + 1).to_string()).color(th.text_weak));
                 });
                 for c in &columns {
-                    row.col(|ui| {
-                        let v = if scalar_mode { Some(d) } else { d.as_document().and_then(|doc| doc.get(c)) };
+                    let v = if scalar_mode { Some(d) } else { d.as_document().and_then(|doc| doc.get(c)) };
+                    let (rect, _) = row.col(|ui| {
+                        if let Some(hit) = find.cell(i, c) {
+                            find.mark(ui, hit, th);
+                        }
                         if let Some(v) = v {
                             cell_label(ui, &bsonfmt::short_value(v, fmt), &mono, bson_color(th, v));
                         }
                     });
+                    if scrolling_to.is_some_and(|(doc, column)| *doc == i && column == c) {
+                        cell_to_show = Some(rect);
+                    }
                 }
                 let resp = row.response();
                 if resp.clicked() {
@@ -826,6 +1124,10 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 });
             });
         });
+        // Out of the table: its own scroll area would swallow the request.
+        if let Some(rect) = cell_to_show {
+            ui.scroll_to_rect(rect, None);
+        }
     });
     match click {
         Some((path, Some(mods))) => {
@@ -873,7 +1175,11 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     }
     let Some((_, text)) = &pane.text_cache else { return };
     let view = pane.fold_cache.get_or_insert_with(|| fold_text(text, &pane.folded));
-    let click = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size));
+    if pane.find.open && pane.find.update(pane.mode, fmt, |q| Hits::Text(find_all(&view.text, q))) {
+        pane.find.scroll = 3;
+    }
+    let find = if pane.find.open { text_matches(&pane.find) } else { None };
+    let click = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size), find.as_ref());
     match click {
         Some(FoldClick::Toggle(row)) => {
             let line = view.lines[row];
@@ -886,6 +1192,7 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         None => return,
     }
     pane.fold_cache = None;
+    pane.find.stale = true;
 }
 
 #[cfg(test)]
@@ -909,6 +1216,87 @@ mod tests {
             50,
             true,
         )
+    }
+
+    fn paths(hits: &[RowHit]) -> Vec<&str> {
+        hits.iter().map(|h| h.path.as_str()).collect()
+    }
+
+    #[test]
+    fn find_rows_searches_keys_and_values_everywhere() {
+        let fmt = FormatOptions::default();
+        let docs = vec![
+            Bson::Document(doc! { "_id": 1, "name": "Ada LOVELACE", "tags": ["math", { "name": "x" }], "age": 36 }),
+            Bson::Document(doc! { "_id": 2, "deep": { "deeper": { "NAME": "love" } } }),
+        ];
+        let hits = find_rows(&docs, "love", fmt);
+        assert_eq!(paths(&hits), ["0/name", "1/deep/deeper/NAME"], "not case-sensitive, collapsed rows too");
+        assert_eq!((hits[0].in_key, hits[0].in_value), (false, true));
+        assert_eq!(hits[1].keys, ["deep", "deeper", "NAME"]);
+
+        let hits = find_rows(&docs, "name", fmt);
+        assert_eq!(paths(&hits), ["0/name", "0/tags/[1]/name", "1/deep/deeper/NAME"]);
+        assert_eq!((hits[0].in_key, hits[0].in_value), (true, false));
+
+        // Numbers as shown, and a value that is also in its key.
+        assert_eq!(paths(&find_rows(&docs, "36", fmt)), ["0/age"]);
+        // Not the position of an array element.
+        assert!(find_rows(&[Bson::Document(doc! { "a": ["x"] })], "0", fmt).is_empty());
+        // Not the summary of a container.
+        assert!(find_rows(&docs, "elements", fmt).is_empty());
+        assert!(find_rows(&docs, "", fmt).is_empty());
+        // Results that are not documents.
+        assert_eq!(paths(&find_rows(&[Bson::String("Plain".into())], "plain", fmt)), ["0"]);
+        // A long string is searched beyond what the view shows.
+        let long = format!("{}needle", "x".repeat(1000));
+        assert_eq!(paths(&find_rows(&[Bson::Document(doc! { "s": long })], "needle", fmt)), ["0/s"]);
+    }
+
+    #[test]
+    fn find_rows_stops_at_the_limit() {
+        let docs: Vec<Bson> = (0..MAX_MATCHES + 50).map(|i| Bson::Document(doc! { "i": i as i64 })).collect();
+        assert_eq!(find_rows(&docs, "i", FormatOptions::default()).len(), MAX_MATCHES);
+    }
+
+    #[test]
+    fn table_hits_are_cells_of_top_level_values() {
+        let docs = vec![Bson::Document(doc! { "a": { "x": "hit", "y": "hit" }, "b": "hit", "c": "no" }), Bson::Int32(7)];
+        let Hits::Cells { list, by_cell } = cell_hits(&docs, "hit", FormatOptions::default()) else { panic!() };
+        assert_eq!(list, [(0, "a".to_string()), (0, "b".to_string())], "one hit per cell");
+        assert_eq!(by_cell[&(0, "b".to_string())], 1);
+        let Hits::Cells { list, .. } = cell_hits(&docs, "7", FormatOptions::default()) else { panic!() };
+        assert_eq!(list, [(1, "value".to_string())]);
+    }
+
+    #[test]
+    fn going_to_a_hit_opens_its_parents_only() {
+        let mut p = pane(vec![Bson::Document(doc! { "a": { "b": { "c": "hit" } }, "z": { "y": 1 } })], None);
+        p.find.hits = row_hits(p.docs(), "hit", FormatOptions::default());
+        p.rows_cache = Some((FormatOptions::default(), "x", Vec::new()));
+        p.expanded.clear();
+        p.go_to_hit();
+        assert_eq!(p.expanded, HashSet::from(["0".to_string(), "0/a".to_string(), "0/a/b".to_string()]));
+        assert!(p.rows_cache.is_none(), "the rows change");
+        assert_eq!(p.find.scroll, 3);
+        p.rows_cache = Some((FormatOptions::default(), "x", Vec::new()));
+        p.go_to_hit();
+        assert!(p.rows_cache.is_some(), "already open: nothing changes");
+    }
+
+    #[test]
+    fn find_update_keeps_the_position_unless_the_query_changes() {
+        let fmt = FormatOptions::default();
+        let docs = [Bson::Document(doc! { "a": "x", "b": "x", "c": "x" })];
+        let mut f = PaneFind { query: "x".into(), ..Default::default() };
+        assert!(f.update(ViewMode::Tree, fmt, |q| row_hits(&docs, q, fmt)), "new query");
+        assert_eq!(f.hits.len(), 3);
+        f.current = 2;
+        assert!(!f.update(ViewMode::Tree, fmt, |_| panic!("cached")));
+        f.stale = true;
+        assert!(!f.update(ViewMode::Tree, fmt, |q| row_hits(&docs[..0], q, fmt)), "same query, other page");
+        assert_eq!(f.current, 0, "fewer hits");
+        f.query = "nothing".into();
+        assert!(!f.update(ViewMode::Tree, fmt, |q| row_hits(&docs, q, fmt)), "nothing to show");
     }
 
     #[test]

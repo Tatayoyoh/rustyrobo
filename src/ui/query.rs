@@ -45,6 +45,9 @@ pub struct QueryTab {
     /// Variables declared by the scripts, as of the last execution.
     pub vars: Vec<TabVar>,
     focus_editor: bool,
+    /// Keys went to the editor since the pointer last moved: resting on the
+    /// results, the pointer does not take Ctrl+F from the editor.
+    pub typing: bool,
 }
 
 /// A variable declared by a shell's scripts.
@@ -81,6 +84,7 @@ impl QueryTab {
             keep_vars: false,
             vars: Vec::new(),
             focus_editor: true,
+            typing: false,
         }
     }
 }
@@ -150,7 +154,24 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         AutocompletionMode::NoCollectionNames => CompletionMode::NoCollectionNames,
         AutocompletionMode::None => CompletionMode::Off,
     };
+    let modal_open = app.dialog.is_some() || app.conn_list.is_some() || app.conn_editor.is_some() || app.favorites.is_some();
     let tab = &mut app.tabs[idx];
+    // Ctrl+F applies to the results under the pointer, before the editor sees
+    // it. The pointer of the last frame says which ones.
+    if ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_pressed()) {
+        tab.typing = false;
+    }
+    if !modal_open
+        && !tab.typing
+        && let Some(pane) = tab.outputs.iter_mut().find(|o| o.pointer_over && o.can_find())
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+    {
+        pane.open_find();
+    }
+    for pane in &mut tab.outputs {
+        pane.pointer_over = false;
+    }
+    let keys_pressed = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. })));
     // Favorite star: None when not a favorite, else whether it is up to date.
     let favorite = tab.favorite.and_then(|id| app.settings.favorites.iter().find(|f| f.id == id)).map(|f| f.script == tab.script && f.db == tab.db);
     let mut star_clicked = false;
@@ -251,6 +272,9 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
             if r.changed {
                 tab.dirty = true;
             }
+            if r.has_focus && keys_pressed {
+                tab.typing = true;
+            }
             if let Some(coll) = r.want_fields {
                 want_fields = Some((tab.server, tab.db.clone(), coll));
             }
@@ -334,9 +358,20 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
+    // Ctrl+F away from the results: the last clicked result pane, unless a
+    // text field or a dialog takes the keys.
+    if !modal_open && !ui.ctx().egui_wants_keyboard_input() {
+        let tab = &mut app.tabs[idx];
+        let shown = if tabbed && tab.outputs.len() > 1 { Some(tab.result_tab.min(tab.outputs.len() - 1)) } else { None };
+        let pane = tab.outputs.iter_mut().enumerate().filter(|(i, o)| o.can_find() && shown.is_none_or(|s| s == *i)).rev().max_by_key(|(_, o)| o.selected.touched);
+        if let Some((_, pane)) = pane
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+        {
+            pane.open_find();
+        }
+    }
     // Delete key: the selected documents of the last clicked result pane,
     // unless a text field or a dialog takes the keys.
-    let modal_open = app.dialog.is_some() || app.conn_list.is_some() || app.conn_editor.is_some() || app.favorites.is_some();
     if !modal_open && !ui.ctx().egui_wants_keyboard_input() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) {
         let tab = &app.tabs[idx];
         let pane = tab.outputs.iter().filter(|o| !o.selected.is_empty()).max_by_key(|o| o.selected.touched);

@@ -1012,13 +1012,14 @@ pub struct FindBar {
 }
 
 /// Search bar: a query, buttons to go through its `matches` and their count.
-/// `focus` asks to give it the focus.
+/// `focus` asks to give it the focus, with the query selected to replace it.
 pub fn find_bar(ui: &mut Ui, id: Id, query: &mut String, focus: &mut bool, matches: usize, current: usize, theme: &Theme) -> FindBar {
     let mut bar = FindBar { has_focus: false, step: None, close: false };
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(query).id(id).hint_text("Find").desired_width(220.0));
         if std::mem::take(focus) {
             r.request_focus();
+            set_selection(ui.ctx(), id, (0, query.chars().count()));
         }
         bar.has_focus = r.has_focus();
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
@@ -1065,14 +1066,27 @@ fn match_shapes(ui: &Ui, output: &egui::text_edit::TextEditOutput, matches: &[(R
         .collect()
 }
 
+/// Search matches to show in a read-only text view.
+pub struct TextMatches<'a> {
+    pub matches: &'a [(Range<usize>, usize)],
+    pub current: usize,
+    /// Bring the current match into view.
+    pub scroll: bool,
+}
+
 /// Read-only highlighted text block (results text view, function viewer).
 pub fn code_view(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) {
+    searchable_code_view(ui, id, text, theme, font, None);
+}
+
+/// [`code_view`] showing search matches.
+pub fn searchable_code_view(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>) {
     egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
-        read_only_text(ui, id, text, theme, font);
+        read_only_text(ui, id, text, theme, font, find);
     });
 }
 
-fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) -> egui::text_edit::TextEditOutput {
+fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>) -> egui::text_edit::TextEditOutput {
     // `&str` is a read-only TextBuffer: no copy of the (possibly large) text.
     let mut view: &str = text;
     let theme_copy = *theme;
@@ -1081,13 +1095,23 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId) 
         let job = ui.ctx().memory_mut(|m| m.caches.cache::<Cache>().get((&font, theme_copy.name, buf.as_str())).clone());
         ui.fonts_mut(|f| f.layout_job(job))
     };
-    egui::TextEdit::multiline(&mut view)
+    let highlights = ui.painter().add(egui::Shape::Noop);
+    let output = egui::TextEdit::multiline(&mut view)
         .id(id.with("t"))
         .code_editor()
         .desired_width(f32::INFINITY)
         .frame(egui::Frame::NONE)
         .layouter(&mut layouter)
-        .show(ui)
+        .show(ui);
+    if let Some(find) = find {
+        ui.painter().set(highlights, egui::Shape::Vec(match_shapes(ui, &output, find.matches, find.current, theme)));
+        if find.scroll
+            && let Some(rect) = find.matches.get(find.current).and_then(|m| text_span(&output, &m.0))
+        {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        }
+    }
+    output
 }
 
 /// What the user did in a fold gutter.
@@ -1140,7 +1164,7 @@ fn fold_gutter(ui: &Ui, rect: egui::Rect, resp: &egui::Response, out: &egui::tex
 
 /// [`code_view`] with a fold gutter: `marks[i]` is `Some(folded)` when line
 /// `i` opens a block. Only the visible markers are painted.
-pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId) -> Option<FoldClick> {
+pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>) -> Option<FoldClick> {
     let mut click = None;
     let row_height = ui.fonts_mut(|f| f.row_height(&font));
     egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
@@ -1148,7 +1172,7 @@ pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>]
             ui.spacing_mut().item_spacing.x = 2.0;
             let size = egui::vec2(row_height, row_height * marks.len().max(1) as f32);
             let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-            let out = read_only_text(ui, id, text, theme, font.clone());
+            let out = read_only_text(ui, id, text, theme, font.clone(), find);
             click = fold_gutter(ui, rect, &resp, &out, marks, theme, &font);
         });
     });

@@ -920,7 +920,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+O / Ctrl+S", "Open / save script"),
                         ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
                         ("Ctrl+Space", "Autocompletion"),
-                        ("Ctrl+F", "Find in the editor"),
+                        ("Ctrl+F", "Find in the editor or the results"),
                         ("Ctrl+D", "Select the next occurrence"),
                         ("Del", "Delete the selected documents"),
                         ("Alt+1…9", "Connect to the n-th connection"),

@@ -88,6 +88,8 @@ Key design rules:
   pieces in visual order, each in its own section (`LayoutJob::append` would merge them). Editors keep
   the logical order: right-to-left sentences read in reverse there, and cursors are off on these rows
   (emilk/egui#8576). Check both when upgrading egui: native bidi would make `bidi.rs` double-reverse.
+- A `ScrollArea` takes the scroll requests of both axes: `scroll_to_rect` in a table cell never reaches the horizontal scroll
+  area around the table. Ask once the table is finished.
 - egui's "strong" text colour is `widgets.active.fg_stroke`: keep it equal to the theme text colour.
 - A vertical `Separator` inside `horizontal_top` takes the whole available height: give it a size.
 - In `prelude.js`, top-level `class X` creates a global lexical binding that shadows

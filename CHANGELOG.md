@@ -9,6 +9,7 @@
 - Preferences: Up and Down select the previous and next item of the focused list
 - Preferences: "Reset to Default" button
 - View > Theme: a theme shows when hovered, and is kept when clicked
+- Results: Ctrl+F finds in the tree, table and text views of the page, opening the nodes to show what it finds
 - Shell: `db.collection.runCommand()` and `runReadCommand()`, `db.runReadCommand()`, `db.getMongo().runCommand()` and `adminCommand()`
 
 ### Fixed
@@ -18,6 +19,7 @@
 - `killCursors` was refused by the driver, also when the shell closed its own cursors
 
 ### Known issues
+- Text views: on right-to-left lines, the highlight of a search match can be misplaced
 - Editors (scripts, documents): right-to-left sentences show their words in reverse order and the
   cursor is off on these rows, which comes from egui (emilk/egui#1016, emilk/egui#8576)
 

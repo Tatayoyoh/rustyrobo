@@ -864,6 +864,138 @@ fn pane_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, OutputPane>
     h
 }
 
+// ------------------------------------------------------ find in the results
+
+/// Opens the search of the pane and types a query.
+fn find_in_pane(h: &mut Harness<'_, OutputPane>, query: &str) {
+    h.state_mut().open_find();
+    h.run_steps(2);
+    h.event(egui::Event::Text(query.into()));
+    h.run_steps(5);
+}
+
+fn pane_has_label(h: &Harness<'_, OutputPane>, text: &str) -> bool {
+    h.query_all_by_label(text).next().is_some()
+}
+
+#[test]
+fn find_goes_through_the_tree_and_opens_what_it_finds() {
+    let docs = vec![
+        Bson::Document(doc! { "_id": 1, "name": "Ada" }),
+        Bson::Document(doc! { "_id": 2, "profile": { "address": { "city": "Paris" } } }),
+        Bson::Document(doc! { "_id": 3, "city": "paris" }),
+    ];
+    let mut h = pane_harness(docs, ViewMode::Tree);
+    assert!(!pane_has_label(&h, "Paris"), "collapsed");
+
+    find_in_pane(&mut h, "pari");
+    assert!(pane_has_label(&h, "1 of 2"));
+    assert!(pane_has_label(&h, "Paris"), "its parents are open");
+
+    h.key_press(Key::Enter);
+    h.run_steps(5);
+    assert!(pane_has_label(&h, "2 of 2"));
+    assert!(pane_has_label(&h, "paris"), "the next one is open");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "1 of 2"), "back to the first");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "2 of 2"), "backwards");
+
+    // The focus stays in the bar: typing goes on.
+    h.event(egui::Event::Text("s".into()));
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "1 of 2"), "the query changed: back to the first");
+
+    h.event(egui::Event::Text("zzz".into()));
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "No results"));
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().find_is_open());
+    assert!(!pane_has_label(&h, "No results"));
+}
+
+#[test]
+fn find_scrolls_to_a_hit_far_down_the_tree() {
+    let docs: Vec<Bson> = (0..300).map(|i| Bson::Document(doc! { "_id": i, "s": if i == 290 { "needle" } else { "hay" } })).collect();
+    let mut h = pane_harness(docs, ViewMode::Tree);
+    assert!(!pane_has_label(&h, "needle"));
+    find_in_pane(&mut h, "needle");
+    assert!(pane_has_label(&h, "1 of 1"));
+    let row = h.get_by_label("needle").rect();
+    assert!((100.0..300.0).contains(&row.center().y), "not in the middle of the view: {row:?}");
+}
+
+#[test]
+fn find_scrolls_to_a_cell_far_away_in_the_table() {
+    let mut far = doc! { "_id": 299 };
+    for c in 0..40 {
+        far.insert(format!("c{c}"), if c == 39 { "needle" } else { "hay" });
+    }
+    let mut docs: Vec<Bson> = (0..299).map(|i| Bson::Document(doc! { "_id": i, "c0": "hay" })).collect();
+    docs.push(Bson::Document(far));
+    let mut h = pane_harness(docs, ViewMode::Table);
+    find_in_pane(&mut h, "needle");
+    assert!(pane_has_label(&h, "1 of 1"));
+    let cell = h.get_by_label("needle").rect();
+    assert!(cell.left() >= 0.0 && cell.right() <= 1000.0 && cell.top() > 0.0 && cell.bottom() < 400.0, "not in view: {cell:?}");
+}
+
+#[test]
+fn find_in_the_table_counts_cells_and_follows_the_view() {
+    let docs = vec![Bson::Document(doc! { "a": { "x": "hit", "y": "hit" }, "b": "hit" })];
+    let mut h = pane_harness(docs, ViewMode::Table);
+    find_in_pane(&mut h, "hit");
+    assert!(pane_has_label(&h, "1 of 2"), "two cells");
+    // Other views count what they show.
+    h.state_mut().mode = ViewMode::Tree;
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "1 of 3"), "three rows");
+    h.state_mut().mode = ViewMode::Text;
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "1 of 3"), "three occurrences");
+}
+
+#[test]
+fn find_in_the_text_views() {
+    let mut h = pane_harness(vec![Bson::Document(doc! { "a": "needle", "b": "Needle" })], ViewMode::Text);
+    find_in_pane(&mut h, "needle");
+    assert!(pane_has_label(&h, "1 of 2"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "2 of 2"));
+
+    // The output of print().
+    let output = ShellOutput { statement: "print()".into(), line: 1, kind: OutputKind::Text("one\ntwo\none".into()), elapsed: Duration::ZERO };
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
+        |ui, pane: &mut OutputPane| {
+            let mut actions = Vec::new();
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions::default(), font_size: 13.0, actions: &mut actions };
+            show_pane(ui, pane, &mut cx);
+        },
+        OutputPane::new(output, ViewMode::Tree, 50, true),
+    );
+    h.run_steps(3);
+    find_in_pane(&mut h, "one");
+    assert!(pane_has_label(&h, "1 of 2"));
+}
+
+#[test]
+fn find_follows_the_pages_and_errors_have_none() {
+    let mut h = pane_harness(vec![Bson::Document(doc! { "a": "hit" })], ViewMode::Tree);
+    find_in_pane(&mut h, "hit");
+    assert!(pane_has_label(&h, "1 of 1"));
+    h.state_mut().set_page(vec![Bson::Document(doc! { "a": "hit", "b": "hit" })], 50);
+    h.run_steps(3);
+    assert!(pane_has_label(&h, "1 of 2"), "the bar stays, on the new page");
+
+    let error = ShellOutput { statement: "x".into(), line: 1, kind: OutputKind::Error("boom".into()), elapsed: Duration::ZERO };
+    assert!(!OutputPane::new(error, ViewMode::Tree, 50, true).can_find());
+}
+
 #[test]
 fn rtl_results_read_from_right_to_left() {
     // Labels hold the text in visual order: the last word first.

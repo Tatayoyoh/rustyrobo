@@ -915,6 +915,8 @@ impl App {
 
     fn execute(&mut self, tab_id: u64) {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else { return };
+        // The results are next to look at.
+        tab.typing = false;
         let script = tab.selection.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| tab.script.clone());
         if script.trim().is_empty() {
             return;
