@@ -111,6 +111,7 @@ pub enum Refresh {
 #[derive(Clone)]
 pub enum Action {
     CheckForUpdate,
+    InstallUpdate(Arc<crate::update::Release>),
     ShowConnections,
     ShowFavorites,
     /// Opens a favorite script in a new shell, on its connection (connecting
@@ -163,6 +164,8 @@ pub enum AppEvent {
     TestDone(u64, Result<String, String>),
     Fonts(FontChoice, FontDefinitions),
     Update(Result<Option<crate::update::Release>, String>),
+    UpdateProgress(u64, Option<u64>),
+    UpdateInstalled(Result<(), String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -208,6 +211,10 @@ pub struct App {
     pub autotest: Option<crate::autotest::AutoTest>,
     /// Newer version found on GitHub.
     pub update: Option<Arc<crate::update::Release>>,
+    pub install: crate::update::Install,
+    /// The program an update replaces and restarts. Read at startup: once
+    /// replaced, the system may no longer tell the path of the running one.
+    pub update_target: Option<PathBuf>,
     pub logo: Option<egui::TextureHandle>,
     /// Sampled field names for query completion: (server, db) → collection → fields.
     pub fields: std::collections::HashMap<(u64, String), std::collections::HashMap<String, Vec<String>>>,
@@ -255,6 +262,8 @@ impl App {
             fullscreen: false,
             autotest: crate::autotest::AutoTest::from_env(),
             update: None,
+            install: Default::default(),
+            update_target: std::env::current_exe().and_then(std::fs::canonicalize).ok(),
             logo: crate::assets::logo_texture(&cc.egui_ctx),
             fields: Default::default(),
         };
@@ -321,9 +330,51 @@ impl App {
     }
 
     /// Looks for a new version in the background. Being offline is no error
-    /// worth a message in the status bar: it only goes to the logs.
+    /// worth a message in the status bar: it only goes to the logs. In a thread
+    /// of its own, since dropping the runtime waits for its blocking tasks.
     pub fn check_for_update(&self) {
-        self.spawn(async { AppEvent::Update(tokio::task::spawn_blocking(crate::update::check).await.unwrap_or_else(|e| Err(e.to_string()))) });
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(AppEvent::Update(crate::update::check()));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Nothing comes back from an installation once cancelled.
+    fn install_update(&mut self, release: Arc<crate::update::Release>) {
+        let Some(exe) = self.update_target.clone() else { return };
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.install = crate::update::Install::Running { done: 0, total: None, cancel: Arc::clone(&cancel) };
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let send = |ev| {
+                if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = tx.send(ev);
+                    ctx.request_repaint();
+                }
+            };
+            let result = crate::update::install(&release, &exe, &cancel, |done, total| send(AppEvent::UpdateProgress(done, total)));
+            send(AppEvent::UpdateInstalled(result));
+        });
+    }
+
+    /// When the update dialog closes.
+    pub fn cancel_install(&mut self) {
+        if let crate::update::Install::Running { cancel, .. } = &self.install {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.install = crate::update::Install::Idle;
+    }
+
+    /// Starts the new program and closes this one.
+    fn restart(&mut self) {
+        let started = self.update_target.as_ref().ok_or_else(|| "unknown path".to_string()).and_then(|exe| {
+            std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn().map_err(|e| e.to_string())
+        });
+        match started {
+            Ok(_) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(e) => self.install = crate::update::Install::Failed(format!("Updated, but could not restart: {e}. Restart Rustyrobo to use the new version.")),
+        }
     }
 
     // ------------------------------------------------------------ events
@@ -343,6 +394,16 @@ impl App {
                 }
             }
             AppEvent::Update(Err(e)) => self.log(LogLevel::Info, format!("Could not check for updates: {e}")),
+            AppEvent::UpdateProgress(new_done, new_total) => {
+                if let crate::update::Install::Running { done, total, .. } = &mut self.install {
+                    (*done, *total) = (new_done, new_total);
+                }
+            }
+            AppEvent::UpdateInstalled(Ok(())) => self.restart(),
+            AppEvent::UpdateInstalled(Err(e)) => {
+                self.log(LogLevel::Info, format!("Could not install the update: {e}"));
+                self.install = crate::update::Install::Failed(e);
+            }
             // Unless the choice has changed again in the meantime.
             AppEvent::Fonts(choice, fonts) => {
                 if choice == self.settings.fonts && self.fonts_applied.as_ref() != Some(&choice) {
@@ -844,6 +905,7 @@ impl App {
             Action::OpenFile => self.open_file(),
             Action::SaveFile { save_as } => self.save_file(save_as),
             Action::CheckForUpdate => self.check_for_update(),
+            Action::InstallUpdate(release) => self.install_update(release),
             Action::SaveSettings => {
                 if let Err(e) = self.settings.save() {
                     self.log(LogLevel::Error, format!("Cannot save settings: {e}"));
@@ -1239,6 +1301,7 @@ impl eframe::App for App {
             original.apply(&mut self.settings, &mut Vec::new());
         }
         let _ = self.settings.save();
+        self.cancel_install();
         let _guard = self.rt.enter();
         for s in &self.servers {
             if let Some(c) = s.conn() {

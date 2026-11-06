@@ -45,7 +45,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Improved document view/edit modal
 - Field-name and operator autocompletion
 - Find in the results (Ctrl+F), copy the value under the pointer (Ctrl+C) or with its name (Ctrl+Shift+C)
-- Tells when a new version is available (asks GitHub for the latest release at startup; can be turned off in Options)
+- Updates itself: tells when a new version is available (asks GitHub for the latest release at startup; can be turned off in Options)
 - Real colour themes
 - All languages: uses the fonts of your system, with right-to-left text in the results
 - Native single binary, light on resources

@@ -461,13 +461,112 @@ fn new_version_shows_a_chip_and_a_dialog() {
     assert!(!has_label(&h, "New version 9.9.9"));
     assert!(opened_url(&h).is_none());
 
-    // Download: the file for this system, in the browser.
+    // The link: the file for this system, in the browser, and the dialog stays.
     open(&mut h);
-    h.get_by_label_contains("Download update").click();
+    h.get_by_label("Download 9.9.9 binary").click();
     h.step();
     assert_eq!(opened_url(&h).as_deref(), Some("https://github.com/Tatayoyoh/rustyrobo/releases/download/v9.9.9/rustyrobo-v9.9.9-linux-x86_64.tar.gz"));
     h.run_steps(3);
+    assert!(has_label(&h, "New version 9.9.9"));
+}
+
+fn update_dialog(h: &mut Harness<'_, App>, asset: Option<&str>) {
+    let release = std::sync::Arc::new(rustyrobo::update::Release { version: "9.9.9".into(), notes: String::new(), asset: asset.map(String::from) });
+    h.state_mut().update = Some(release.clone());
+    h.state_mut().actions.push(rustyrobo::app::Action::Dialog(rustyrobo::ui::dialogs::Dialog::update(release)));
+    h.run_steps(4);
+}
+
+fn install_button(h: &Harness<'_, App>) -> bool {
+    !h.get_by_label_contains("Download update and restart").accesskit_node().is_disabled()
+}
+
+#[test]
+fn update_installation_shows_its_progress_and_can_be_cancelled() {
+    use rustyrobo::app::AppEvent;
+    use rustyrobo::update::Install;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _env = env("update-install", &AppSettings::default());
+    let mut h = app_harness();
+    update_dialog(&mut h, Some("file.tar.gz"));
+    assert!(install_button(&h));
+
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    h.state_mut().install = Install::Running { done: 0, total: None, cancel: cancel.clone() };
+    h.step();
+    assert!(!install_button(&h), "only one at a time");
+    assert!(h.query_all_by_label_contains("Downloading…").next().is_some());
+    h.state().tx.send(AppEvent::UpdateProgress(50, Some(200))).unwrap();
+    h.run_steps(2);
+    assert!(h.query_all_by_label_contains("25%").next().is_some());
+    h.state().tx.send(AppEvent::UpdateProgress(200, Some(200))).unwrap();
+    h.run_steps(2);
+    assert!(h.query_all_by_label_contains("Installing…").next().is_some());
+
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(cancel.load(Ordering::Relaxed), "the download stops");
+    assert!(matches!(h.state().install, Install::Idle));
     assert!(!has_label(&h, "New version 9.9.9"));
+
+    // A failure is shown, and can be retried. It goes away with the dialog.
+    update_dialog(&mut h, Some("file.tar.gz"));
+    h.state_mut().install = Install::Running { done: 0, total: None, cancel };
+    h.state().tx.send(AppEvent::UpdateInstalled(Err("Wrong checksum".into()))).unwrap();
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("Wrong checksum").next().is_some());
+    assert!(install_button(&h));
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().install, Install::Idle));
+}
+
+#[test]
+fn update_needs_a_file_for_this_system() {
+    let _env = env("update-no-file", &AppSettings::default());
+    let mut h = app_harness();
+    update_dialog(&mut h, None);
+    assert!(!install_button(&h));
+    assert!(h.query_all_by_label_contains("cannot update by itself").next().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_update_restarts_the_program() {
+    let _env = env("update-restart", &AppSettings::default());
+    let mut h = app_harness();
+    h.state_mut().update_target = Some("/usr/bin/env".into());
+    h.state().tx.send(rustyrobo::app::AppEvent::UpdateInstalled(Ok(()))).unwrap();
+    h.step();
+    let closing = h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::Close));
+    assert!(closing, "the new program is started, this one closes");
+
+    // The program cannot start: the update is done all the same.
+    let mut h = app_harness();
+    h.state_mut().update_target = Some("/no/such/program".into());
+    update_dialog(&mut h, Some("file.tar.gz"));
+    h.state().tx.send(rustyrobo::app::AppEvent::UpdateInstalled(Ok(()))).unwrap();
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("could not restart").next().is_some());
+}
+
+#[test]
+fn live_failed_update_leaves_the_program_alone() {
+    if !live() {
+        return;
+    }
+    let env = env("update-404", &AppSettings::default());
+    let mut h = app_harness();
+    let target = env.dir.join("rustyrobo");
+    std::fs::write(&target, "the program").unwrap();
+    h.state_mut().update_target = Some(target.clone());
+    update_dialog(&mut h, Some("no-such-file.tar.gz"));
+    h.get_by_label_contains("Download update and restart").click();
+    wait_until(&mut h, "failure", Duration::from_secs(30), |h| matches!(h.state().install, rustyrobo::update::Install::Failed(_)));
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("Cannot download the update").next().is_some());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "the program");
+    assert_eq!(std::fs::read_dir(&env.dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with(".rustyrobo-update")).count(), 0, "no leftovers");
 }
 
 #[test]

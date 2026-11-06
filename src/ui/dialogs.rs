@@ -14,7 +14,7 @@ use crate::mongo::ConnectSecrets;
 use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, SshAuthMethod};
 use crate::shell::parse_shell_value;
 use crate::ui::icon;
-use crate::update::{Os, Release};
+use crate::update::{Install, Os, Release};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocMode {
@@ -922,6 +922,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 title(ui, &format!("New version {}", release.version));
                 read_only_text(ui, "update-notes", &release.notes, egui::TextStyle::Body, 220.0, &theme);
                 ui.hyperlink_to("Full changelog", release.changelog_url());
+                ui.hyperlink_to(format!("Download {} binary", release.version), release.download_url());
                 ui.add_space(4.0);
                 let manual = egui::CollapsingHeader::new("Update manually").open(Some(*commands_open)).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -938,11 +939,35 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 if manual.header_response.clicked() {
                     *commands_open = !*commands_open;
                 }
-                let (download, cancel) = buttons(ui, &format!("{} Download update", icon::DOWNLOAD_SIMPLE), true);
-                if download {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(release.download_url()));
+                ui.add_space(4.0);
+                let mut running = false;
+                match &app.install {
+                    Install::Idle => {}
+                    Install::Failed(e) => error_line(ui, &theme, &Some(e.clone())),
+                    Install::Running { done, total, .. } => {
+                        running = true;
+                        let bar = match total {
+                            Some(t) if done >= t => egui::ProgressBar::new(1.0).text("Installing…"),
+                            Some(t) if *t > 0 => {
+                                let part = *done as f32 / *t as f32;
+                                egui::ProgressBar::new(part).text(format!("Downloading… {:.0}%", part * 100.0))
+                            }
+                            _ => egui::ProgressBar::new(0.0).text("Downloading…").animate(true),
+                        };
+                        ui.add(bar);
+                    }
                 }
-                if download || cancel { Outcome::Close } else { Outcome::Keep }
+                let possible = release.asset.is_some() && app.update_target.is_some();
+                if !possible {
+                    ui.label(RichText::new("This system cannot update by itself: download the update or use the commands.").color(theme.text_weak));
+                } else if !app.tabs.is_empty() {
+                    ui.label(RichText::new("Restarting closes the shells: unsaved scripts are lost, running ones are stopped.").color(theme.warning));
+                }
+                let (install, cancel) = buttons(ui, &format!("{} Download update and restart", icon::DOWNLOAD_SIMPLE), possible && !running);
+                if install {
+                    actions.push(Action::InstallUpdate(Arc::clone(release)));
+                }
+                if cancel { Outcome::Close } else { Outcome::Keep }
             }
             Dialog::Shortcuts => {
                 title(ui, "Keyboard Shortcuts");
@@ -989,6 +1014,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let close = matches!(resp.inner, Outcome::Close) || resp.should_close();
     if close && let Dialog::Preferences { original, .. } = &dlg {
         original.apply(&mut app.settings, &mut actions);
+    }
+    if close && matches!(dlg, Dialog::Update { .. }) {
+        app.cancel_install();
     }
     if !close && app.dialog.is_none() {
         app.dialog = Some(dlg);

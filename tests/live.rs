@@ -618,3 +618,57 @@ fn latest_release_on_github_is_understood() {
     }
     rustyrobo::update::check().expect("reply of GitHub");
 }
+
+/// Real files of a published release, whatever the system running the test:
+/// the layout of the archives is what matters.
+fn install_published(asset: &str, exe: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rustyrobo-install-{asset}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let exe = dir.join(exe);
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, "old program").unwrap();
+    let release = rustyrobo::update::Release { version: "1.2.0".into(), notes: String::new(), asset: Some(asset.into()) };
+    let mut last = (0, None);
+    rustyrobo::update::install(&release, &exe, &std::sync::atomic::AtomicBool::new(false), |done, total| last = (done, total)).expect("install");
+    assert!(last.0 > 1_000_000 && last.1 == Some(last.0), "progress: {last:?}");
+    assert!(std::fs::metadata(&exe).unwrap().len() > 1_000_000, "replaced");
+    let staged = std::fs::read_dir(exe.parent().unwrap()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".rustyrobo-update"));
+    assert!(!staged, "no leftovers");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(std::fs::metadata(&exe).unwrap().permissions().mode() & 0o111, 0, "executable");
+    }
+    exe
+}
+
+#[test]
+fn update_installs_the_files_of_a_release() {
+    if !live() {
+        return;
+    }
+    install_published("rustyrobo-v1.2.0-linux-x86_64.tar.gz", "rustyrobo");
+    install_published("rustyrobo-v1.2.0-windows-x86_64.zip", "rustyrobo.exe");
+    // A bundle is replaced whole, under the name the user gave it.
+    let exe = install_published("rustyrobo-v1.2.0-macos-aarch64.zip", "Renamed.app/Contents/MacOS/rustyrobo");
+    let contents = exe.parent().unwrap().parent().unwrap();
+    assert!(contents.join("Info.plist").is_file());
+    assert!(contents.join("_CodeSignature").is_dir());
+}
+
+#[test]
+fn update_refuses_a_file_with_another_checksum() {
+    if !live() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("rustyrobo-install-sums-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("rustyrobo");
+    std::fs::write(&exe, "old program").unwrap();
+    // A file of the release that SHA256SUMS does not list: itself.
+    let release = rustyrobo::update::Release { version: "1.2.0".into(), notes: String::new(), asset: Some("SHA256SUMS".into()) };
+    let e = rustyrobo::update::install(&release, &exe, &std::sync::atomic::AtomicBool::new(false), |_, _| {}).unwrap_err();
+    assert!(e.contains("No checksum"), "{e}");
+    assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old program");
+}

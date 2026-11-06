@@ -33,7 +33,7 @@ src/
   main.rs          window setup, icon
   app.rs           App state, Action → tokio task → AppEvent loop, shortcuts
   settings.rs      ConnectionSettings / AppSettings (JSON, 0600), Robo 3T import
-  update.rs        new version detection (GitHub latest release), update commands
+  update.rs        new version detection (GitHub latest release), self-update, update commands
   theme.rs         colour themes + egui Visuals; contrast-checked by tests
   fonts.rs         bundled fonts, system fonts as fallbacks (scan in background, mmap), user's choice
   bidi.rs          right-to-left text in visual order, for read-only views
