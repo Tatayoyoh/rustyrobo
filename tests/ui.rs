@@ -1290,6 +1290,134 @@ fn live_connection_test_in_editor() {
     assert!(has_label(&h, "List databases"));
 }
 
+/// What the last frame put in the clipboard.
+fn copied(h: &Harness<'_, App>) -> Option<String> {
+    h.output().platform_output.commands.iter().find_map(|c| match c {
+        egui::OutputCommand::CopyText(t) => Some(t.clone()),
+        _ => None,
+    })
+}
+
+fn press_copy(h: &mut Harness<'_, App>) -> Option<String> {
+    h.event(egui::Event::Copy);
+    h.step();
+    let text = copied(h);
+    h.run_steps(2);
+    text
+}
+
+#[test]
+fn live_copy_and_find_with_the_keyboard_in_the_results() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let _env = env("live-keys", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrkeys".into(),
+        script: "db.people.drop(); db.people.insertMany([{ name: 'Ada', age: 36, tags: ['math'] }, { name: 'Linus', age: 28 }])".into(),
+        execute: true,
+        title: "seed".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+    let run = |h: &mut Harness<'_, App>, script: &str| {
+        h.state_mut().tabs[0].script = script.into();
+        h.run_steps(2);
+        h.key_press(Key::F5);
+        h.run_steps(2);
+        wait_until(h, "results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 2) && !h.state().tabs[0].running);
+        h.run_steps(3);
+    };
+    run(&mut h, "db.people.find({}).sort({ age: -1 })");
+
+    // The value under the pointer, without clicking.
+    h.get_by_label("Ada").hover();
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h).as_deref(), Some("Ada"));
+    assert!(has_label(&h, "Copied: Ada"), "the status bar tells what was copied");
+    h.get_by_label("36").hover();
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h).as_deref(), Some("36"));
+    // Elsewhere than on a value, nothing is copied.
+    h.get_by_label("Options").hover();
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h), None);
+
+    // Even with the focus in the editor, the pointer decides...
+    let editor = h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).next().expect("editor").rect();
+    h.hover_at(editor.center());
+    h.drag_at(editor.center());
+    h.drop_at(editor.center());
+    h.run_steps(2);
+    h.get_by_label("Ada").hover();
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h).as_deref(), Some("Ada"), "pointer moved to the value");
+    // ...unless the keyboard went to the editor since: it is just resting there.
+    h.key_press(Key::End);
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h), None, "the value does not replace what the editor copies");
+
+    // Ctrl+F: running the script hands the keyboard over to the results.
+    run(&mut h, "db.people.find({}).sort({ age: -1 })");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    h.run_steps(3);
+    assert!(h.state().tabs[0].outputs[0].find_is_open(), "opens on the results under the pointer");
+    h.event(egui::Event::Text("linus".into()));
+    h.run_steps(5);
+    assert!(has_label(&h, "1 of 1"));
+    assert!(h.query_all_by_label("Linus").next().is_some(), "the second document is open");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().tabs[0].outputs[0].find_is_open());
+
+    // Over the editor, Ctrl+F stays the editor's.
+    h.hover_at(editor.center());
+    h.drag_at(editor.center());
+    h.drop_at(editor.center());
+    h.run_steps(2);
+    h.hover_at(editor.center());
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    h.run_steps(3);
+    assert!(!h.state().tabs[0].outputs[0].find_is_open());
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // Away from the results: the selected row, once the focus has left the editor.
+    h.get_by_label("Linus").click();
+    h.run_steps(3);
+    h.get_by_label("Options").hover();
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h).as_deref(), Some("Linus"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    h.run_steps(3);
+    assert!(h.state().tabs[0].outputs[0].find_is_open(), "the pane with the selection");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // The table: the cell under the pointer.
+    h.key_press(Key::F3);
+    h.run_steps(3);
+    h.get_by_label("Linus").hover();
+    h.run_steps(2);
+    assert_eq!(press_copy(&mut h).as_deref(), Some("Linus"));
+    h.get_by_label("[ 1 element ]").hover();
+    h.run_steps(2);
+    assert!(press_copy(&mut h).is_some_and(|t| t.contains("math")), "a whole array");
+
+    // Not behind a dialog.
+    h.get_by_label("Linus").hover();
+    h.run_steps(2);
+    h.state_mut().actions.push(rustyrobo::app::Action::Dialog(rustyrobo::ui::dialogs::Dialog::About));
+    h.run_steps(3);
+    assert_eq!(press_copy(&mut h), None);
+}
+
 #[test]
 fn live_favorite_scripts_and_delete_key() {
     if !live() {

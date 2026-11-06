@@ -39,7 +39,16 @@ pub struct OutputPane {
     size_input: String,
     /// The pointer was over this pane in the last frame.
     pub pointer_over: bool,
+    /// The value under the pointer in the last frame.
+    pub hovered: Option<HoveredValue>,
     find: PaneFind,
+}
+
+/// A value of the tree or the table: `keys` lead to it inside the document.
+pub struct HoveredValue {
+    doc: usize,
+    keys: Vec<String>,
+    path: String,
 }
 
 /// Ctrl+F in a result pane.
@@ -241,6 +250,7 @@ impl OutputPane {
             skip_input: skip.to_string(),
             size_input: page_size.to_string(),
             pointer_over: false,
+            hovered: None,
             find: PaneFind::default(),
         }
     }
@@ -261,6 +271,43 @@ impl OutputPane {
 
     pub fn find_is_open(&self) -> bool {
         self.find.open
+    }
+
+    /// Ctrl+C with the pointer on a value: this value, or the selection when
+    /// the value is part of it.
+    pub fn hovered_text(&self, fmt: FormatOptions) -> Option<String> {
+        let h = self.hovered.as_ref()?;
+        if self.selected.len() > 1 && self.selected.contains(&h.path) {
+            return self.selected_text(fmt);
+        }
+        Some(copy_value(lookup(self.docs(), h.doc, &h.keys)?, fmt))
+    }
+
+    /// Ctrl+C on the selected rows, like the first entries of their menu: the
+    /// values one per line, or the documents as soon as one is selected whole.
+    pub fn selected_text(&self, fmt: FormatOptions) -> Option<String> {
+        let docs = self.docs();
+        let mut indices: Vec<usize> = match self.mode {
+            ViewMode::Text => return None,
+            ViewMode::Table => self.selected.items.iter().filter_map(|p| p.parse().ok()).collect(),
+            ViewMode::Tree => {
+                let (_, _, rows) = self.rows_cache.as_ref()?;
+                let selected: Vec<&Row> = rows.iter().filter(|r| self.selected.contains(&r.path)).collect();
+                if !selected.is_empty() && selected.iter().all(|r| !r.keys.is_empty()) {
+                    let values: Vec<&Bson> = selected.iter().filter_map(|r| lookup(docs, r.doc, &r.keys)).collect();
+                    return Some(values_text(&values, fmt));
+                }
+                selected.iter().map(|r| r.doc).collect()
+            }
+        };
+        indices.sort_unstable();
+        indices.dedup();
+        let roots: Vec<&Bson> = indices.iter().filter_map(|&i| docs.get(i)).collect();
+        match roots.as_slice() {
+            [] => None,
+            [root] => Some(bsonfmt::to_shell_json(root, 0, fmt)),
+            _ => Some(documents_text(&roots, fmt)),
+        }
     }
 
     /// Shows the current hit: in the tree, its parents have to be expanded.
@@ -688,6 +735,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let font = FontId::proportional(cx.font_size);
     let mono = FontId::monospace(cx.font_size);
     let indent = cx.font_size * 1.2;
+    let mut hovered = None;
     let scroll_row = match &pane.find.hits {
         Hits::Rows { list, .. } if pane.find.open && pane.find.scroll > 0 => list.get(pane.find.current).and_then(|h| rows.iter().position(|r| r.path == h.path)),
         _ => None,
@@ -746,6 +794,9 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     ui.add(egui::Label::new(RichText::new(r.tname).color(th.text_weak)).selectable(false).truncate());
                 });
                 let resp = row.response();
+                if resp.contains_pointer() {
+                    hovered = Some(HoveredValue { doc: r.doc, keys: r.keys.clone(), path: r.path.clone() });
+                }
                 if resp.clicked() {
                     let mods = resp.ctx.input(|i| i.modifiers);
                     pane.selected.click(&r.path, mods, || rows.iter().map(|r| r.path.clone()));
@@ -767,6 +818,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
             });
         });
 
+    pane.hovered = hovered;
     let expansion_changed = toggle.is_some() || !menu_actions.is_empty();
     if let Some(p) = toggle
         && !pane.expanded.remove(&p)
@@ -852,7 +904,7 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     // Values inside documents (not the documents themselves): one per line.
     if values.iter().all(|(t, _)| t.keys.is_some_and(|k| !k.is_empty())) {
         if ui.button("Copy Values").clicked() {
-            ui.ctx().copy_text(values.iter().map(|(_, v)| copy_value(v, cx.fmt)).collect::<Vec<_>>().join("\n"));
+            ui.ctx().copy_text(values_text(&values.iter().map(|(_, v)| *v).collect::<Vec<_>>(), cx.fmt));
             ui.close();
         }
         if ui.button("Copy Names").clicked() {
@@ -873,7 +925,7 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     let n = roots.len();
     let plural = if n == 1 { "" } else { "s" };
     if ui.button(format!("Copy JSON ({n} document{plural})")).clicked() {
-        ui.ctx().copy_text(bsonfmt::to_shell_json(&Bson::Array(roots.iter().map(|&b| b.clone()).collect()), 0, cx.fmt));
+        ui.ctx().copy_text(documents_text(&roots, cx.fmt));
         ui.close();
     }
     if ui.button(format!("Copy Extended JSON ({n} document{plural})")).clicked() {
@@ -933,6 +985,14 @@ fn copy_value(v: &Bson, fmt: FormatOptions) -> String {
         Bson::String(s) => s.clone(),
         other => bsonfmt::to_shell_json(other, 0, fmt),
     }
+}
+
+fn values_text(values: &[&Bson], fmt: FormatOptions) -> String {
+    values.iter().map(|v| copy_value(v, fmt)).collect::<Vec<_>>().join("\n")
+}
+
+fn documents_text(roots: &[&Bson], fmt: FormatOptions) -> String {
+    bsonfmt::to_shell_json(&Bson::Array(roots.iter().map(|&b| b.clone()).collect()), 0, fmt)
 }
 
 /// `a.b.0.c` from tree keys (`[0]` for array elements).
@@ -1047,6 +1107,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let menu = cx_parts(cx);
     let mut menu_actions = Vec::new();
     let mut click: Option<(String, Option<egui::Modifiers>)> = None;
+    let mut hovered = None;
     let find = &pane.find;
     let scrolling_to = match &find.hits {
         Hits::Cells { list, .. } if find.open && find.scroll > 0 => list.get(find.current),
@@ -1090,12 +1151,15 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let d = &docs[i];
                 let path = i.to_string();
                 row.set_selected(pane.selected.contains(&path));
-                row.col(|ui| {
+                let (_, number) = row.col(|ui| {
                     ui.label(RichText::new((pane.skip + i as u64 + 1).to_string()).color(th.text_weak));
                 });
+                if number.contains_pointer() {
+                    hovered = Some(HoveredValue { doc: i, keys: Vec::new(), path: path.clone() });
+                }
                 for c in &columns {
                     let v = if scalar_mode { Some(d) } else { d.as_document().and_then(|doc| doc.get(c)) };
-                    let (rect, _) = row.col(|ui| {
+                    let (rect, cell) = row.col(|ui| {
                         if let Some(hit) = find.cell(i, c) {
                             find.mark(ui, hit, th);
                         }
@@ -1105,6 +1169,10 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     });
                     if scrolling_to.is_some_and(|(doc, column)| *doc == i && column == c) {
                         cell_to_show = Some(rect);
+                    }
+                    if v.is_some() && cell.contains_pointer() {
+                        let keys = if scalar_mode { Vec::new() } else { vec![c.clone()] };
+                        hovered = Some(HoveredValue { doc: i, keys, path: path.clone() });
                     }
                 }
                 let resp = row.response();
@@ -1129,6 +1197,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
             ui.scroll_to_rect(rect, None);
         }
     });
+    pane.hovered = hovered;
     match click {
         Some((path, Some(mods))) => {
             let n = pane.docs().len();
@@ -1297,6 +1366,48 @@ mod tests {
         assert_eq!(f.current, 0, "fewer hits");
         f.query = "nothing".into();
         assert!(!f.update(ViewMode::Tree, fmt, |q| row_hits(&docs, q, fmt)), "nothing to show");
+    }
+
+    #[test]
+    fn copied_text_of_values_and_selections() {
+        let fmt = FormatOptions::default();
+        let mut p = pane(docs(), None);
+        let hover = |p: &mut OutputPane, doc: usize, keys: &[&str], path: &str| {
+            p.hovered = Some(HoveredValue { doc, keys: keys.iter().map(|k| k.to_string()).collect(), path: path.into() });
+        };
+        assert_eq!(p.hovered_text(fmt), None, "not on a value");
+
+        // A string as it is, the rest in shell syntax, a document whole.
+        hover(&mut p, 0, &["s"], "0/s");
+        assert_eq!(p.hovered_text(fmt).as_deref(), Some("x"));
+        hover(&mut p, 1, &["z"], "1/z");
+        assert_eq!(p.hovered_text(fmt).as_deref(), Some("true"));
+        hover(&mut p, 1, &[], "1");
+        assert!(p.hovered_text(fmt).unwrap().contains("\"z\" : true"));
+
+        // Tree: the selection when the hovered row is part of it.
+        p.expanded.insert("1".into());
+        p.rows_cache = Some((fmt, "t", flatten(p.docs(), &p.expanded, fmt, &crate::theme::THEMES[0])));
+        p.selected.click("0/s", egui::Modifiers::NONE, Vec::new);
+        p.selected.click("1/z", egui::Modifiers::COMMAND, Vec::new);
+        hover(&mut p, 1, &["z"], "1/z");
+        assert_eq!(p.hovered_text(fmt).as_deref(), Some("x\ntrue"), "values, in the order of the rows");
+        hover(&mut p, 0, &["_id"], "0/_id");
+        assert_eq!(p.hovered_text(fmt).as_deref(), Some("1"), "another row: only this one");
+        assert_eq!(p.selected_text(fmt).as_deref(), Some("x\ntrue"));
+        p.selected.click("1", egui::Modifiers::COMMAND, Vec::new);
+        assert!(p.selected_text(fmt).unwrap().starts_with('['), "with a whole document: the documents");
+
+        // Table: documents.
+        p.mode = ViewMode::Table;
+        p.selected.clear();
+        p.selected.click("1", egui::Modifiers::NONE, Vec::new);
+        assert!(p.selected_text(fmt).unwrap().starts_with('{'));
+        p.selected.click("0", egui::Modifiers::COMMAND, Vec::new);
+        let both = p.selected_text(fmt).unwrap();
+        assert!(both.starts_with('[') && both.find("\"s\"") < both.find("\"z\""), "in the order of the page: {both}");
+        p.mode = ViewMode::Text;
+        assert_eq!(p.selected_text(fmt), None);
     }
 
     #[test]

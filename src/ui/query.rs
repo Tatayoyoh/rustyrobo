@@ -46,7 +46,7 @@ pub struct QueryTab {
     pub vars: Vec<TabVar>,
     focus_editor: bool,
     /// Keys went to the editor since the pointer last moved: resting on the
-    /// results, the pointer does not take Ctrl+F from the editor.
+    /// results, the pointer does not take Ctrl+C and Ctrl+F from the editor.
     pub typing: bool,
 }
 
@@ -155,21 +155,25 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         AutocompletionMode::None => CompletionMode::Off,
     };
     let modal_open = app.dialog.is_some() || app.conn_list.is_some() || app.conn_editor.is_some() || app.favorites.is_some();
+    let mut copied = None;
     let tab = &mut app.tabs[idx];
-    // Ctrl+F applies to the results under the pointer, before the editor sees
-    // it. The pointer of the last frame says which ones.
+    // Ctrl+C and Ctrl+F apply to the results under the pointer, before the
+    // editor sees them. The pointer of the last frame says which ones.
     if ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_pressed()) {
         tab.typing = false;
     }
-    if !modal_open
-        && !tab.typing
-        && let Some(pane) = tab.outputs.iter_mut().find(|o| o.pointer_over && o.can_find())
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
-    {
-        pane.open_find();
+    if !modal_open && !tab.typing && let Some(pane) = tab.outputs.iter_mut().find(|o| o.pointer_over) {
+        if copy_requested(ui) && let Some(text) = pane.hovered_text(fmt) {
+            take_copy_request(ui);
+            copied = Some(text);
+        }
+        if pane.can_find() && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+            pane.open_find();
+        }
     }
     for pane in &mut tab.outputs {
         pane.pointer_over = false;
+        pane.hovered = None;
     }
     let keys_pressed = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. })));
     // Favorite star: None when not a favorite, else whether it is up to date.
@@ -358,10 +362,16 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
-    // Ctrl+F away from the results: the last clicked result pane, unless a
-    // text field or a dialog takes the keys.
+    // Ctrl+C and Ctrl+F away from the results: the last clicked result pane,
+    // unless a text field or a dialog takes the keys.
     if !modal_open && !ui.ctx().egui_wants_keyboard_input() {
         let tab = &mut app.tabs[idx];
+        if copy_requested(ui)
+            && let Some(text) = tab.outputs.iter().filter(|o| !o.selected.is_empty()).max_by_key(|o| o.selected.touched).and_then(|p| p.selected_text(fmt))
+        {
+            take_copy_request(ui);
+            copied = Some(text);
+        }
         let shown = if tabbed && tab.outputs.len() > 1 { Some(tab.result_tab.min(tab.outputs.len() - 1)) } else { None };
         let pane = tab.outputs.iter_mut().enumerate().filter(|(i, o)| o.can_find() && shown.is_none_or(|s| s == *i)).rev().max_by_key(|(_, o)| o.selected.touched);
         if let Some((_, pane)) = pane
@@ -369,6 +379,13 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         {
             pane.open_find();
         }
+    }
+    if let Some(text) = copied {
+        let first_line = text.lines().next().unwrap_or_default();
+        let short: String = first_line.chars().take(60).collect();
+        let more = if short.len() < text.len() { "…" } else { "" };
+        app.toast = Some((format!("Copied: {short}{more}"), Instant::now(), crate::app::LogLevel::Info));
+        ui.ctx().copy_text(text);
     }
     // Delete key: the selected documents of the last clicked result pane,
     // unless a text field or a dialog takes the keys.
@@ -382,6 +399,16 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         }
     }
     app.actions.extend(actions);
+}
+
+/// Ctrl+C reaches egui as a copy event, not as a key.
+fn copy_requested(ui: &Ui) -> bool {
+    ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+}
+
+/// So that the focused text field does not copy too.
+fn take_copy_request(ui: &Ui) {
+    ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
 }
 
 fn tab_bar(app: &mut App, ui: &mut Ui) {
