@@ -13,6 +13,7 @@
 ### Fixed
 - Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts
 - Right-to-left text reads in the right order in the tree, table and text views, and a value too long for its column keeps its start visible
+- `killCursors` was refused by the driver, also when the shell closed its own cursors
 
 ### Known issues
 - Editors (scripts, documents): right-to-left sentences show their words in reverse order and the

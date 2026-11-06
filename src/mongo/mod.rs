@@ -231,6 +231,8 @@ impl Connection {
         command: Document,
         session: Option<&mut Session>,
     ) -> anyhow::Result<Document> {
+        // The drivers refuse killCursors in a session.
+        let session = session.filter(|_| !command.keys().next().is_some_and(|name| name.eq_ignore_ascii_case("killCursors")));
         match (&self.backend, session) {
             (Backend::Modern(c), Some(Session::Modern(s))) => {
                 Ok(c.database(db).run_command(command).session(s).await?)

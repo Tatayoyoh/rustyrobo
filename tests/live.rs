@@ -326,6 +326,30 @@ fn legacy_server_shell_api() {
 }
 
 #[test]
+fn run_command_works_like_in_the_mongo_shell() {
+    if !live() {
+        return;
+    }
+    let rt = rt();
+    for settings in [mongo8(), mongo42()] {
+        let c = Arc::new(open(&rt, &settings).unwrap());
+        let mut sh = Shell::new(&rt, c, "rr_run_command", Duration::from_secs(10));
+        sh.ok("db.c.drop(); db.c.insertMany([{ a: 1 }, { a: 2 }, { a: 3 }])");
+
+        // On a database, with a document or a name.
+        assert_eq!(sh.text("db.runCommand({ ping: 1 }).ok"), "1");
+        assert_eq!(sh.text("db.runCommand('ping').ok"), "1");
+        assert_eq!(sh.text("db.adminCommand('ping').ok"), "1");
+        assert_eq!(sh.text("db.runCommand({ count: 'c', query: { a: { $gt: NumberLong(1) } } }).n"), "2");
+
+        // Cursors opened by a command, continued and killed in the following ones.
+        assert_eq!(sh.text("var r = db.runCommand({ find: 'c', batchSize: 1 }); db.runCommand({ getMore: r.cursor.id, collection: 'c', batchSize: 1 }).cursor.nextBatch.length"), "1");
+        assert_eq!(sh.text("var r = db.runCommand({ find: 'c', batchSize: 1 }); db.runCommand({ killCursors: 'c', cursors: [r.cursor.id] }).cursorsKilled.length"), "1");
+        sh.ok("db.dropDatabase()");
+    }
+}
+
+#[test]
 fn non_latin_text_round_trips() {
     if !live() {
         return;
