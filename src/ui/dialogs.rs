@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::app::{Action, App, Refresh};
 use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
-use crate::settings::{AuthMechanism, ConnectionSettings, SshAuthMethod};
+use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, SshAuthMethod};
 use crate::shell::parse_shell_value;
 use crate::ui::icon;
 
@@ -86,6 +86,35 @@ impl DocCheck {
     }
 }
 
+/// What the Preferences dialog edits.
+#[derive(Clone, PartialEq)]
+pub struct Preferences {
+    batch_size: u32,
+    font_size: f32,
+    fonts: crate::fonts::FontChoice,
+    theme: String,
+}
+
+impl Preferences {
+    fn of(settings: &AppSettings) -> Self {
+        Self { batch_size: settings.batch_size, font_size: settings.font_size, fonts: settings.fonts.clone(), theme: settings.theme.clone() }
+    }
+
+    /// Puts these values in the settings and shows what changes, without saving.
+    pub fn apply(&self, settings: &mut AppSettings, actions: &mut Vec<Action>) {
+        settings.batch_size = self.batch_size;
+        if self.font_size != settings.font_size || self.theme != settings.theme {
+            settings.font_size = self.font_size;
+            settings.theme = self.theme.clone();
+            actions.push(Action::PreviewTheme);
+        }
+        if self.fonts != settings.fonts {
+            settings.fonts = self.fonts.clone();
+            actions.push(Action::ApplyFonts);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Dialog {
     Message { title: String, message: String },
@@ -101,7 +130,8 @@ pub enum Dialog {
     Index(Box<IndexForm>),
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
     ShellTimeout { value: u32 },
-    Preferences { batch_size: u32, fonts: crate::fonts::FontChoice },
+    /// The appearance follows `edit`, and goes back to `original` unless saved.
+    Preferences { edit: Preferences, original: Preferences },
     /// Name of the script of a shell being added to the favorites.
     FavoriteName { tab: u64, name: String },
     About,
@@ -137,6 +167,11 @@ const ADMIN_ROLES: &[&str] = &[
 ];
 
 impl Dialog {
+    pub fn preferences(settings: &AppSettings) -> Self {
+        let edit = Preferences::of(settings);
+        Dialog::Preferences { original: edit.clone(), edit }
+    }
+
     pub fn message(title: &str, message: impl Into<String>) -> Self {
         Dialog::Message { title: title.to_string(), message: message.into() }
     }
@@ -792,43 +827,35 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
                 if (valid && (ok || enter)) || cancel { Outcome::Close } else { Outcome::Keep }
             }
-            Dialog::Preferences { batch_size, fonts } => {
+            Dialog::Preferences { edit, original } => {
                 title(ui, "Preferences");
                 egui::Grid::new("prefs").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label("Batch size (documents per page):");
-                    ui.add(egui::DragValue::new(batch_size).range(1..=10_000));
+                    ui.add(egui::DragValue::new(&mut edit.batch_size).range(1..=10_000));
                     ui.end_row();
                     ui.label("Font size:");
-                    ui.add(egui::DragValue::new(&mut app.settings.font_size).range(9.0..=24.0).speed(0.25));
+                    ui.add(egui::DragValue::new(&mut edit.font_size).range(9.0..=24.0).speed(0.25));
                     ui.end_row();
                     let lists = crate::fonts::lists();
                     ui.label("Interface font:");
-                    font_picker(ui, "pref-ui-font", &mut fonts.ui, lists.map_or(&[], |l| &l.all));
+                    font_picker(ui, "pref-ui-font", &mut edit.fonts.ui, lists.map_or(&[], |l| &l.all));
                     ui.end_row();
                     ui.label("Monospace font:");
-                    font_picker(ui, "pref-mono-font", &mut fonts.mono, lists.map_or(&[], |l| &l.mono));
+                    font_picker(ui, "pref-mono-font", &mut edit.fonts.mono, lists.map_or(&[], |l| &l.mono));
                     ui.end_row();
                     ui.label("Theme:");
-                    let mut theme_name = app.settings.theme.clone();
-                    egui::ComboBox::from_id_salt("pref-theme").selected_text(&theme_name).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("pref-theme").selected_text(edit.theme.as_str()).show_ui(ui, |ui| {
                         for n in crate::theme::names() {
-                            ui.selectable_value(&mut theme_name, n.to_string(), n);
+                            ui.selectable_value(&mut edit.theme, n.to_string(), n);
                         }
                     });
-                    if theme_name != app.settings.theme {
-                        app.settings.theme = theme_name;
-                        actions.push(Action::ApplyTheme);
-                    }
                     ui.end_row();
                 });
                 let (ok, cancel) = buttons(ui, "Save", true);
+                edit.apply(&mut app.settings, &mut actions);
                 if ok {
-                    app.settings.batch_size = *batch_size;
-                    actions.push(Action::ApplyTheme);
-                    if *fonts != app.settings.fonts {
-                        app.settings.fonts = fonts.clone();
-                        actions.push(Action::ApplyFonts);
-                    }
+                    *original = edit.clone();
+                    actions.push(Action::SaveSettings);
                 }
                 if ok || cancel { Outcome::Close } else { Outcome::Keep }
             }
@@ -889,6 +916,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         ctx.request_repaint();
     }
     let close = matches!(resp.inner, Outcome::Close) || resp.should_close();
+    if close && let Dialog::Preferences { original, .. } = &dlg {
+        original.apply(&mut app.settings, &mut actions);
+    }
     if !close && app.dialog.is_none() {
         app.dialog = Some(dlg);
     }

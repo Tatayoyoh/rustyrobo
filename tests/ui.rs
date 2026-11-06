@@ -491,42 +491,113 @@ fn favorite_scripts_tree_and_drag_and_drop() {
 
 // -------------------------------------------------------- fonts and RTL
 
-#[test]
-fn preferences_choose_fonts() {
-    let env = env("fonts", &AppSettings::default());
+/// App with the system fonts scanned and the connection manager closed.
+fn app_harness() -> Harness<'static, App> {
     let mut h = harness();
     h.run_steps(3);
     h.get_by_label("Close").click();
     h.run_steps(3);
     wait_until(&mut h, "system fonts", Duration::from_secs(20), |_| fonts::lists().is_some());
+    h
+}
+
+fn open_preferences(h: &mut Harness<'_, App>) {
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    h.get_by_label("Preferences…").click();
+    // The dialog is centered once it knows its size.
+    h.run_steps(5);
+    assert!(has_label(h, "Interface font:"));
+    assert!(has_label(h, "Monospace font:"));
+}
+
+/// 0: interface font, 1: monospace font, 2: theme.
+fn combo_box<'n>(h: &'n Harness<'_, App>, index: usize) -> egui_kittest::Node<'n> {
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).nth(index).expect("combo box")
+}
+
+fn press(h: &mut Harness<'_, App>, key: Key) {
+    h.key_press(key);
+    h.run_steps(2);
+}
+
+fn first_ui_font(h: &Harness<'_, App>) -> String {
+    h.ctx.fonts(|f| f.definitions().families[&egui::FontFamily::Proportional][0].clone())
+}
+
+fn wait_for_bundled_font(h: &mut Harness<'_, App>) {
+    wait_until(h, "bundled font", Duration::from_secs(20), |h| first_ui_font(h) == "Ubuntu-Light");
+}
+
+#[test]
+fn preferences_show_fonts_at_once_and_save_them_on_save() {
+    let env = env("fonts", &AppSettings::default());
+    let mut h = app_harness();
     let Some(family) = fonts::lists().and_then(|l| l.all.first()).cloned() else { return };
-    let open_preferences = |h: &mut Harness<'_, App>| {
-        h.get_by_label("Options").click();
-        h.run_steps(2);
-        h.get_by_label("Preferences…").click();
-        h.run_steps(3);
-        assert!(has_label(h, "Interface font:"));
-        assert!(has_label(h, "Monospace font:"));
-        h.query_all_by_role(egui::accesskit::Role::ComboBox).next().expect("font picker").click();
+    let pick_font = |h: &mut Harness<'_, App>| {
+        open_preferences(h);
+        combo_box(h, 0).click();
         h.run_steps(3);
         h.get_by_label(&family).click();
         h.run_steps(3);
+        assert_eq!(h.state().settings.fonts.ui.as_ref(), Some(&family), "applied before Save");
+        // The font is loaded in the background and comes first in its family.
+        wait_until(h, "chosen font", Duration::from_secs(20), |h| first_ui_font(h) != "Ubuntu-Light");
+        assert_eq!(saved_settings(&env).fonts, fonts::FontChoice::default(), "not saved yet");
     };
 
-    open_preferences(&mut h);
+    pick_font(&mut h);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().settings.fonts, fonts::FontChoice::default(), "cancelled");
+    wait_for_bundled_font(&mut h);
 
-    open_preferences(&mut h);
+    pick_font(&mut h);
+    press(&mut h, Key::Escape);
+    assert!(!has_label(&h, "Interface font:"), "Escape closes the dialog");
+    assert_eq!(h.state().settings.fonts, fonts::FontChoice::default(), "Escape cancels");
+    wait_for_bundled_font(&mut h);
+
+    pick_font(&mut h);
     h.get_by_label("Save").click();
     h.run_steps(3);
     assert_eq!(h.state().settings.fonts.ui.as_ref(), Some(&family));
     assert_eq!(saved_settings(&env).fonts.ui.as_ref(), Some(&family));
-    // The font is loaded in the background and comes first in its family.
-    wait_until(&mut h, "chosen font", Duration::from_secs(20), |h| {
-        h.ctx.fonts(|f| f.definitions().families[&egui::FontFamily::Proportional][0] != "Ubuntu-Light")
-    });
+    assert_ne!(first_ui_font(&h), "Ubuntu-Light", "the font stays");
+}
+
+#[test]
+fn preferences_show_the_theme_at_once_and_cancel_restores_it() {
+    let env = env("appearance", &AppSettings::default());
+    let mut h = app_harness();
+    open_preferences(&mut h);
+
+    combo_box(&h, 2).click();
+    h.run_steps(3);
+    h.get_by_label("Nord").click();
+    h.run_steps(3);
+    assert_eq!(h.state().theme.name, "Nord");
+    assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME, "not saved yet");
+
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.theme, theme::DEFAULT_THEME);
+    assert_ne!(h.state().theme.name, "Nord");
+    assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME);
+}
+
+#[test]
+fn closing_the_window_does_not_save_what_preferences_show() {
+    let env = env("exit", &AppSettings::default());
+    let mut h = app_harness();
+    open_preferences(&mut h);
+    combo_box(&h, 2).click();
+    h.run_steps(3);
+    h.get_by_label("Nord").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.theme, "Nord");
+    eframe::App::on_exit(h.state_mut());
+    assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME);
 }
 
 fn docs_output(docs: Vec<Bson>) -> ShellOutput {

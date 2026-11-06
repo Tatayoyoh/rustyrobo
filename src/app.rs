@@ -141,6 +141,8 @@ pub enum Action {
     SaveFile { save_as: bool },
     SaveSettings,
     ApplyTheme,
+    /// Like `ApplyTheme`, without saving the settings.
+    PreviewTheme,
     ApplyFonts,
 }
 
@@ -826,13 +828,20 @@ impl App {
                 }
             }
             Action::ApplyTheme => {
-                self.theme_name = self.settings.theme.clone();
-                self.theme = *theme::resolve(&self.settings.theme, self.system_dark);
-                theme::apply(&self.ctx, &self.theme, self.settings.font_size);
+                self.update_theme();
                 self.actions.push(Action::SaveSettings);
             }
+            Action::PreviewTheme => self.update_theme(),
             Action::ApplyFonts => self.load_fonts(),
         }
+    }
+
+    fn update_theme(&mut self) {
+        self.theme_name = self.settings.theme.clone();
+        self.theme = *theme::resolve(&self.settings.theme, self.system_dark);
+        theme::apply(&self.ctx, &self.theme, self.settings.font_size);
+        // It shows on the next frame, which nothing else may ask for.
+        self.ctx.request_repaint();
     }
 
     fn connect(&mut self, settings: ConnectionSettings, secrets: ConnectSecrets) {
@@ -1201,6 +1210,10 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        // What the Preferences dialog shows is not saved yet.
+        if let Some(Dialog::Preferences { original, .. }) = &self.dialog {
+            original.apply(&mut self.settings, &mut Vec::new());
+        }
         let _ = self.settings.save();
         let _guard = self.rt.enter();
         for s in &self.servers {

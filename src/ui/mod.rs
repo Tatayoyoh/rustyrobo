@@ -217,7 +217,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
                 app.actions.push(Action::Dialog(Dialog::ShellTimeout { value: app.settings.shell_timeout_secs }));
             }
             if menu_item(ui, "Preferences…", "") {
-                app.actions.push(Action::Dialog(Dialog::Preferences { batch_size: app.settings.batch_size, fonts: app.settings.fonts.clone() }));
+                app.actions.push(Action::Dialog(Dialog::preferences(&app.settings)));
             }
         });
         ui.menu_button("Window", |ui| {
