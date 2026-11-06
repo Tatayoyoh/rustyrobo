@@ -749,6 +749,29 @@ fn font_size_slider_stays_under_the_pointer_during_a_drag() {
     assert_ne!(slider(&h).left(), left, "the dialog is laid out with the new size");
 }
 
+#[test]
+fn preferences_dialog_shrinks_back_after_growing() {
+    let _env = env("shrink", &AppSettings::default());
+    let mut h = app_harness();
+    open_preferences(&mut h);
+    let width = |h: &Harness<'_, App>| h.get_by_label("Save").rect().right() - h.get_by_label("Reset to Default").rect().left();
+    let start = width(&h);
+    h.get_by_role(egui::accesskit::Role::Slider).focus();
+    h.run_steps(2);
+    for key in [Key::ArrowRight, Key::ArrowLeft] {
+        for _ in 0..8 {
+            h.key_press(key);
+            h.step();
+        }
+        h.run_steps(5);
+        if key == Key::ArrowRight {
+            assert!(width(&h) > start + 50.0, "from {start} to {}", width(&h));
+        }
+    }
+    assert_eq!(h.state().settings.font_size, 13.0);
+    assert_eq!(width(&h), start);
+}
+
 fn docs_output(docs: Vec<Bson>) -> ShellOutput {
     ShellOutput { statement: "db.x.find({})".into(), line: 1, kind: OutputKind::Docs { docs, spec: None, ns: None, more: false }, elapsed: Duration::ZERO }
 }
