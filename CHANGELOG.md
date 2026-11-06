@@ -1,22 +1,21 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 ### Added
-- Preferences: choose the interface font and the monospace font among the installed fonts
-- Preferences: fonts, font size and theme change right away; Cancel, Escape or closing the window restores them
+- Preferences: choose the interface font and the monospace font among the installed fonts (#1)
+- Preferences: fonts, font size and theme change right away; Cancel, Escape or closing the window restores them. Up and Down select the previous and next item of the focused list
 - Preferences: font size slider
-- Preferences: Up and Down select the previous and next item of the focused list
 - Preferences: "Reset to Default" button
 - View > Theme: a theme shows when hovered, and is kept when clicked
 - Results: Ctrl+F finds in the tree, table and text views of the page, opening the nodes to show what it finds
 - Results: Ctrl+C copies the value under the pointer, or the selection
 - Results: Ctrl+Shift+C copies them with their names (`"name" : value`), also in the menus as "Copy Name and Value"
-- A chip in the toolbar tells when a new version is available, with its changelog, a button that downloads the update, checks it, replaces the program and restarts it, a link to the file and the commands to update by hand; Options > "Check for updates at startup" turns it off
+- A chip in the toolbar tells when a new version is available, with its changelog, a download button and the commands to update by hand; Options > "Check for updates at startup" turns it off
 - Shell: `db.collection.runCommand()` and `runReadCommand()`, `db.runReadCommand()`, `db.getMongo().runCommand()` and `adminCommand()`
 
 ### Fixed
-- Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts
+- Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts (#1)
 - Right-to-left text reads in the right order in the tree, table and text views, and a value too long for its column keeps its start visible
 - `db.runCommand()` and `db.adminCommand()` return the reply of a refused command (`{ ok: 0, errmsg, code, codeName }`), like the mongo shell, instead of stopping the script
 - `killCursors` was refused by the driver, also when the shell closed its own cursors
