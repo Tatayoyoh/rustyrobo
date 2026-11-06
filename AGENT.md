@@ -88,7 +88,7 @@ Key design rules:
   pieces in visual order, each in its own section (`LayoutJob::append` would merge them). Editors keep
   the logical order: right-to-left sentences read in reverse there, and cursors are off on these rows
   (emilk/egui#8576). Check both when upgrading egui: native bidi would make `bidi.rs` double-reverse.
-- Ctrl+C reaches egui as `Event::Copy`, not as a key. In the results, Ctrl+C and Ctrl+F follow the pointer, unless keys went to
+- Ctrl+C and Ctrl+Shift+C reach egui as `Event::Copy`, not as keys (look at `modifiers.shift`). In the results, Ctrl+C and Ctrl+F follow the pointer, unless keys went to
   the editor since it last moved (`QueryTab::typing`): the hover of the last frame decides, before the editor sees the event.
 - A `ScrollArea` takes the scroll requests of both axes: `scroll_to_rect` in a table cell never reaches the horizontal scroll
   area around the table. Ask once the table is finished.

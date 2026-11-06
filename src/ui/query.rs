@@ -163,7 +163,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         tab.typing = false;
     }
     if !modal_open && !tab.typing && let Some(pane) = tab.outputs.iter_mut().find(|o| o.pointer_over) {
-        if copy_requested(ui) && let Some(text) = pane.hovered_text(fmt) {
+        if copy_requested(ui) && let Some(text) = pane.hovered_text(fmt, copy_with_names(ui)) {
             take_copy_request(ui);
             copied = Some(text);
         }
@@ -367,7 +367,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
     if !modal_open && !ui.ctx().egui_wants_keyboard_input() {
         let tab = &mut app.tabs[idx];
         if copy_requested(ui)
-            && let Some(text) = tab.outputs.iter().filter(|o| !o.selected.is_empty()).max_by_key(|o| o.selected.touched).and_then(|p| p.selected_text(fmt))
+            && let Some(text) = tab.outputs.iter().filter(|o| !o.selected.is_empty()).max_by_key(|o| o.selected.touched).and_then(|p| p.selected_text(fmt, copy_with_names(ui)))
         {
             take_copy_request(ui);
             copied = Some(text);
@@ -404,6 +404,11 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
 /// Ctrl+C reaches egui as a copy event, not as a key.
 fn copy_requested(ui: &Ui) -> bool {
     ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+}
+
+/// Ctrl+Shift+C is a copy event too.
+fn copy_with_names(ui: &Ui) -> bool {
+    ui.input(|i| i.modifiers.shift)
 }
 
 /// So that the focused text field does not copy too.

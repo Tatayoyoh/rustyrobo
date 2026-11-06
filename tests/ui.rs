@@ -1330,6 +1330,15 @@ fn press_copy(h: &mut Harness<'_, App>) -> Option<String> {
     text
 }
 
+/// Ctrl+Shift+C reaches egui as a copy event, with Shift held.
+fn press_copy_with_names(h: &mut Harness<'_, App>) -> Option<String> {
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND | Modifiers::SHIFT));
+    let text = press_copy(h);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    text
+}
+
 #[test]
 fn live_copy_and_find_with_the_keyboard_in_the_results() {
     if !live() {
@@ -1367,6 +1376,7 @@ fn live_copy_and_find_with_the_keyboard_in_the_results() {
     h.get_by_label("36").hover();
     h.run_steps(2);
     assert_eq!(press_copy(&mut h).as_deref(), Some("36"));
+    assert_eq!(press_copy_with_names(&mut h).as_deref(), Some("\"age\" : 36"));
     // Elsewhere than on a value, nothing is copied.
     h.get_by_label("Options").hover();
     h.run_steps(2);

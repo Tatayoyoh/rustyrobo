@@ -274,18 +274,20 @@ impl OutputPane {
     }
 
     /// Ctrl+C with the pointer on a value: this value, or the selection when
-    /// the value is part of it.
-    pub fn hovered_text(&self, fmt: FormatOptions) -> Option<String> {
+    /// the value is part of it. Ctrl+Shift+C (`names`) adds the names.
+    pub fn hovered_text(&self, fmt: FormatOptions, names: bool) -> Option<String> {
         let h = self.hovered.as_ref()?;
         if self.selected.len() > 1 && self.selected.contains(&h.path) {
-            return self.selected_text(fmt);
+            return self.selected_text(fmt, names);
         }
-        Some(copy_value(lookup(self.docs(), h.doc, &h.keys)?, fmt))
+        let value = lookup(self.docs(), h.doc, &h.keys)?;
+        Some(if names { named_value(&h.keys, value, fmt) } else { copy_value(value, fmt) })
     }
 
     /// Ctrl+C on the selected rows, like the first entries of their menu: the
     /// values one per line, or the documents as soon as one is selected whole.
-    pub fn selected_text(&self, fmt: FormatOptions) -> Option<String> {
+    /// Ctrl+Shift+C (`names`) adds the names to the values.
+    pub fn selected_text(&self, fmt: FormatOptions, names: bool) -> Option<String> {
         let docs = self.docs();
         let mut indices: Vec<usize> = match self.mode {
             ViewMode::Text => return None,
@@ -294,6 +296,10 @@ impl OutputPane {
                 let (_, _, rows) = self.rows_cache.as_ref()?;
                 let selected: Vec<&Row> = rows.iter().filter(|r| self.selected.contains(&r.path)).collect();
                 if !selected.is_empty() && selected.iter().all(|r| !r.keys.is_empty()) {
+                    if names {
+                        let values: Vec<(&[String], &Bson)> = selected.iter().filter_map(|r| Some((r.keys.as_slice(), lookup(docs, r.doc, &r.keys)?))).collect();
+                        return Some(named_values_text(&values, fmt));
+                    }
                     let values: Vec<&Bson> = selected.iter().filter_map(|r| lookup(docs, r.doc, &r.keys)).collect();
                     return Some(values_text(&values, fmt));
                 }
@@ -991,6 +997,20 @@ fn values_text(values: &[&Bson], fmt: FormatOptions) -> String {
     values.iter().map(|v| copy_value(v, fmt)).collect::<Vec<_>>().join("\n")
 }
 
+/// `"name" : value`, a line of its document; the document itself at its root.
+fn named_value(keys: &[String], v: &Bson, fmt: FormatOptions) -> String {
+    let value = bsonfmt::to_shell_json(v, 0, fmt);
+    match keys {
+        [.., name] => format!("{} : {value}", bsonfmt::js_string(&dotted_path(std::slice::from_ref(name)))),
+        [] => value,
+    }
+}
+
+/// With commas, to go inside `{ }` as it is.
+fn named_values_text(values: &[(&[String], &Bson)], fmt: FormatOptions) -> String {
+    values.iter().map(|(keys, v)| named_value(keys, v, fmt)).collect::<Vec<_>>().join(",\n")
+}
+
 fn documents_text(roots: &[&Bson], fmt: FormatOptions) -> String {
     bsonfmt::to_shell_json(&Bson::Array(roots.iter().map(|&b| b.clone()).collect()), 0, fmt)
 }
@@ -1375,15 +1395,15 @@ mod tests {
         let hover = |p: &mut OutputPane, doc: usize, keys: &[&str], path: &str| {
             p.hovered = Some(HoveredValue { doc, keys: keys.iter().map(|k| k.to_string()).collect(), path: path.into() });
         };
-        assert_eq!(p.hovered_text(fmt), None, "not on a value");
+        assert_eq!(p.hovered_text(fmt, false), None, "not on a value");
 
         // A string as it is, the rest in shell syntax, a document whole.
         hover(&mut p, 0, &["s"], "0/s");
-        assert_eq!(p.hovered_text(fmt).as_deref(), Some("x"));
+        assert_eq!(p.hovered_text(fmt, false).as_deref(), Some("x"));
         hover(&mut p, 1, &["z"], "1/z");
-        assert_eq!(p.hovered_text(fmt).as_deref(), Some("true"));
+        assert_eq!(p.hovered_text(fmt, false).as_deref(), Some("true"));
         hover(&mut p, 1, &[], "1");
-        assert!(p.hovered_text(fmt).unwrap().contains("\"z\" : true"));
+        assert!(p.hovered_text(fmt, false).unwrap().contains("\"z\" : true"));
 
         // Tree: the selection when the hovered row is part of it.
         p.expanded.insert("1".into());
@@ -1391,23 +1411,38 @@ mod tests {
         p.selected.click("0/s", egui::Modifiers::NONE, Vec::new);
         p.selected.click("1/z", egui::Modifiers::COMMAND, Vec::new);
         hover(&mut p, 1, &["z"], "1/z");
-        assert_eq!(p.hovered_text(fmt).as_deref(), Some("x\ntrue"), "values, in the order of the rows");
+        assert_eq!(p.hovered_text(fmt, false).as_deref(), Some("x\ntrue"), "values, in the order of the rows");
         hover(&mut p, 0, &["_id"], "0/_id");
-        assert_eq!(p.hovered_text(fmt).as_deref(), Some("1"), "another row: only this one");
-        assert_eq!(p.selected_text(fmt).as_deref(), Some("x\ntrue"));
+        assert_eq!(p.hovered_text(fmt, false).as_deref(), Some("1"), "another row: only this one");
+        assert_eq!(p.selected_text(fmt, false).as_deref(), Some("x\ntrue"));
         p.selected.click("1", egui::Modifiers::COMMAND, Vec::new);
-        assert!(p.selected_text(fmt).unwrap().starts_with('['), "with a whole document: the documents");
+        assert!(p.selected_text(fmt, false).unwrap().starts_with('['), "with a whole document: the documents");
+
+        // Ctrl+Shift+C: with the names, ready to go inside `{ }`.
+        p.selected.clear();
+        hover(&mut p, 0, &["s"], "0/s");
+        assert_eq!(p.hovered_text(fmt, true).as_deref(), Some("\"s\" : \"x\""));
+        hover(&mut p, 1, &[], "1");
+        assert_eq!(p.hovered_text(fmt, true), p.hovered_text(fmt, false), "a document has its names");
+        assert_eq!(named_value(&["list".into(), "[0]".into()], &Bson::Int32(7), fmt), "\"0\" : 7", "an array element: its index");
+        p.selected.click("0/s", egui::Modifiers::NONE, Vec::new);
+        p.selected.click("1/z", egui::Modifiers::COMMAND, Vec::new);
+        hover(&mut p, 1, &["z"], "1/z");
+        assert_eq!(p.hovered_text(fmt, true).as_deref(), Some("\"s\" : \"x\",\n\"z\" : true"));
+        assert_eq!(p.selected_text(fmt, true).as_deref(), Some("\"s\" : \"x\",\n\"z\" : true"));
+        p.selected.click("1", egui::Modifiers::COMMAND, Vec::new);
+        assert_eq!(p.selected_text(fmt, true), p.selected_text(fmt, false), "with a whole document: the documents");
 
         // Table: documents.
         p.mode = ViewMode::Table;
         p.selected.clear();
         p.selected.click("1", egui::Modifiers::NONE, Vec::new);
-        assert!(p.selected_text(fmt).unwrap().starts_with('{'));
+        assert!(p.selected_text(fmt, false).unwrap().starts_with('{'));
         p.selected.click("0", egui::Modifiers::COMMAND, Vec::new);
-        let both = p.selected_text(fmt).unwrap();
+        let both = p.selected_text(fmt, false).unwrap();
         assert!(both.starts_with('[') && both.find("\"s\"") < both.find("\"z\""), "in the order of the page: {both}");
         p.mode = ViewMode::Text;
-        assert_eq!(p.selected_text(fmt), None);
+        assert_eq!(p.selected_text(fmt, false), None);
     }
 
     #[test]

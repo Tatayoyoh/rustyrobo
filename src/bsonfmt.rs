@@ -103,7 +103,7 @@ fn fmt_double(d: f64) -> String {
     }
 }
 
-fn js_string(s: &str) -> String {
+pub fn js_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
 }
 
