@@ -33,6 +33,7 @@ src/
   main.rs          window setup, icon
   app.rs           App state, Action → tokio task → AppEvent loop, shortcuts
   settings.rs      ConnectionSettings / AppSettings (JSON, 0600), Robo 3T import
+  update.rs        new version detection (GitHub latest release), update commands
   theme.rs         colour themes + egui Visuals; contrast-checked by tests
   fonts.rs         bundled fonts, system fonts as fallbacks (scan in background, mmap), user's choice
   bidi.rs          right-to-left text in visual order, for read-only views
@@ -88,6 +89,7 @@ Key design rules:
   pieces in visual order, each in its own section (`LayoutJob::append` would merge them). Editors keep
   the logical order: right-to-left sentences read in reverse there, and cursors are off on these rows
   (emilk/egui#8576). Check both when upgrading egui: native bidi would make `bidi.rs` double-reverse.
+- The update check starts in `main.rs`, not in `App::new`: tests and the autotest must not reach the network.
 - Ctrl+C and Ctrl+Shift+C reach egui as `Event::Copy`, not as keys (look at `modifiers.shift`). In the results, Ctrl+C and Ctrl+F follow the pointer, unless keys went to
   the editor since it last moved (`QueryTab::typing`): the hover of the last frame decides, before the editor sees the event.
 - A `ScrollArea` takes the scroll requests of both axes: `scroll_to_rect` in a table cell never reaches the horizontal scroll

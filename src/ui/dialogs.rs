@@ -14,6 +14,7 @@ use crate::mongo::ConnectSecrets;
 use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, SshAuthMethod};
 use crate::shell::parse_shell_value;
 use crate::ui::icon;
+use crate::update::{Os, Release};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocMode {
@@ -136,6 +137,7 @@ pub enum Dialog {
     FavoriteName { tab: u64, name: String },
     About,
     Shortcuts,
+    Update { release: Arc<Release>, os: Os, commands_open: bool },
 }
 
 #[derive(Clone)]
@@ -174,6 +176,10 @@ impl Dialog {
 
     pub fn message(title: &str, message: impl Into<String>) -> Self {
         Dialog::Message { title: title.to_string(), message: message.into() }
+    }
+
+    pub fn update(release: Arc<Release>) -> Self {
+        Dialog::Update { release, os: Os::current(), commands_open: false }
     }
 
     pub fn confirm(title: &str, message: impl Into<String>, action: Action) -> Self {
@@ -324,6 +330,15 @@ fn buttons(ui: &mut Ui, ok_label: &str, ok_enabled: bool) -> (bool, bool) {
 }
 
 /// Single right-aligned button for informational dialogs.
+/// Fixed height and scrolling, whatever the length of the text.
+fn read_only_text(ui: &mut Ui, salt: &str, text: &str, font: egui::TextStyle, height: f32, theme: &crate::theme::Theme) {
+    egui::Frame::new().fill(theme.base).stroke(egui::Stroke::new(1.0, theme.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(salt).auto_shrink(false).max_height(height).show(ui, |ui| {
+            ui.add(egui::TextEdit::multiline(&mut &*text).id_salt(salt).font(font).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
+        });
+    });
+}
+
 fn close_button(ui: &mut Ui, label: &str) -> bool {
     let mut clicked = false;
     button_row(ui, |ui| clicked = ui.button(RichText::new(label).strong()).clicked());
@@ -901,6 +916,33 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.label(RichText::new("MongoDB 3.6 to 8.x · embedded QuickJS shell · SSH tunnels").small().color(theme.text_weak));
                 });
                 if close_button(ui, "OK") || enter { Outcome::Close } else { Outcome::Keep }
+            }
+            Dialog::Update { release, os, commands_open } => {
+                ui.set_width(600.0);
+                title(ui, &format!("New version {}", release.version));
+                read_only_text(ui, "update-notes", &release.notes, egui::TextStyle::Body, 220.0, &theme);
+                ui.hyperlink_to("Full changelog", release.changelog_url());
+                ui.add_space(4.0);
+                let manual = egui::CollapsingHeader::new("Update manually").open(Some(*commands_open)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for choice in Os::ALL {
+                            ui.selectable_value(os, choice, choice.label());
+                        }
+                    });
+                    let commands = release.commands(*os);
+                    read_only_text(ui, "update-commands", &commands, egui::TextStyle::Monospace, 160.0, &theme);
+                    if ui.button(format!("{} Copy", icon::COPY)).on_hover_text("Copy the commands").clicked() {
+                        ui.ctx().copy_text(commands);
+                    }
+                });
+                if manual.header_response.clicked() {
+                    *commands_open = !*commands_open;
+                }
+                let (download, cancel) = buttons(ui, &format!("{} Download update", icon::DOWNLOAD_SIMPLE), true);
+                if download {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(release.download_url()));
+                }
+                if download || cancel { Outcome::Close } else { Outcome::Keep }
             }
             Dialog::Shortcuts => {
                 title(ui, "Keyboard Shortcuts");

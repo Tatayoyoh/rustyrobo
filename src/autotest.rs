@@ -158,6 +158,20 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
         }
         22 => shot(&mut t, ctx, "10-light-doc"),
+        23 => {
+            app.settings.theme = crate::theme::DEFAULT_THEME.into();
+            app.actions.push(Action::ApplyTheme);
+            let release = std::sync::Arc::new(crate::update::Release {
+                version: "9.9.9".into(),
+                notes: "### Added\n- A new feature\n- Another one\n\n### Fixed\n- A bug".into(),
+                asset: Some("rustyrobo-v9.9.9.tar.gz".into()),
+            });
+            app.update = Some(std::sync::Arc::clone(&release));
+            app.dialog = None;
+        }
+        24 => shot(&mut t, ctx, "11-update-chip"),
+        25 => app.dialog = Some(Dialog::Update { release: app.update.clone().expect("set above"), os: crate::update::Os::current(), commands_open: true }),
+        26 => shot(&mut t, ctx, "12-update"),
         _ => {
             app.dialog = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

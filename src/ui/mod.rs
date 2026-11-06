@@ -9,6 +9,8 @@ pub mod favorites;
 pub mod output;
 pub mod query;
 
+use std::sync::Arc;
+
 use egui::{Align, Color32, Layout, RichText, Ui};
 
 use crate::app::{Action, App, LogLevel};
@@ -334,6 +336,12 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
             app.actions.push(Action::SaveSettings);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if let Some(release) = &app.update {
+                let text = RichText::new(format!("{} v{}", icon::ARROW_CIRCLE_UP, release.version)).strong().color(app.theme.on_accent);
+                if ui.add(egui::Button::new(text).fill(app.theme.accent).corner_radius(10)).on_hover_text("A new version is available").clicked() {
+                    app.actions.push(Action::Dialog(Dialog::update(Arc::clone(release))));
+                }
+            }
             if let Some((msg, at, level)) = &app.toast {
                 if at.elapsed() < std::time::Duration::from_secs(6) {
                     let c = match level {

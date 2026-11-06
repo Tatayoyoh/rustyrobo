@@ -610,3 +610,11 @@ fn bench_large_documents() {
     assert!(native_find < js_find && native_agg < js_agg);
     sh.ok("db.dropDatabase()");
 }
+
+#[test]
+fn latest_release_on_github_is_understood() {
+    if !live() {
+        return;
+    }
+    rustyrobo::update::check().expect("reply of GitHub");
+}

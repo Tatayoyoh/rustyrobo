@@ -10,5 +10,12 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native("rustyrobo", options, Box::new(|cc| Ok(Box::new(rustyrobo::app::App::new(cc)))))
+    eframe::run_native("rustyrobo", options, Box::new(|cc| {
+        let app = rustyrobo::app::App::new(cc);
+        // Here and not in `App::new`: tests must not reach the network.
+        if app.autotest.is_none() {
+            app.check_for_update();
+        }
+        Ok(Box::new(app))
+    }))
 }

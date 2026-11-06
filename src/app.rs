@@ -161,6 +161,7 @@ pub enum AppEvent {
     Test(u64, StepReport),
     TestDone(u64, Result<String, String>),
     Fonts(FontChoice, FontDefinitions),
+    Update(Result<Option<crate::update::Release>, String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -204,6 +205,8 @@ pub struct App {
     pub theme_preview: Option<&'static str>,
     fullscreen: bool,
     pub autotest: Option<crate::autotest::AutoTest>,
+    /// Newer version found on GitHub.
+    pub update: Option<Arc<crate::update::Release>>,
     pub logo: Option<egui::TextureHandle>,
     /// Sampled field names for query completion: (server, db) → collection → fields.
     pub fields: std::collections::HashMap<(u64, String), std::collections::HashMap<String, Vec<String>>>,
@@ -250,6 +253,7 @@ impl App {
             theme_preview: None,
             fullscreen: false,
             autotest: crate::autotest::AutoTest::from_env(),
+            update: None,
             logo: crate::assets::logo_texture(&cc.egui_ctx),
             fields: Default::default(),
         };
@@ -315,6 +319,12 @@ impl App {
         });
     }
 
+    /// Looks for a new version in the background. Being offline is no error
+    /// worth a message in the status bar: it only goes to the logs.
+    pub fn check_for_update(&self) {
+        self.spawn(async { AppEvent::Update(tokio::task::spawn_blocking(crate::update::check).await.unwrap_or_else(|e| Err(e.to_string()))) });
+    }
+
     // ------------------------------------------------------------ events
 
     fn poll_events(&mut self) {
@@ -325,6 +335,8 @@ impl App {
 
     fn handle_event(&mut self, ev: AppEvent) {
         match ev {
+            AppEvent::Update(Ok(found)) => self.update = found.map(Arc::new),
+            AppEvent::Update(Err(e)) => self.log(LogLevel::Info, format!("Could not check for updates: {e}")),
             // Unless the choice has changed again in the meantime.
             AppEvent::Fonts(choice, fonts) => {
                 if choice == self.settings.fonts && self.fonts_applied.as_ref() != Some(&choice) {

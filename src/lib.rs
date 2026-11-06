@@ -11,3 +11,4 @@ pub mod settings;
 pub mod shell;
 pub mod theme;
 pub mod ui;
+pub mod update;

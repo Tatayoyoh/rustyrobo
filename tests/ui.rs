@@ -409,6 +409,67 @@ fn shortcuts_dialog_lists_the_copy_shortcuts() {
     assert!(has_label(&h, "Ctrl+Shift+C"));
 }
 
+fn opened_url(h: &Harness<'_, App>) -> Option<String> {
+    h.output().platform_output.commands.iter().find_map(|c| match c {
+        egui::OutputCommand::OpenUrl(o) => Some(o.url.clone()),
+        _ => None,
+    })
+}
+
+fn text_field_shows(h: &Harness<'_, App>, text: &str) -> bool {
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).any(|n| n.value().is_some_and(|v| v.contains(text)))
+}
+
+#[test]
+fn new_version_shows_a_chip_and_a_dialog() {
+    let _env = env("update", &AppSettings::default());
+    let mut h = app_harness();
+    assert!(h.query_all_by_label_contains("v9.9.9").next().is_none(), "no chip without a new version");
+    h.state_mut().update = Some(std::sync::Arc::new(rustyrobo::update::Release {
+        version: "9.9.9".into(),
+        notes: "### Added\n- Things".into(),
+        asset: Some("rustyrobo-v9.9.9-linux-x86_64.tar.gz".into()),
+    }));
+    h.run_steps(2);
+
+    let open = |h: &mut Harness<'_, App>| {
+        h.get_by_label_contains("v9.9.9").click();
+        h.run_steps(4);
+        assert!(has_label(h, "New version 9.9.9"));
+    };
+    open(&mut h);
+    assert!(text_field_shows(&h, "- Things"), "the changelog");
+    assert!(has_label(&h, "Full changelog"));
+    assert!(!text_field_shows(&h, "SHA256SUMS"), "the commands start folded");
+
+    // The commands, by system.
+    h.get_by_label("Update manually").click();
+    h.run_steps(4);
+    for (os, command) in [("Linux", "tar xzf"), ("Windows", "Expand-Archive"), ("macOS", "ditto")] {
+        h.get_by_label(os).click();
+        h.run_steps(3);
+        assert!(text_field_shows(&h, command), "{os}");
+    }
+    h.get_by_label_contains("Copy").click();
+    h.step();
+    assert!(copied(&h).is_some_and(|c| c.contains("ditto")));
+    h.run_steps(2);
+
+    // Cancel only closes, the chip stays.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(!has_label(&h, "New version 9.9.9"));
+    assert!(opened_url(&h).is_none());
+
+    // Download: the file for this system, in the browser.
+    open(&mut h);
+    h.get_by_label_contains("Download update").click();
+    h.step();
+    assert_eq!(opened_url(&h).as_deref(), Some("https://github.com/Tatayoyoh/rustyrobo/releases/download/v9.9.9/rustyrobo-v9.9.9-linux-x86_64.tar.gz"));
+    h.run_steps(3);
+    assert!(!has_label(&h, "New version 9.9.9"));
+}
+
 #[test]
 fn f10_rotates_both_ways() {
     use rustyrobo::settings::Orientation;
