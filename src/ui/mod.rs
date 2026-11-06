@@ -108,6 +108,8 @@ fn radio_item<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, choice: T, text: 
 }
 
 fn menus(app: &mut App, ui: &mut Ui) {
+    // None unless the Theme menu is open: closing it restores the theme.
+    let mut theme_preview = None;
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
             if menu_item(ui, &format!("{ICON_CONNECT} Connect…"), "Ctrl+N") {
@@ -140,11 +142,17 @@ fn menus(app: &mut App, ui: &mut Ui) {
             }
             ui.separator();
             ui.menu_button("Theme", |ui| {
+                // Between two rows the theme stays on the last one, not to flash.
+                theme_preview = app.theme_preview;
                 for name in crate::theme::names() {
-                    let mut current = app.settings.theme.clone();
-                    if ui.radio_value(&mut current, name.to_string(), name).clicked() {
-                        app.settings.theme = current;
+                    let row = ui.radio(app.settings.theme == name, name);
+                    if row.hovered() {
+                        theme_preview = Some(name);
+                    }
+                    if row.clicked() {
+                        app.settings.theme = name.to_string();
                         app.actions.push(Action::ApplyTheme);
+                        theme_preview = None;
                         ui.close();
                     }
                 }
@@ -256,6 +264,10 @@ fn menus(app: &mut App, ui: &mut Ui) {
             }
         });
     });
+    if theme_preview != app.theme_preview {
+        app.theme_preview = theme_preview;
+        app.actions.push(Action::PreviewTheme);
+    }
 }
 
 fn toolbar(app: &mut App, ui: &mut Ui) {

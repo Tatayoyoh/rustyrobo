@@ -284,6 +284,80 @@ fn search_filters_the_list() {
 }
 
 #[test]
+fn theme_menu_shows_the_hovered_theme_and_keeps_the_clicked_one() {
+    let env = env("theme-hover", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    let initial = h.state().theme.name;
+    let open_menu = |h: &mut Harness<'_, App>| {
+        h.get_by_label("View").click();
+        h.run_steps(2);
+        h.get_by_label_contains("Theme").hover();
+        h.run_steps(3);
+    };
+    let hover = |h: &mut Harness<'_, App>, theme: &str| {
+        h.get_by_label(theme).hover();
+        h.run_steps(2);
+    };
+    let not_saved = |h: &Harness<'_, App>| {
+        assert_eq!(h.state().settings.theme, theme::DEFAULT_THEME);
+        assert_eq!(saved_settings(&env).theme, theme::DEFAULT_THEME);
+    };
+
+    // Hovering shows each theme, without choosing it.
+    open_menu(&mut h);
+    hover(&mut h, "Nord");
+    assert_eq!(h.state().theme.name, "Nord");
+    hover(&mut h, "Solarized Light");
+    assert_eq!(h.state().theme.name, "Solarized Light");
+    assert!(!h.ctx.global_style().visuals.dark_mode, "the app follows");
+    not_saved(&h);
+
+    // Between two rows, the theme does not flash back.
+    h.hover_at(egui::pos2(1000.0, 800.0));
+    h.run_steps(2);
+    assert_eq!(h.state().theme.name, "Solarized Light");
+
+    // Closing the menu restores the theme.
+    press(&mut h, Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().theme.name, initial);
+    not_saved(&h);
+
+    // So does opening another menu.
+    open_menu(&mut h);
+    hover(&mut h, "Nord");
+    assert_eq!(h.state().theme.name, "Nord");
+    h.get_by_label_contains("Font Size").hover();
+    h.run_steps(3);
+    assert_eq!(h.state().theme.name, initial);
+    not_saved(&h);
+    press(&mut h, Key::Escape);
+    h.run_steps(2);
+
+    // A click keeps it, and the menu closes.
+    open_menu(&mut h);
+    hover(&mut h, "Nord");
+    h.get_by_label("Nord").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Solarized Light").is_none(), "the menu is closed");
+    assert_eq!(h.state().theme.name, "Nord");
+    assert_eq!(h.state().settings.theme, "Nord");
+    assert_eq!(saved_settings(&env).theme, "Nord");
+
+    // From now on, this is the theme to go back to.
+    open_menu(&mut h);
+    hover(&mut h, "Solarized Light");
+    assert_eq!(h.state().theme.name, "Solarized Light");
+    press(&mut h, Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().theme.name, "Nord");
+    assert_eq!(saved_settings(&env).theme, "Nord");
+}
+
+#[test]
 fn theme_menu_switches_theme() {
     let env = env("theme", &AppSettings::default());
     let mut h = harness();

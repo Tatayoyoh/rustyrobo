@@ -8,6 +8,7 @@
 - Preferences: font size slider
 - Preferences: Up and Down select the previous and next item of the focused list
 - Preferences: "Reset to Default" button
+- View > Theme: a theme shows when hovered, and is kept when clicked
 
 ### Fixed
 - Hebrew, Arabic, CJK, Thai, Indic and other scripts showed as boxes: the fonts installed on the system are now used for the characters missing from the bundled fonts

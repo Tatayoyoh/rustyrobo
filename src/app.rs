@@ -200,6 +200,8 @@ pub struct App {
     fonts_applied: Option<FontChoice>,
     system_dark: bool,
     pub theme: Theme,
+    /// Theme shown instead of the one in the settings, while it is hovered in the menu.
+    pub theme_preview: Option<&'static str>,
     fullscreen: bool,
     pub autotest: Option<crate::autotest::AutoTest>,
     pub logo: Option<egui::TextureHandle>,
@@ -245,6 +247,7 @@ impl App {
             next_id: 1,
             system_dark,
             theme,
+            theme_preview: None,
             fullscreen: false,
             autotest: crate::autotest::AutoTest::from_env(),
             logo: crate::assets::logo_texture(&cc.egui_ctx),
@@ -838,7 +841,7 @@ impl App {
 
     fn update_theme(&mut self) {
         self.theme_name = self.settings.theme.clone();
-        self.theme = *theme::resolve(&self.settings.theme, self.system_dark);
+        self.theme = *theme::resolve(self.theme_preview.unwrap_or(&self.settings.theme), self.system_dark);
         theme::apply(&self.ctx, &self.theme, self.settings.font_size);
         // It shows on the next frame, which nothing else may ask for.
         self.ctx.request_repaint();
