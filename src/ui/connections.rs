@@ -18,7 +18,7 @@ use crate::settings::{
     find_robo3t_configs, import_robo3t,
 };
 use crate::theme::Theme;
-use crate::ui::{ICON_SERVER, color_dot, icon};
+use crate::ui::{ICON_SERVER, color_dot, icon, menu};
 
 pub const TAG_COLORS: [[u8; 3]; 9] = [
     [0xE5, 0x48, 0x4D],
@@ -322,20 +322,20 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                             }
                             let id = c.id;
                             resp.context_menu(|ui| {
-                                if ui.button("Connect").clicked() {
+                                if menu::button(ui, "Connect").clicked() {
                                     actions.push(Action::Connect(id));
                                     close = true;
                                     ui.close();
                                 }
-                                if ui.button("Edit…").clicked() {
+                                if menu::button(ui, "Edit…").clicked() {
                                     actions.push(Action::EditConnection(id));
                                     ui.close();
                                 }
-                                if ui.button("Copy connection string").clicked() {
+                                if menu::button(ui, "Copy connection string").clicked() {
                                     ui.ctx().copy_text(build_uri(c, None, None, Secrets::Omit));
                                     ui.close();
                                 }
-                                if ui.button("Remove…").clicked() {
+                                if menu::button(ui, "Remove…").clicked() {
                                     st.confirm_delete = Some(id);
                                     ui.close();
                                 }

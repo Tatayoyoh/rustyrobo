@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::app::{Action, App};
 use crate::settings::{ConnectionSettings, FavoriteScript};
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
-use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, icon};
+use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, icon, menu};
 
 #[derive(Default)]
 pub struct FavoritesManager {
@@ -286,16 +286,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                         }
                                         let id = f.id;
                                         r.context_menu(|ui| {
-                                            if ui.button("Load").clicked() {
+                                            if menu::button(ui, "Load").clicked() {
                                                 actions.push(Action::OpenFavorite(id));
                                                 close = true;
                                                 ui.close();
                                             }
-                                            if ui.button("Edit…").clicked() {
+                                            if menu::button(ui, "Edit…").clicked() {
                                                 st.form = Some(Form { fav: (*f).clone(), new: false });
                                                 ui.close();
                                             }
-                                            if ui.button("Delete…").clicked() {
+                                            if menu::button(ui, "Delete…").clicked() {
                                                 st.confirm_delete = Some(id);
                                                 ui.close();
                                             }

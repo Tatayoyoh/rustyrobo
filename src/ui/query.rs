@@ -14,7 +14,7 @@ use crate::shell::ShellHandle;
 use crate::ui::dialogs::Dialog;
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
 use crate::ui::output::{PaneCtx, show_pane};
-use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, ICON_STOP, color_dot, icon, toggle_switch};
+use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, ICON_STOP, color_dot, icon, menu, toggle_switch};
 
 pub struct QueryTab {
     pub id: u64,
@@ -480,32 +480,32 @@ fn tab_bar(app: &mut App, ui: &mut Ui) {
                                     close = Some(t.id);
                                 }
                                 r.context_menu(|ui| {
-                                    if ui.button("New Shell").clicked() {
+                                    if menu::button(ui, "New Shell").clicked() {
                                         actions.push(Action::OpenShell { server: t.server, db: t.db.clone(), script: String::new(), execute: false, title: "New Shell".into(), cursor: None });
                                         ui.close();
                                     }
-                                    if ui.button("Re-execute Query").clicked() {
+                                    if menu::button(ui, "Re-execute Query").clicked() {
                                         actions.push(Action::Execute(t.id));
                                         ui.close();
                                     }
-                                    if ui.button("Duplicate Query In New Tab").clicked() {
+                                    if menu::button(ui, "Duplicate Query In New Tab").clicked() {
                                         actions.push(Action::DuplicateTab(t.id));
                                         ui.close();
                                     }
-                                    if ui.button("Rename Shell…").clicked() {
+                                    if menu::button(ui, "Rename Shell…").clicked() {
                                         rename = Some(i);
                                         ui.close();
                                     }
                                     ui.separator();
-                                    if ui.button("Close Shell").clicked() {
+                                    if menu::button(ui, "Close Shell").clicked() {
                                         actions.push(Action::CloseTab(t.id));
                                         ui.close();
                                     }
-                                    if ui.button("Close Other Shells").clicked() {
+                                    if menu::button(ui, "Close Other Shells").clicked() {
                                         close_others = Some(t.id);
                                         ui.close();
                                     }
-                                    if ui.button("Close Shells to the Right").clicked() {
+                                    if menu::button(ui, "Close Shells to the Right").clicked() {
                                         close_right = Some(i);
                                         ui.close();
                                     }

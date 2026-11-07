@@ -9,7 +9,7 @@ use egui::{Id, Response, RichText, Ui};
 
 use crate::app::{Action, App, Load, Refresh, ServerStatus};
 use crate::ui::dialogs::{Dialog, DocMode};
-use crate::ui::{ICON_COLLECTION, ICON_DB, ICON_FOLDER, ICON_FUNCTION, ICON_INDEX, ICON_SERVER, ICON_USER, ICON_VIEW, color_dot, icon};
+use crate::ui::{ICON_COLLECTION, ICON_DB, ICON_FOLDER, ICON_FUNCTION, ICON_INDEX, ICON_SERVER, ICON_USER, ICON_VIEW, color_dot, icon, menu};
 
 const SYSTEM_DBS: &[&str] = &["admin", "config", "local"];
 
@@ -172,7 +172,7 @@ fn server_node(app: &App, s: &crate::app::Server, ui: &mut Ui, actions: &RefCell
 fn server_menu(app: &App, s: &crate::app::Server, ui: &mut Ui, actions: &RefCell<Vec<Action>>) {
     let sid = s.id;
     let item = |ui: &mut Ui, label: &str, a: Action| {
-        if ui.button(label).clicked() {
+        if menu::button(ui, label).clicked() {
             actions.borrow_mut().push(a);
             ui.close();
         }
@@ -227,7 +227,7 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
             let r = row(ui, id, RichText::new(format!("{ICON_DB} {}", d.name)));
             r.context_menu(|ui| {
                 let item = |ui: &mut Ui, label: &str, a: Action| {
-                    if ui.button(label).clicked() {
+                    if menu::button(ui, label).clicked() {
                         actions.borrow_mut().push(a);
                         ui.close();
                     }
@@ -272,19 +272,19 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                 |ui| {
                     let r = row(ui, cid, RichText::new(format!("{ICON_FOLDER} Collections{}", count(&d.collections))));
                     r.context_menu(|ui| {
-                        if ui.button("Create Collection…").clicked() {
+                        if menu::button(ui, "Create Collection…").clicked() {
                             actions.borrow_mut().push(Action::Dialog(Dialog::create_collection(sid, &db)));
                             ui.close();
                         }
-                        if ui.button("Import Collection…").clicked() {
+                        if menu::button(ui, "Import Collection…").clicked() {
                             actions.borrow_mut().push(Action::Dialog(Dialog::import(sid, &db, None)));
                             ui.close();
                         }
-                        if ui.button("Collections Statistics").clicked() {
+                        if menu::button(ui, "Collections Statistics").clicked() {
                             actions.borrow_mut().push(shell("db.printCollectionStats()", true, None));
                             ui.close();
                         }
-                        if ui.button("Refresh").clicked() {
+                        if menu::button(ui, "Refresh").clicked() {
                             actions.borrow_mut().push(Action::LoadCollections(sid, db.clone()));
                             ui.close();
                         }
@@ -327,15 +327,15 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                 |ui| {
                     let r = row(ui, fid, RichText::new(format!("{ICON_FOLDER} Functions{}", count(&d.functions))));
                     r.context_menu(|ui| {
-                        if ui.button("Add Function…").clicked() {
+                        if menu::button(ui, "Add Function…").clicked() {
                             actions.borrow_mut().push(Action::Dialog(Dialog::Function { server: sid, db: db.clone(), original: None, name: String::new(), code: "function () {\n    \n}".into(), error: None }));
                             ui.close();
                         }
-                        if ui.button("View Functions").clicked() {
+                        if menu::button(ui, "View Functions").clicked() {
                             actions.borrow_mut().push(shell("db.system.js.find()", true, None));
                             ui.close();
                         }
-                        if ui.button("Refresh").clicked() {
+                        if menu::button(ui, "Refresh").clicked() {
                             actions.borrow_mut().push(Action::LoadFunctions(sid, db.clone()));
                             ui.close();
                         }
@@ -368,11 +368,11 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                                 actions.borrow_mut().push(edit.clone());
                             }
                             r.context_menu(|ui| {
-                                if ui.button("Edit Function…").clicked() {
+                                if menu::button(ui, "Edit Function…").clicked() {
                                     actions.borrow_mut().push(edit.clone());
                                     ui.close();
                                 }
-                                if ui.button("Remove Function…").clicked() {
+                                if menu::button(ui, "Remove Function…").clicked() {
                                     actions.borrow_mut().push(Action::Dialog(Dialog::confirm(
                                         "Remove Function",
                                         format!("Remove function \"{name}\"?"),
@@ -400,15 +400,15 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                 |ui| {
                     let r = row(ui, uid, RichText::new(format!("{ICON_FOLDER} Users{}", count(&d.users))));
                     r.context_menu(|ui| {
-                        if ui.button("Add User…").clicked() {
+                        if menu::button(ui, "Add User…").clicked() {
                             actions.borrow_mut().push(Action::Dialog(Dialog::new_user(sid, &db)));
                             ui.close();
                         }
-                        if ui.button("View Users").clicked() {
+                        if menu::button(ui, "View Users").clicked() {
                             actions.borrow_mut().push(shell("db.getUsers()", true, None));
                             ui.close();
                         }
-                        if ui.button("Refresh").clicked() {
+                        if menu::button(ui, "Refresh").clicked() {
                             actions.borrow_mut().push(Action::LoadUsers(sid, db.clone()));
                             ui.close();
                         }
@@ -432,15 +432,15 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                                 actions.borrow_mut().push(view.clone());
                             }
                             r.context_menu(|ui| {
-                                if ui.button("View User").clicked() {
+                                if menu::button(ui, "View User").clicked() {
                                     actions.borrow_mut().push(view.clone());
                                     ui.close();
                                 }
-                                if ui.button("Edit User…").clicked() {
+                                if menu::button(ui, "Edit User…").clicked() {
                                     actions.borrow_mut().push(Action::Dialog(Dialog::edit_user(sid, &db, u)));
                                     ui.close();
                                 }
-                                if ui.button("Drop User…").clicked() {
+                                if menu::button(ui, "Drop User…").clicked() {
                                     actions.borrow_mut().push(Action::Dialog(Dialog::confirm(
                                         "Drop User",
                                         format!("Drop user \"{name}\" from database \"{db}\"?"),
@@ -484,7 +484,7 @@ fn coll_node(app: &App, sid: u64, db: &str, c: &crate::app::CollNode, ui: &mut U
             }
             r.context_menu(|ui| {
                 let item = |ui: &mut Ui, label: &str, a: Action| {
-                    if ui.button(label).clicked() {
+                    if menu::button(ui, label).clicked() {
                         actions.borrow_mut().push(a);
                         ui.close();
                     }
@@ -558,19 +558,19 @@ fn coll_node(app: &App, sid: u64, db: &str, c: &crate::app::CollNode, ui: &mut U
                 |ui| {
                     let r = row(ui, iid, RichText::new(format!("{ICON_FOLDER} Indexes{}", count(&c.indexes))));
                     r.context_menu(|ui| {
-                        if ui.button("View Indexes").clicked() {
+                        if menu::button(ui, "View Indexes").clicked() {
                             actions.borrow_mut().push(shell("getIndexes()", true, None));
                             ui.close();
                         }
-                        if ui.button("Add Index…").clicked() {
+                        if menu::button(ui, "Add Index…").clicked() {
                             actions.borrow_mut().push(Action::Dialog(Dialog::new_index(sid, db, &name)));
                             ui.close();
                         }
-                        if ui.button("Rebuild Indexes…").clicked() {
+                        if menu::button(ui, "Rebuild Indexes…").clicked() {
                             actions.borrow_mut().push(shell("reIndex()", false, None));
                             ui.close();
                         }
-                        if ui.button("Refresh").clicked() {
+                        if menu::button(ui, "Refresh").clicked() {
                             actions.borrow_mut().push(Action::LoadIndexes(sid, db.to_string(), name.clone()));
                             ui.close();
                         }
@@ -606,11 +606,11 @@ fn index_leaf(sid: u64, db: &str, coll: &str, ix: &Document, parent: Id, ui: &mu
         actions.borrow_mut().push(edit.clone());
     }
     r.context_menu(|ui| {
-        if ui.add_enabled(iname != "_id_", egui::Button::new("Edit Index…")).clicked() {
+        if menu::entry(ui, iname != "_id_", "Edit Index…", "").clicked() {
             actions.borrow_mut().push(edit.clone());
             ui.close();
         }
-        if ui.add_enabled(iname != "_id_", egui::Button::new("Drop Index…")).clicked() {
+        if menu::entry(ui, iname != "_id_", "Drop Index…", "").clicked() {
             actions.borrow_mut().push(Action::Dialog(Dialog::confirm(
                 "Drop Index",
                 format!("Drop index \"{iname}\" of collection \"{coll}\"?"),

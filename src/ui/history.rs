@@ -8,7 +8,7 @@ use crate::app::{Action, App};
 use crate::history::HistoryEntry;
 use crate::settings::ConnectionSettings;
 use crate::ui::editor::code_view;
-use crate::ui::{ICON_HISTORY, icon};
+use crate::ui::{ICON_HISTORY, icon, menu};
 
 #[derive(Default)]
 pub struct HistoryWindow {
@@ -167,16 +167,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     let id = e.id;
                     r.context_menu(|ui| {
-                        if ui.button("Open in New Shell").clicked() {
+                        if menu::button(ui, "Open in New Shell").clicked() {
                             actions.push(Action::OpenHistory(id));
                             close = true;
                             ui.close();
                         }
-                        if ui.button("Copy Script").clicked() {
+                        if menu::button(ui, "Copy Script").clicked() {
                             ui.ctx().copy_text(app.history.get(id).map(|e| e.script.clone()).unwrap_or_default());
                             ui.close();
                         }
-                        if ui.button("Delete").clicked() {
+                        if menu::button(ui, "Delete").clicked() {
                             actions.push(Action::DeleteHistory(id));
                             ui.close();
                         }

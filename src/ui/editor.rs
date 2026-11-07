@@ -10,7 +10,7 @@ use egui::text::{CCursor, CCursorRange, CharIndex, LayoutJob, TextFormat};
 use egui::{Color32, FontId, Galley, Id, Key, Modifiers, TextBuffer, Ui};
 
 use crate::theme::Theme;
-use crate::ui::icon;
+use crate::ui::{icon, menu};
 use crate::ui::editing::{Edit, FoldedText, MAX_MATCHES, Sel, apply_edit, apply_folded_edit, find_all, fold_text, next_occurrence, selected_text, word_at};
 
 const KEYWORDS: &[&str] = &[
@@ -1161,11 +1161,11 @@ fn fold_gutter(ui: &Ui, rect: egui::Rect, resp: &egui::Response, out: &egui::tex
         click = Some(FoldClick::Toggle(r));
     }
     resp.context_menu(|ui| {
-        if ui.button("Collapse All").clicked() {
+        if menu::button(ui, "Collapse All").clicked() {
             click = Some(FoldClick::CollapseAll);
             ui.close();
         }
-        if ui.button("Expand All").clicked() {
+        if menu::button(ui, "Expand All").clicked() {
             click = Some(FoldClick::ExpandAll);
             ui.close();
         }

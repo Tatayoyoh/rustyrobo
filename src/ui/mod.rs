@@ -7,6 +7,7 @@ pub mod editor;
 pub mod explorer;
 pub mod favorites;
 pub mod history;
+pub mod menu;
 pub mod output;
 pub mod query;
 

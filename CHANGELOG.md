@@ -7,6 +7,7 @@
 - Dump and restore database
 - Query history in File > Query History… or (Ctrl+H)
 - Table view: double-click a cell for inline edit
+- Context menus: icons, and action words coloured by kind (create, edit, delete)
 
 ### Fixed
 - View Document: right-to-left sentences read in the right order, like in the results (#1)

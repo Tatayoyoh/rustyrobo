@@ -35,6 +35,8 @@ pub struct Theme {
     pub text: Color32,
     pub text_weak: Color32,
     pub accent: Color32,
+    /// Second key colour, distinct from `accent` (edit actions in menus).
+    pub secondary: Color32,
     /// Text drawn on top of `accent`.
     pub on_accent: Color32,
     pub selection: Color32,
@@ -61,6 +63,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0x1F2328),
         text_weak: hex(0x656D76),
         accent: hex(0x2563EB),
+        secondary: hex(0x8250DF),
         on_accent: hex(0xFFFFFF),
         selection: hex(0xC7DBFF),
         stripe: hex(0xF7F8FA),
@@ -91,6 +94,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xDCDFE4),
         text_weak: hex(0x8B9099),
         accent: hex(0x2DB8A6),
+        secondary: hex(0xC792EA),
         on_accent: hex(0x0B1F1C),
         selection: hex(0x1F4E49),
         stripe: hex(0x1B1C1F),
@@ -121,6 +125,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xECEFF4),
         text_weak: hex(0x9AA5B8),
         accent: hex(0x88C0D0),
+        secondary: hex(0xB48EAD),
         on_accent: hex(0x2E3440),
         selection: hex(0x40576B),
         stripe: hex(0x2A303B),
@@ -151,6 +156,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0x4A5B62),
         text_weak: hex(0x839496),
         accent: hex(0x268BD2),
+        secondary: hex(0x6C71C4),
         on_accent: hex(0xFDF6E3),
         selection: hex(0xD3E3EC),
         stripe: hex(0xF7F0DC),
@@ -181,6 +187,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0x93A1A1),
         text_weak: hex(0x657B83),
         accent: hex(0x2AA198),
+        secondary: hex(0xB58900),
         on_accent: hex(0x002B36),
         selection: hex(0x184E5A),
         stripe: hex(0x01313D),
@@ -211,6 +218,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xEBDBB2),
         text_weak: hex(0xA89984),
         accent: hex(0xFABD2F),
+        secondary: hex(0xD3869B),
         on_accent: hex(0x282828),
         selection: hex(0x4F4632),
         stripe: hex(0x242424),
@@ -241,6 +249,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xABB2BF),
         text_weak: hex(0x7F848E),
         accent: hex(0x61AFEF),
+        secondary: hex(0xC678DD),
         on_accent: hex(0x21252B),
         selection: hex(0x3E4F6A),
         stripe: hex(0x252930),
@@ -271,6 +280,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xF8F8F2),
         text_weak: hex(0x9EA8C7),
         accent: hex(0xBD93F9),
+        secondary: hex(0xFF79C6),
         on_accent: hex(0x21222C),
         selection: hex(0x4A3F6B),
         stripe: hex(0x252631),
@@ -301,6 +311,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xC0CAF5),
         text_weak: hex(0x7A82A6),
         accent: hex(0x7AA2F7),
+        secondary: hex(0xBB9AF7),
         on_accent: hex(0x16161E),
         selection: hex(0x2E3C64),
         stripe: hex(0x181923),
@@ -331,6 +342,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0x4C4F69),
         text_weak: hex(0x6C6F85),
         accent: hex(0x8839EF),
+        secondary: hex(0x1E66F5),
         on_accent: hex(0xEFF1F5),
         selection: hex(0xD9CCF6),
         stripe: hex(0xE9ECF2),
@@ -361,6 +373,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xCDD6F4),
         text_weak: hex(0x9399B2),
         accent: hex(0xCBA6F7),
+        secondary: hex(0x89B4FA),
         on_accent: hex(0x1E1E2E),
         selection: hex(0x45405E),
         stripe: hex(0x1B1B29),
@@ -391,6 +404,7 @@ pub const THEMES: &[Theme] = &[
         text: hex(0xFFFFFF),
         text_weak: hex(0xD0D0D0),
         accent: hex(0xFFD400),
+        secondary: hex(0x6FC3FF),
         on_accent: hex(0x000000),
         selection: hex(0x0050A0),
         stripe: hex(0x0D0D0D),
@@ -470,6 +484,7 @@ pub fn visuals(t: &Theme) -> Visuals {
 
 pub fn apply(ctx: &egui::Context, t: &Theme, font_size: f32) {
     let vis = visuals(t);
+    ctx.data_mut(|d| d.insert_temp(crate::ui::menu::theme_id(), *t));
     ctx.set_visuals_of(egui::Theme::Dark, vis.clone());
     ctx.set_visuals_of(egui::Theme::Light, vis);
     ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
@@ -542,6 +557,7 @@ mod tests {
             assert!(contrast(t.text, t.selection) >= 3.0, "{}: text/selection", t.name);
             assert!(contrast(t.text_weak, t.bg) >= 2.5, "{}: weak text", t.name);
             assert_eq!(t.dark, luminance(t.bg) < 0.2, "{}: dark flag", t.name);
+            assert!(contrast(t.secondary, t.bg) >= 3.0, "{}: secondary {:.2}", t.name, contrast(t.secondary, t.bg));
             let s = &t.syntax;
             for (name, c) in [("keyword", s.keyword), ("string", s.string), ("number", s.number), ("function", s.function), ("property", s.property), ("bson", s.bson_type)] {
                 assert!(contrast(c, t.base) >= 3.0, "{}: {name} {:.2}", t.name, contrast(c, t.base));

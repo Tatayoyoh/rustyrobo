@@ -17,7 +17,7 @@ use crate::theme::{Theme, bson_color};
 use crate::ui::dialogs::{Dialog, DocMode};
 use crate::ui::editing::{FoldedText, MAX_MATCHES, find_all, fold_text};
 use crate::ui::editor::{FoldClick, TextMatches};
-use crate::ui::icon;
+use crate::ui::{icon, menu};
 
 pub struct OutputPane {
     pub output: ShellOutput,
@@ -993,11 +993,11 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     let values: Vec<(&Target<'_>, &Bson)> = targets.iter().filter_map(|t| Some((t, lookup(docs, t.doc, t.keys.unwrap_or(&[]))?))).collect();
     let containers: Vec<&str> = values.iter().filter(|(_, v)| bsonfmt::is_container(v)).filter_map(|(t, _)| t.path).collect();
     if !containers.is_empty() {
-        if ui.button("Expand Recursively").clicked() {
+        if menu::button(ui, "Expand Recursively").clicked() {
             out.extend(containers.iter().map(|p| MenuAction::ExpandAll(p.to_string())));
             ui.close();
         }
-        if ui.button("Collapse Recursively").clicked() {
+        if menu::button(ui, "Collapse Recursively").clicked() {
             out.extend(containers.iter().map(|p| MenuAction::CollapseAll(p.to_string())));
             ui.close();
         }
@@ -1005,19 +1005,19 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     }
     // Values inside documents (not the documents themselves): one per line.
     if values.iter().all(|(t, _)| t.keys.is_some_and(|k| !k.is_empty())) {
-        if ui.add(egui::Button::new("Copy Values").shortcut_text("Ctrl+C")).clicked() {
+        if menu::entry(ui, true, "Copy Values", "Ctrl+C").clicked() {
             ui.ctx().copy_text(values_text(&values.iter().map(|(_, v)| *v).collect::<Vec<_>>(), cx.fmt));
             ui.close();
         }
-        if ui.button("Copy Names").clicked() {
+        if menu::button(ui, "Copy Names").clicked() {
             ui.ctx().copy_text(values.iter().filter_map(|(t, _)| t.keys?.last().cloned()).collect::<Vec<_>>().join("\n"));
             ui.close();
         }
-        if ui.button("Copy Paths").clicked() {
+        if menu::button(ui, "Copy Paths").clicked() {
             ui.ctx().copy_text(values.iter().filter_map(|(t, _)| t.keys.map(dotted_path)).collect::<Vec<_>>().join("\n"));
             ui.close();
         }
-        if ui.add(egui::Button::new("Copy Names and Values").shortcut_text("Ctrl+Shift+C")).clicked() {
+        if menu::entry(ui, true, "Copy Names and Values", "Ctrl+Shift+C").clicked() {
             let named: Vec<(&[String], &Bson)> = values.iter().filter_map(|(t, v)| Some((t.keys?, *v))).collect();
             ui.ctx().copy_text(named_values_text(&named, cx.fmt));
             ui.close();
@@ -1031,11 +1031,11 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     let roots: Vec<&Bson> = indices.iter().filter_map(|&i| docs.get(i)).collect();
     let n = roots.len();
     let plural = if n == 1 { "" } else { "s" };
-    if ui.button(format!("Copy JSON ({n} document{plural})")).clicked() {
+    if menu::button(ui, &format!("Copy JSON ({n} document{plural})")).clicked() {
         ui.ctx().copy_text(documents_text(&roots, cx.fmt));
         ui.close();
     }
-    if ui.button(format!("Copy Extended JSON ({n} document{plural})")).clicked() {
+    if menu::button(ui, &format!("Copy Extended JSON ({n} document{plural})")).clicked() {
         let v: Vec<serde_json::Value> = roots.iter().map(|&b| b.clone().into_relaxed_extjson()).collect();
         ui.ctx().copy_text(serde_json::to_string_pretty(&v).unwrap_or_default());
         ui.close();
@@ -1045,7 +1045,7 @@ fn multi_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, targets: &[Target<'_>]
     if whole && let Some((n, action)) = delete_documents(pane, cx.server, cx.tab, &indices, cx.fmt) {
         ui.separator();
         let plural = if n == 1 { "" } else { "s" };
-        if ui.add(egui::Button::new(format!("Delete {n} Document{plural}…")).shortcut_text("Del")).clicked() {
+        if menu::entry(ui, true, &format!("Delete {n} Document{plural}…"), "Del").clicked() {
             out.push(MenuAction::Push(action));
             ui.close();
         }
@@ -1130,11 +1130,11 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
     if let (Some(path), Some(keys)) = (path, keys) {
         let value = lookup(docs, doc, keys);
         if value.is_some_and(bsonfmt::is_container) {
-            if ui.button("Expand Recursively").clicked() {
+            if menu::button(ui, "Expand Recursively").clicked() {
                 out.push(MenuAction::ExpandAll(path.to_string()));
                 ui.close();
             }
-            if ui.button("Collapse Recursively").clicked() {
+            if menu::button(ui, "Collapse Recursively").clicked() {
                 out.push(MenuAction::CollapseAll(path.to_string()));
                 ui.close();
             }
@@ -1142,19 +1142,19 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
         }
         if !keys.is_empty()
             && let Some(v) = value {
-                if ui.add(egui::Button::new("Copy Value").shortcut_text("Ctrl+C")).clicked() {
+                if menu::entry(ui, true, "Copy Value", "Ctrl+C").clicked() {
                     ui.ctx().copy_text(copy_value(v, cx.fmt));
                     ui.close();
                 }
-                if ui.button("Copy Name").clicked() {
+                if menu::button(ui, "Copy Name").clicked() {
                     ui.ctx().copy_text(keys.last().cloned().unwrap_or_default());
                     ui.close();
                 }
-                if ui.button("Copy Path").clicked() {
+                if menu::button(ui, "Copy Path").clicked() {
                     ui.ctx().copy_text(dotted_path(keys));
                     ui.close();
                 }
-                if ui.add(egui::Button::new("Copy Name and Value").shortcut_text("Ctrl+Shift+C")).clicked() {
+                if menu::entry(ui, true, "Copy Name and Value", "Ctrl+Shift+C").clicked() {
                     ui.ctx().copy_text(named_value(keys, v, cx.fmt));
                     ui.close();
                 }
@@ -1162,11 +1162,11 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
             }
     }
 
-    if ui.button("Copy JSON").clicked() {
+    if menu::button(ui, "Copy JSON").clicked() {
         ui.ctx().copy_text(bsonfmt::to_shell_json(root, 0, cx.fmt));
         ui.close();
     }
-    if ui.button("Copy Extended JSON (relaxed)").clicked() {
+    if menu::button(ui, "Copy Extended JSON (relaxed)").clicked() {
         let v = root.clone().into_relaxed_extjson();
         ui.ctx().copy_text(serde_json::to_string_pretty(&v).unwrap_or_default());
         ui.close();
@@ -1174,21 +1174,21 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
     ui.separator();
     let text = bsonfmt::to_shell_json(root, 0, cx.fmt);
     let (db, coll) = source.clone().unwrap_or_default();
-    if ui.button("View Document…").clicked() {
+    if menu::button(ui, "View Document…").clicked() {
         out.push(MenuAction::Push(Action::Dialog(Dialog::document(DocMode::View, cx.server, &db, &coll, text.clone(), None, None))));
         ui.close();
     }
     let editable = source.is_some() && id.is_some();
-    if ui.add_enabled(editable, egui::Button::new("Edit Document…")).clicked() {
+    if menu::entry(ui, editable, "Edit Document…", "").clicked() {
         out.push(MenuAction::Push(Action::Dialog(Dialog::document(DocMode::Edit, cx.server, &db, &coll, text.clone(), id.clone(), Some(cx.tab)))));
         ui.close();
     }
-    if ui.add_enabled(source.is_some(), egui::Button::new("Insert Document…")).clicked() {
+    if menu::entry(ui, source.is_some(), "Insert Document…", "").clicked() {
         out.push(MenuAction::Push(Action::Dialog(Dialog::document(DocMode::Insert, cx.server, &db, &coll, "{\n    \n}".into(), None, Some(cx.tab)))));
         ui.close();
     }
     let delete = delete_documents(pane, cx.server, cx.tab, &[doc], cx.fmt);
-    if ui.add_enabled(delete.is_some(), egui::Button::new("Delete Document…").shortcut_text("Del")).clicked()
+    if menu::entry(ui, delete.is_some(), "Delete Document…", "Del").clicked()
         && let Some((_, action)) = delete
     {
         out.push(MenuAction::Push(action));
@@ -1413,7 +1413,7 @@ fn cell_editor(ui: &mut Ui, e: &mut CellEdit, font: &FontId, th: &Theme) -> Opti
 /// Items of the context menu for a table cell.
 fn cell_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, column: &str, out: &mut Vec<MenuAction>) {
     let editable = pane.cell_editable(doc, column);
-    let r = ui.add_enabled(editable.is_ok(), egui::Button::new(format!("Edit Value of \"{column}\"")).shortcut_text("Double-click"));
+    let r = menu::entry(ui, editable.is_ok(), &format!("Edit Value of \"{column}\""), "Double-click");
     if r.clicked() {
         out.push(MenuAction::EditCell(doc, column.to_string()));
         ui.close();
@@ -1427,7 +1427,7 @@ fn cell_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, column: &st
         && column != "_id"
         && !column.contains('.')
         && !column.starts_with('$');
-    if ui.add_enabled(unset, egui::Button::new(format!("Remove Field \"{column}\"…"))).clicked()
+    if menu::entry(ui, unset, &format!("Remove Field \"{column}\"…"), "").clicked()
         && let Some((db, cmd)) = pane.field_update(doc, column, None)
     {
         out.push(MenuAction::Push(Action::Dialog(Dialog::confirm(
