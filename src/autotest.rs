@@ -172,8 +172,23 @@ pub fn tick(app: &mut App, ctx: &Context) {
         24 => shot(&mut t, ctx, "11-update-chip"),
         25 => app.dialog = Some(Dialog::Update { release: app.update.clone().expect("set above"), os: crate::update::Os::current(), commands_open: true }),
         26 => shot(&mut t, ctx, "12-update"),
+        27 => {
+            app.dialog = None;
+            app.update = None;
+            // The scripts executed above are in the history.
+            app.history_window = Some(Default::default());
+        }
+        28 => shot(&mut t, ctx, "13-history"),
+        29 => {
+            app.history_window = None;
+            if let Some(s) = app.servers.first() {
+                app.dialog = Some(Dialog::export(s.id, "rrtest", "items"));
+            }
+        }
+        30 => shot(&mut t, ctx, "14-export"),
         _ => {
             app.dialog = None;
+            app.history_window = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

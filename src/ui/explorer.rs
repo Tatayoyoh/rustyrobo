@@ -236,6 +236,7 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                 item(ui, "Refresh", Action::LoadCollections(sid, db.clone()));
                 ui.separator();
                 item(ui, "Create Collection…", Action::Dialog(Dialog::create_collection(sid, &db)));
+                item(ui, "Import Collection…", Action::Dialog(Dialog::import(sid, &db, None)));
                 item(ui, "Add User…", Action::Dialog(Dialog::new_user(sid, &db)));
                 item(ui, "Add Function…", Action::Dialog(Dialog::Function { server: sid, db: db.clone(), original: None, name: String::new(), code: "function () {\n    \n}".into(), error: None }));
                 ui.separator();
@@ -267,6 +268,10 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                     r.context_menu(|ui| {
                         if ui.button("Create Collection…").clicked() {
                             actions.borrow_mut().push(Action::Dialog(Dialog::create_collection(sid, &db)));
+                            ui.close();
+                        }
+                        if ui.button("Import Collection…").clicked() {
+                            actions.borrow_mut().push(Action::Dialog(Dialog::import(sid, &db, None)));
                             ui.close();
                         }
                         if ui.button("Collections Statistics").clicked() {
@@ -496,6 +501,11 @@ fn coll_node(app: &App, sid: u64, db: &str, c: &crate::app::CollNode, ui: &mut U
                             Action::Command { server: sid, db: db.to_string(), cmd: doc! { "delete": &name, "deletes": [{ "q": {}, "limit": 0 }] }, label: format!("Remove all documents from {name}"), refresh: Refresh::None },
                         )),
                     );
+                    ui.separator();
+                    item(ui, "Import Documents…", Action::Dialog(Dialog::import(sid, db, Some(&name))));
+                }
+                item(ui, "Export Collection…", Action::Dialog(Dialog::export(sid, db, &name)));
+                if !is_view {
                     ui.separator();
                     item(ui, "Add Index…", Action::Dialog(Dialog::new_index(sid, db, &name)));
                     item(ui, "Rebuild Indexes…", shell("reIndex()", false, None));

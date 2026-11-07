@@ -377,6 +377,8 @@ pub struct AppSettings {
     pub auto_exec: bool,
     pub disable_connection_shortcuts: bool,
     pub check_updates: bool,
+    /// Record the executed scripts in the query history.
+    pub query_history: bool,
     pub shell_timeout_secs: u32,
     pub batch_size: u32,
     pub font_size: f32,
@@ -423,6 +425,7 @@ impl Default for AppSettings {
             auto_exec: true,
             disable_connection_shortcuts: false,
             check_updates: true,
+            query_history: true,
             shell_timeout_secs: 15,
             batch_size: 50,
             font_size: 13.0,

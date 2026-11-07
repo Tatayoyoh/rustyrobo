@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Import and export: "Export Collection…" and "Import Documents…" in the menu of a collection, "Import Collection…" in the menus of a database, and an export button in the header of the results of a `find`. JSON (one document per line or an array, relaxed or canonical Extended JSON) and CSV (chosen fields, delimiter, nested fields as `a.b`, numbers, dates and ObjectIds read back with their type). Runs in the background, with its progress and a cancel button in the toolbar
+- Query history: the executed scripts with their connection and database, in File > Query History… or the History button (Ctrl+H): search, open again in a new shell, copy, delete. Options > "Record query history" turns it off
+- ROADMAP.md: the features of Studio 3T, done and to do
+
 ## 1.3.0
 
 ### Added

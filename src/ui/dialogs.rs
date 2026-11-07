@@ -12,7 +12,8 @@ use crate::app::{Action, App, Refresh};
 use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
 use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, SshAuthMethod};
-use crate::shell::parse_shell_value;
+use crate::shell::{QuerySpec, parse_shell_value};
+use crate::transfer::{Delimiter, ExportOptions, Format, ImportOptions};
 use crate::ui::icon;
 use crate::update::{Install, Os, Release};
 
@@ -129,6 +130,8 @@ pub enum Dialog {
     Document { mode: DocMode, server: u64, db: String, coll: String, text: String, original_id: Option<Bson>, tab: Option<u64>, check: DocCheck },
     User { server: u64, db: String, edit: bool, name: String, password: String, roles: Vec<(String, bool)>, extra_roles: String, error: Option<String> },
     Index(Box<IndexForm>),
+    Export(Box<ExportForm>),
+    Import(Box<ImportForm>),
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
     ShellTimeout { value: u32 },
     /// The appearance follows `edit`, and goes back to `original` unless saved.
@@ -160,6 +163,166 @@ pub struct IndexForm {
     pub weights: String,
     pub tab: u8,
     pub error: Option<String>,
+}
+
+/// What the export dialog edits.
+#[derive(Clone)]
+pub struct ExportForm {
+    pub server: u64,
+    pub db: String,
+    pub coll: String,
+    pub filter: String,
+    pub projection: String,
+    pub sort: String,
+    pub skip: String,
+    pub limit: String,
+    pub format: Format,
+    pub canonical: bool,
+    pub fields: String,
+    pub delimiter: Delimiter,
+    pub path: String,
+    pub error: Option<String>,
+}
+
+/// What the import dialog edits.
+#[derive(Clone)]
+pub struct ImportForm {
+    pub server: u64,
+    pub db: String,
+    pub coll: String,
+    /// The collection name follows the file name until it is typed.
+    pub coll_from_file: bool,
+    pub path: String,
+    pub format: Format,
+    pub delimiter: Delimiter,
+    pub detect_types: bool,
+    pub drop_first: bool,
+    pub error: Option<String>,
+}
+
+/// `name.ext` in the home directory.
+fn default_path(name: &str, ext: &str) -> String {
+    let dir = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()).unwrap_or_default();
+    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+    dir.join(format!("{safe}.{ext}")).display().to_string()
+}
+
+/// `path` with the extension of `format`, when it has the one of another format.
+fn with_extension(path: &str, format: Format) -> String {
+    let p = std::path::Path::new(path);
+    match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+        Some("json" | "csv" | "tsv") => p.with_extension(format.extension()).display().to_string(),
+        _ => path.to_string(),
+    }
+}
+
+impl ExportForm {
+    fn new(server: u64, db: &str, coll: &str) -> Self {
+        ExportForm {
+            server,
+            db: db.to_string(),
+            coll: coll.to_string(),
+            filter: "{}".into(),
+            projection: String::new(),
+            sort: String::new(),
+            skip: String::new(),
+            limit: String::new(),
+            format: Format::JsonLines,
+            canonical: false,
+            fields: String::new(),
+            delimiter: Delimiter::Comma,
+            path: default_path(coll, "json"),
+            error: None,
+        }
+    }
+
+    /// The export options, or what is wrong in the form.
+    pub fn options(&self) -> Result<ExportOptions, String> {
+        let filter = opt_doc(&self.filter).map_err(|e| format!("Query: {e}"))?.unwrap_or_default();
+        let projection = opt_doc(&self.projection).map_err(|e| format!("Projection: {e}"))?;
+        let sort = opt_doc(&self.sort).map_err(|e| format!("Sort: {e}"))?;
+        let number = |t: &str, what: &str| -> Result<u64, String> {
+            if t.trim().is_empty() { Ok(0) } else { t.trim().parse().map_err(|_| format!("{what} must be a positive number")) }
+        };
+        let skip = number(&self.skip, "Skip")?;
+        let limit = number(&self.limit, "Limit")?;
+        let path = self.path.trim();
+        if path.is_empty() {
+            return Err("Choose a file".into());
+        }
+        let path = std::path::PathBuf::from(path);
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty())
+            && !dir.is_dir()
+        {
+            return Err(format!("Folder not found: {}", dir.display()));
+        }
+        let fields = self.fields.split(',').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
+        Ok(ExportOptions {
+            db: self.db.clone(),
+            coll: self.coll.clone(),
+            filter,
+            projection,
+            sort,
+            skip,
+            limit,
+            format: self.format,
+            canonical: self.canonical,
+            fields,
+            delimiter: self.delimiter,
+            path,
+        })
+    }
+}
+
+impl ImportForm {
+    fn new(server: u64, db: &str, coll: Option<&str>) -> Self {
+        ImportForm {
+            server,
+            db: db.to_string(),
+            coll: coll.unwrap_or_default().to_string(),
+            coll_from_file: coll.is_none(),
+            path: String::new(),
+            format: Format::JsonLines,
+            delimiter: Delimiter::Comma,
+            detect_types: true,
+            drop_first: false,
+            error: None,
+        }
+    }
+
+    /// Format, delimiter and collection name from the file name.
+    pub fn set_path(&mut self, path: String) {
+        let p = std::path::Path::new(&path);
+        self.format = Format::of_path(p);
+        self.delimiter = Delimiter::of_path(p);
+        if self.coll_from_file {
+            self.coll = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        }
+        self.path = path;
+    }
+
+    pub fn options(&self) -> Result<ImportOptions, String> {
+        let coll = self.coll.trim();
+        if coll.is_empty() {
+            return Err("A collection name is required".into());
+        }
+        if coll.contains('$') || coll.starts_with("system.") {
+            return Err(format!("Invalid collection name: {coll}"));
+        }
+        let path = std::path::PathBuf::from(self.path.trim());
+        if !path.is_file() {
+            return Err(if self.path.trim().is_empty() { "Choose a file".into() } else { format!("File not found: {}", path.display()) });
+        }
+        Ok(ImportOptions {
+            db: self.db.clone(),
+            coll: coll.to_string(),
+            format: self.format,
+            delimiter: self.delimiter,
+            detect_types: self.detect_types,
+            drop_first: self.drop_first,
+            path,
+        })
+    }
 }
 
 const DB_ROLES: &[&str] = &["read", "readWrite", "dbAdmin", "dbOwner", "userAdmin"];
@@ -286,6 +449,27 @@ impl Dialog {
         }))
     }
 
+    pub fn export(server: u64, db: &str, coll: &str) -> Self {
+        Dialog::Export(Box::new(ExportForm::new(server, db, coll)))
+    }
+
+    /// Export of the documents of a query of the results.
+    pub fn export_query(server: u64, spec: &QuerySpec) -> Self {
+        let f = Default::default();
+        let mut form = ExportForm::new(server, &spec.db, &spec.coll);
+        form.filter = bsonfmt::doc_to_shell(&spec.filter, f);
+        form.projection = spec.projection.as_ref().map(|p| one_line(&bsonfmt::doc_to_shell(p, f))).unwrap_or_default();
+        form.sort = spec.sort.as_ref().map(|s| one_line(&bsonfmt::doc_to_shell(s, f))).unwrap_or_default();
+        form.skip = if spec.skip > 0 { spec.skip.to_string() } else { String::new() };
+        form.limit = if spec.limit > 0 { spec.limit.to_string() } else { String::new() };
+        Dialog::Export(Box::new(form))
+    }
+
+    /// Import into `coll`, or into a collection named after the file.
+    pub fn import(server: u64, db: &str, coll: Option<&str>) -> Self {
+        Dialog::Import(Box::new(ImportForm::new(server, db, coll)))
+    }
+
     pub fn document(mode: DocMode, server: u64, db: &str, coll: &str, text: String, original_id: Option<Bson>, tab: Option<u64>) -> Self {
         Dialog::Document { mode, server, db: db.to_string(), coll: coll.to_string(), text, original_id, tab, check: DocCheck::default() }
     }
@@ -313,6 +497,10 @@ fn parse_doc(text: &str) -> Result<Document, String> {
 
 fn opt_doc(text: &str) -> Result<Option<Document>, String> {
     if text.trim().is_empty() { Ok(None) } else { parse_doc(text).map(Some) }
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn buttons(ui: &mut Ui, ok_label: &str, ok_enabled: bool) -> (bool, bool) {
@@ -782,6 +970,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
             }
             Dialog::Index(f) => index_dialog(ui, f, &theme, font, &mut actions),
+            Dialog::Export(f) => export_dialog(ui, f, &theme, font, &mut actions),
+            Dialog::Import(f) => import_dialog(ui, f, &theme, &mut actions),
             Dialog::Function { server, db, original, name, code, error } => {
                 let screen = ui.ctx().content_rect();
                 ui.set_width((screen.width() * 0.5).clamp(420.0, 800.0));
@@ -985,6 +1175,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+R", "Re-execute"),
                         ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous shell"),
                         ("Ctrl+O / Ctrl+S", "Open / save script"),
+                        ("Ctrl+H", "Query history"),
                         ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
                         ("Ctrl+Space", "Autocompletion"),
                         ("Ctrl+F", "Find in the editor or the results"),
@@ -1190,5 +1381,235 @@ fn index_dialog(ui: &mut Ui, f: &mut IndexForm, theme: &crate::theme::Theme, fon
             f.error = Some(e);
             Outcome::Keep
         }
+    }
+}
+
+fn file_row(ui: &mut Ui, path: &mut String, browse: impl FnOnce() -> Option<std::path::PathBuf>) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("File:");
+        let browse_w = 80.0;
+        changed |= ui.add(egui::TextEdit::singleline(path).desired_width(ui.available_width() - browse_w)).changed();
+        if ui.button("Browse…").clicked()
+            && let Some(p) = browse()
+        {
+            *path = p.display().to_string();
+            changed = true;
+        }
+    });
+    changed
+}
+
+fn export_dialog(ui: &mut Ui, f: &mut ExportForm, theme: &crate::theme::Theme, font: f32, actions: &mut Vec<Action>) -> Outcome {
+    ui.set_width(560.0);
+    title(ui, &format!("Export — {}.{}", f.db, f.coll));
+    ui.label("Query:");
+    // The editor takes the height it is given: in a modal, that would grow at each frame.
+    let height = 4.0 * (font + 4.0) + 8.0;
+    ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+        ui.set_max_height(height);
+        code_box(ui, Id::new("export-filter"), &mut f.filter, theme, font, 3, false);
+    });
+    egui::Grid::new("export-query").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+        let mono = |ui: &mut Ui, text: &mut String, hint: &str| {
+            ui.add(egui::TextEdit::singleline(text).font(egui::TextStyle::Monospace).hint_text(hint).desired_width(f32::INFINITY));
+        };
+        ui.label("Projection:");
+        mono(ui, &mut f.projection, "{ name: 1 }");
+        ui.end_row();
+        ui.label("Sort:");
+        mono(ui, &mut f.sort, "{ _id: 1 }");
+        ui.end_row();
+        ui.label("Skip / limit:");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut f.skip).hint_text("0").desired_width(80.0));
+            ui.add(egui::TextEdit::singleline(&mut f.limit).hint_text("all").desired_width(80.0));
+        });
+        ui.end_row();
+        ui.label("Format:");
+        ui.horizontal(|ui| {
+            for format in Format::ALL {
+                if ui.radio_value(&mut f.format, format, format.label()).changed() {
+                    f.path = with_extension(&f.path, format);
+                }
+            }
+        });
+        ui.end_row();
+        if f.format == Format::Csv {
+            ui.label("Fields:");
+            ui.add(egui::TextEdit::singleline(&mut f.fields).hint_text("name, address.city — empty: those of the first documents").desired_width(f32::INFINITY));
+            ui.end_row();
+            ui.label("Delimiter:");
+            ui.horizontal(|ui| {
+                for d in Delimiter::ALL {
+                    ui.radio_value(&mut f.delimiter, d, d.label());
+                }
+            });
+            ui.end_row();
+        } else {
+            ui.label("");
+            ui.checkbox(&mut f.canonical, "Canonical Extended JSON (keeps every type, e.g. {\"$numberLong\": \"1\"})");
+            ui.end_row();
+        }
+    });
+    let format = f.format;
+    let name = std::path::Path::new(&f.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    file_row(ui, &mut f.path, || {
+        rfd::FileDialog::new().add_filter(format.label(), &[format.extension()]).add_filter("All files", &["*"]).set_file_name(name).save_file()
+    });
+    if std::path::Path::new(f.path.trim()).is_file() {
+        ui.label(RichText::new(format!("{} The file exists and will be replaced.", icon::INFO)).small().color(theme.text_weak));
+    }
+    error_line(ui, theme, &f.error);
+    let (ok, cancel) = buttons(ui, "Export", !f.path.trim().is_empty());
+    if cancel {
+        return Outcome::Close;
+    }
+    if !ok {
+        return Outcome::Keep;
+    }
+    match f.options() {
+        Ok(opts) => {
+            actions.push(Action::Export { server: f.server, opts: Box::new(opts) });
+            Outcome::Close
+        }
+        Err(e) => {
+            f.error = Some(e);
+            Outcome::Keep
+        }
+    }
+}
+
+fn import_dialog(ui: &mut Ui, f: &mut ImportForm, theme: &crate::theme::Theme, actions: &mut Vec<Action>) -> Outcome {
+    ui.set_width(520.0);
+    title(ui, &format!("Import — {}", f.db));
+    let mut path = f.path.clone();
+    if file_row(ui, &mut path, || {
+        rfd::FileDialog::new().add_filter("JSON or CSV", &["json", "jsonl", "ndjson", "csv", "tsv"]).add_filter("All files", &["*"]).pick_file()
+    }) {
+        f.set_path(path);
+    }
+    egui::Grid::new("import").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+        ui.label("Collection:");
+        if ui.add(egui::TextEdit::singleline(&mut f.coll).desired_width(f32::INFINITY)).changed() {
+            f.coll_from_file = false;
+        }
+        ui.end_row();
+        ui.label("Format:");
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.format, Format::JsonLines, "JSON (array or one document per line)");
+            ui.radio_value(&mut f.format, Format::Csv, "CSV");
+        });
+        ui.end_row();
+        if f.format == Format::Csv {
+            ui.label("Delimiter:");
+            ui.horizontal(|ui| {
+                for d in Delimiter::ALL {
+                    ui.radio_value(&mut f.delimiter, d, d.label());
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut f.detect_types, "Detect numbers, booleans, dates and ObjectIds");
+            ui.end_row();
+        }
+        ui.label("");
+        ui.checkbox(&mut f.drop_first, "Drop the collection first");
+        ui.end_row();
+    });
+    if f.format == Format::Csv {
+        ui.label(RichText::new("The first line holds the field names; a.b makes a sub-document.").small().color(theme.text_weak));
+    }
+    if f.drop_first && !f.coll.trim().is_empty() {
+        ui.label(RichText::new(format!("{} All the documents and indexes of \"{}\" will be deleted.", icon::WARNING, f.coll.trim())).color(theme.warning));
+    }
+    error_line(ui, theme, &f.error);
+    let (ok, cancel) = buttons(ui, "Import", !f.path.trim().is_empty() && !f.coll.trim().is_empty());
+    if cancel {
+        return Outcome::Close;
+    }
+    if !ok {
+        return Outcome::Keep;
+    }
+    match f.options() {
+        Ok(opts) => {
+            actions.push(Action::Import { server: f.server, opts: Box::new(opts) });
+            Outcome::Close
+        }
+        Err(e) => {
+            f.error = Some(e);
+            Outcome::Keep
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_form_builds_the_options() {
+        let dir = std::env::temp_dir();
+        let mut f = ExportForm::new(1, "shop", "orders");
+        assert!(f.path.ends_with("orders.json"));
+        f.filter = "{ n: { $gt: NumberLong(5) } }".into();
+        f.projection = "{ n: 1 }".into();
+        f.limit = " 10 ".into();
+        f.fields = "a, b.c,,".into();
+        f.path = dir.join("out.csv").display().to_string();
+        let o = f.options().unwrap();
+        assert_eq!(o.filter, doc! { "n": { "$gt": 5i64 } });
+        assert_eq!((o.projection, o.sort, o.skip, o.limit), (Some(doc! { "n": 1 }), None, 0, 10));
+        assert_eq!(o.fields, vec!["a", "b.c"]);
+        f.filter = String::new();
+        assert_eq!(f.options().unwrap().filter, Document::new(), "empty query: all the documents");
+        f.sort = "{ oops".into();
+        assert!(f.options().unwrap_err().starts_with("Sort:"));
+        f.sort.clear();
+        f.skip = "-1".into();
+        assert_eq!(f.options().unwrap_err(), "Skip must be a positive number");
+        f.skip.clear();
+        f.path = dir.join("no-such-dir-rr").join("x.json").display().to_string();
+        assert!(f.options().unwrap_err().starts_with("Folder not found"));
+    }
+
+    #[test]
+    fn export_of_a_query_keeps_its_parts() {
+        let spec = QuerySpec {
+            db: "shop".into(),
+            coll: "orders".into(),
+            filter: doc! { "status": "paid" },
+            projection: Some(doc! { "total": 1 }),
+            sort: Some(doc! { "total": -1 }),
+            skip: 20,
+            limit: 5,
+            hint: None,
+            collation: None,
+        };
+        let Dialog::Export(f) = Dialog::export_query(3, &spec) else { panic!() };
+        let o = f.options().unwrap();
+        assert_eq!((o.db.as_str(), o.coll.as_str(), o.skip, o.limit), ("shop", "orders", 20, 5));
+        assert_eq!((o.filter, o.projection, o.sort), (spec.filter, spec.projection, spec.sort));
+        assert_eq!(f.projection, "{ \"total\" : 1 }", "one line");
+    }
+
+    #[test]
+    fn file_names_follow_the_format() {
+        assert_eq!(with_extension("/tmp/a.json", Format::Csv), "/tmp/a.csv");
+        assert_eq!(with_extension("/tmp/a.CSV", Format::JsonArray), "/tmp/a.json");
+        assert_eq!(with_extension("/tmp/a.txt", Format::Csv), "/tmp/a.txt", "a chosen extension is kept");
+        assert!(default_path("a/b c", "csv").ends_with("a_b_c.csv"));
+        let mut f = ImportForm::new(1, "shop", None);
+        f.set_path("/data/customers.tsv".into());
+        assert_eq!((f.format, f.delimiter, f.coll.as_str()), (Format::Csv, Delimiter::Tab, "customers"));
+        f.coll_from_file = false;
+        f.set_path("/data/other.json".into());
+        assert_eq!((f.format, f.coll.as_str()), (Format::JsonLines, "customers"), "typed name kept");
+        assert_eq!(f.options().unwrap_err(), "File not found: /data/other.json");
+        let mut f = ImportForm::new(1, "shop", Some("orders"));
+        f.set_path("/data/x.json".into());
+        assert_eq!(f.coll, "orders", "import into a chosen collection");
+        f.coll = "a$b".into();
+        assert!(f.options().unwrap_err().starts_with("Invalid collection name"));
     }
 }
