@@ -271,6 +271,8 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
             groups.sort_by_key(|a| (a.is_empty(), a.to_lowercase()));
             let grouped = groups.len() > 1 || groups.first().is_some_and(|g| !g.is_empty());
             egui::ScrollArea::vertical().max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
+                // Selectable text would take the clicks meant for the row.
+                ui.style_mut().interaction.selectable_labels = false;
                 egui::Grid::new("conn-grid").num_columns(5).striped(true).min_row_height(row_h).spacing([10.0, 2.0]).show(ui, |ui| {
                     for h in ["", "Name", "Address", "Attributes", "Last used"] {
                         ui.label(RichText::new(h).strong().color(th.text_weak));
@@ -285,6 +287,10 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                         for &i in visible.iter().filter(|&&i| &app.settings.connections[i].group == g) {
                             let c = &app.settings.connections[i];
                             let selected = st.selected == Some(c.id);
+                            // The whole row selects, under its cells: from the rect of the last
+                            // frame, which egui also tests clicks against.
+                            let row_id = ui.id().with(("conn-row", c.id));
+                            let row_click = ui.ctx().data(|d| d.get_temp::<egui::Rect>(row_id)).map(|r| ui.interact(r, row_id, egui::Sense::click()));
                             // Whole-row highlight, painted under the row once its height is known.
                             let bg = ui.painter().add(egui::Shape::Noop);
                             color_dot(ui, c.color, 12.0);
@@ -293,23 +299,29 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                             ui.horizontal(|ui| attributes(ui, c, &th));
                             let last = ui.label(RichText::new(relative_time(c.last_connected)).color(th.text_weak));
                             ui.end_row();
+                            let row = name.rect.union(last.rect);
+                            let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row.y_range()).expand2(egui::vec2(0.0, 1.0));
+                            ui.ctx().data_mut(|d| d.insert_temp(row_id, row));
+                            let mut resp = name | addr;
+                            if let Some(r) = row_click {
+                                resp |= r;
+                            }
                             if selected {
-                                let row = name.rect.union(last.rect);
-                                let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row.y_range()).expand2(egui::vec2(0.0, 1.0));
                                 ui.painter().set(bg, egui::Shape::rect_filled(row, 3, th.selection));
                                 let bar = egui::Rect::from_min_size(row.min, egui::vec2(3.0, row.height()));
                                 ui.painter().rect_filled(bar, 0, th.accent);
+                            } else if resp.hovered() {
+                                ui.painter().set(bg, egui::Shape::rect_filled(row, 3, ui.visuals().widgets.hovered.weak_bg_fill));
                             }
-                            let clicked = name.clicked() || addr.clicked();
-                            if clicked || name.secondary_clicked() {
+                            if resp.clicked() || resp.secondary_clicked() {
                                 st.selected = Some(c.id);
                             }
-                            if name.double_clicked() || addr.double_clicked() {
+                            if resp.double_clicked() {
                                 actions.push(Action::Connect(c.id));
                                 close = true;
                             }
                             let id = c.id;
-                            name.context_menu(|ui| {
+                            resp.context_menu(|ui| {
                                 if ui.button("Connect").clicked() {
                                     actions.push(Action::Connect(id));
                                     close = true;

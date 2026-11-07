@@ -284,6 +284,48 @@ fn search_filters_the_list() {
     assert!(!has_label(&h, "Local Mongo 8"));
 }
 
+/// A click of the pointer at `pos`, where there may be no widget of its own.
+fn click_at(h: &mut Harness<'_, App>, pos: egui::Pos2, button: egui::PointerButton) {
+    h.hover_at(pos);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+}
+
+#[test]
+fn a_click_anywhere_on_a_connection_row_selects_it() {
+    let mut other = local_mongo8();
+    other.id = uuid::Uuid::new_v4();
+    other.name = "Production".into();
+    let s = AppSettings { connections: vec![local_mongo8(), other.clone()], ..Default::default() };
+    let _env = env("row-click", &s);
+    let mut h = harness();
+    h.run_steps(4);
+    h.get_by_label("Local Mongo 8").click();
+    h.run_steps(2);
+    assert_eq!(h.state().conn_list.as_ref().unwrap().selected, Some(s.connections[0].id));
+    let row_y = h.get_by_label("Production").rect().center().y;
+    // The "Last used" column, then the empty end of the "Attributes" one.
+    let last_x = h.get_by_label("Last used").rect().center().x;
+    let attrs = h.get_by_label("Attributes").rect();
+    click_at(&mut h, egui::pos2(last_x, row_y), egui::PointerButton::Primary);
+    assert_eq!(h.state().conn_list.as_ref().unwrap().selected, Some(other.id), "last used");
+    h.get_by_label("Local Mongo 8").click();
+    h.run_steps(2);
+    assert_eq!(h.state().conn_list.as_ref().unwrap().selected, Some(s.connections[0].id), "name");
+    click_at(&mut h, egui::pos2(attrs.right() - 2.0, row_y), egui::PointerButton::Primary);
+    assert_eq!(h.state().conn_list.as_ref().unwrap().selected, Some(other.id), "attributes");
+    // The menu of the row, from anywhere on it.
+    h.get_by_label("Local Mongo 8").click();
+    h.run_steps(2);
+    click_at(&mut h, egui::pos2(last_x, row_y), egui::PointerButton::Secondary);
+    assert_eq!(h.state().conn_list.as_ref().unwrap().selected, Some(other.id));
+    assert!(h.query_by_label("Copy connection string").is_some(), "context menu");
+}
+
 #[test]
 fn theme_menu_shows_the_hovered_theme_and_keeps_the_clicked_one() {
     let env = env("theme-hover", &AppSettings::default());
