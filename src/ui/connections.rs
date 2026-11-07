@@ -294,7 +294,8 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
                             // Whole-row highlight, painted under the row once its height is known.
                             let bg = ui.painter().add(egui::Shape::Noop);
                             color_dot(ui, c.color, 12.0);
-                            let name = ui.add(egui::Button::selectable(selected, RichText::new(&c.name).strong()).frame_when_inactive(false));
+                            // No frame: the row shows the hover and the selection.
+                            let name = ui.add(egui::Button::new(RichText::new(&c.name).strong()).selected(selected).frame(false));
                             let addr = ui.add(egui::Label::new(RichText::new(c.address_label()).monospace()).sense(egui::Sense::click()));
                             ui.horizontal(|ui| attributes(ui, c, &th));
                             let last = ui.label(RichText::new(relative_time(c.last_connected)).color(th.text_weak));
