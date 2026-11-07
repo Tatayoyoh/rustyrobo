@@ -115,16 +115,15 @@ pub struct ImportOptions {
 }
 
 /// Documents of one round trip to the server.
-const BATCH: usize = 1000;
+pub(crate) const BATCH: usize = 1000;
 /// Size of the documents of one insert, under the 16 MB of a command.
-const BATCH_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const BATCH_BYTES: usize = 8 * 1024 * 1024;
 
 /// Writes the documents of a query to a file. `progress` gets the number of
 /// documents written so far. Returns that number.
 pub async fn export(conn: &Connection, o: &ExportOptions, cancel: &AtomicBool, progress: impl Fn(u64)) -> anyhow::Result<u64> {
     let file = std::fs::File::create(&o.path).with_context(|| format!("cannot create {}", o.path.display()))?;
     let mut w = Writer::new(BufWriter::new(file), o);
-    let mut session = conn.start_session().await.ok();
     let mut cmd = doc! { "find": &o.coll, "filter": o.filter.clone(), "batchSize": BATCH as i64 };
     if let Some(p) = &o.projection {
         cmd.insert("projection", p.clone());
@@ -138,29 +137,51 @@ pub async fn export(conn: &Connection, o: &ExportOptions, cancel: &AtomicBool, p
     if o.limit > 0 {
         cmd.insert("limit", o.limit as i64);
     }
-    let reply = conn.run_command(&o.db, cmd, session.as_mut()).await?;
-    let cursor = reply.get_document("cursor").context("find did not return a cursor")?;
-    let mut id = cursor.get("id").and_then(bson_as_i64).unwrap_or(0);
-    let mut batch = batch_of(cursor, "firstBatch");
     let mut written = 0;
-    loop {
+    for_each_batch(conn, &o.db, &o.coll, cmd, cancel, 0, |batch| {
         w.write(&batch)?;
         written += batch.len() as u64;
         progress(written);
+        Ok(())
+    })
+    .await?;
+    w.finish()?;
+    Ok(written)
+}
+
+/// Runs a `find` on `coll` and gives each batch of its cursor to `f`.
+/// Cancelled between two batches; `before` is the number of documents
+/// already done, for the message.
+pub(crate) async fn for_each_batch(
+    conn: &Connection,
+    db: &str,
+    coll: &str,
+    cmd: Document,
+    cancel: &AtomicBool,
+    before: u64,
+    mut f: impl FnMut(Vec<Document>) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let mut session = conn.start_session().await.ok();
+    let reply = conn.run_command(db, cmd, session.as_mut()).await?;
+    let cursor = reply.get_document("cursor").context("find did not return a cursor")?;
+    let mut id = cursor.get("id").and_then(bson_as_i64).unwrap_or(0);
+    let mut batch = batch_of(cursor, "firstBatch");
+    let mut done = before;
+    loop {
+        done += batch.len() as u64;
+        f(batch)?;
         if id == 0 {
-            break;
+            return Ok(());
         }
         if cancel.load(Ordering::Relaxed) {
-            let _ = conn.run_command(&o.db, doc! { "killCursors": &o.coll, "cursors": [id] }, None).await;
-            bail!("cancelled after {written} documents");
+            let _ = conn.run_command(db, doc! { "killCursors": coll, "cursors": [id] }, None).await;
+            bail!("cancelled after {done} documents");
         }
-        let more = conn.run_command(&o.db, doc! { "getMore": id, "collection": &o.coll, "batchSize": BATCH as i64 }, session.as_mut()).await?;
+        let more = conn.run_command(db, doc! { "getMore": id, "collection": coll, "batchSize": BATCH as i64 }, session.as_mut()).await?;
         let cursor = more.get_document("cursor").context("getMore did not return a cursor")?;
         id = cursor.get("id").and_then(bson_as_i64).unwrap_or(0);
         batch = batch_of(cursor, "nextBatch");
     }
-    w.finish()?;
-    Ok(written)
 }
 
 fn batch_of(cursor: &Document, key: &str) -> Vec<Document> {
@@ -213,25 +234,30 @@ pub async fn import(conn: &Connection, o: &ImportOptions, cancel: Arc<AtomicBool
         if cancel.load(Ordering::Relaxed) {
             bail!("cancelled after {} documents", done.inserted);
         }
-        let batch = batch?;
-        let count = batch.len() as u64;
-        let reply = conn.run_command(&o.db, doc! { "insert": &o.coll, "documents": batch, "ordered": false }, None).await?;
-        let errors = reply.get_array("writeErrors").map(|a| a.as_slice()).unwrap_or_default();
-        let inserted = reply.get("n").and_then(bson_as_i64).map_or(count - errors.len() as u64, |n| n as u64);
-        done.inserted += inserted;
-        done.failed += count.saturating_sub(inserted);
-        if done.first_error.is_none()
-            && let Some(e) = errors.first().and_then(|e| e.as_document())
-        {
-            done.first_error = Some(e.get_str("errmsg").unwrap_or("write error").to_string());
-        }
-        if let Ok(wce) = reply.get_document("writeConcernError") {
-            bail!("{}", wce.get_str("errmsg").unwrap_or("write concern error"));
-        }
+        insert_batch(conn, &o.db, &o.coll, batch?, &mut done).await?;
         progress(done.inserted);
     }
     let _ = reader.await;
     Ok(done)
+}
+
+/// Inserts documents, counting the ones refused (duplicate keys…) in `done`.
+pub(crate) async fn insert_batch(conn: &Connection, db: &str, coll: &str, batch: Vec<Document>, done: &mut Imported) -> anyhow::Result<()> {
+    let count = batch.len() as u64;
+    let reply = conn.run_command(db, doc! { "insert": coll, "documents": batch, "ordered": false }, None).await?;
+    let errors = reply.get_array("writeErrors").map(|a| a.as_slice()).unwrap_or_default();
+    let inserted = reply.get("n").and_then(bson_as_i64).map_or(count - errors.len() as u64, |n| n as u64);
+    done.inserted += inserted;
+    done.failed += count.saturating_sub(inserted);
+    if done.first_error.is_none()
+        && let Some(e) = errors.first().and_then(|e| e.as_document())
+    {
+        done.first_error = Some(e.get_str("errmsg").unwrap_or("write error").to_string());
+    }
+    if let Ok(wce) = reply.get_document("writeConcernError") {
+        bail!("{}", wce.get_str("errmsg").unwrap_or("write concern error"));
+    }
+    Ok(())
 }
 
 /// Parses a file into batches of documents, given to `send` until it returns false.
