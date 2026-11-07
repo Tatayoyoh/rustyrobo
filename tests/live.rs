@@ -413,6 +413,138 @@ fn transfer_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn dump_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
+    use rustyrobo::dump::{DumpOptions, RestoreOptions, dump, restore};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let c = open(rt, s).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustyrobo-dump-{db}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (copy, gz) = (format!("{db}_copy"), format!("{db}_gz"));
+    for d in [db, copy.as_str(), gz.as_str()] {
+        rt.block_on(c.run_command(d, doc! { "dropDatabase": 1 }, None)).unwrap();
+    }
+    let run = |d: &str, cmd: bson::Document| rt.block_on(c.run_command(d, cmd, None)).unwrap();
+    let docs: Vec<bson::Document> = (0..2500).map(|i| doc! { "_id": i, "email": format!("u{i}@x"), "age": i % 90, "big": 5_000_000_000i64 + i as i64, "at": bson::DateTime::from_millis(i as i64) }).collect();
+    for chunk in docs.chunks(1000) {
+        run(db, doc! { "insert": "users", "documents": chunk.to_vec() });
+    }
+    run(db, doc! { "createIndexes": "users", "indexes": [{ "key": { "email": 1 }, "name": "email_1", "unique": true }] });
+    run(db, doc! { "create": "logs", "capped": true, "size": 65536 });
+    run(db, doc! { "insert": "logs", "documents": [{ "m": "hello" }] });
+    run(db, doc! { "insert": "a/b c", "documents": [{ "_id": "slash" }] });
+    run(db, doc! { "create": "empty" });
+    run(db, doc! { "create": "adults", "viewOn": "users", "pipeline": [{ "$match": { "age": { "$gte": 18 } } }] });
+    let all = |d: &str, coll: &str| -> Vec<bson::Document> {
+        rt.block_on(rustyrobo::mongo::collect_cursor(&c, d, doc! { "find": coll, "filter": {}, "sort": { "_id": 1 } }, 100_000, None)).unwrap()
+    };
+    let names = |d: &str| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = rt
+            .block_on(rustyrobo::mongo::collect_cursor(&c, d, doc! { "listCollections": 1, "cursor": {} }, 1000, None))
+            .unwrap()
+            .iter()
+            .filter(|i| !i.get_str("name").unwrap().starts_with("system."))
+            .map(|i| (i.get_str("name").unwrap().to_string(), i.get_str("type").unwrap_or("collection").to_string()))
+            .collect();
+        v.sort();
+        v
+    };
+    let never = AtomicBool::new(false);
+
+    // The files of mongodump.
+    let opts = DumpOptions { db: db.into(), collections: Vec::new(), dir: dir.clone(), gzip: false, archive: false };
+    let done = rt.block_on(dump(&c, &opts, &never, |_| {})).unwrap();
+    assert_eq!((done.collections, done.documents), (5, 2502));
+    let folder = dir.join(db);
+    assert_eq!(opts.target(), folder);
+    for f in ["users.bson", "users.metadata.json", "a%2Fb+c.bson", "logs.metadata.json", "empty.bson", "adults.metadata.json"] {
+        assert!(folder.join(f).is_file(), "{f}");
+    }
+    assert!(!folder.join("adults.bson").exists(), "a view has no documents");
+    let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(folder.join("users.metadata.json")).unwrap()).unwrap();
+    assert_eq!(meta["collectionName"], "users");
+    assert_eq!(meta["indexes"][1]["name"], "email_1");
+    assert_eq!(meta["indexes"][1]["key"]["email"], serde_json::json!({ "$numberInt": "1" }), "canonical Extended JSON");
+
+    // Restored elsewhere: documents, types, options, indexes and views.
+    let into = |d: &str, from: std::path::PathBuf| RestoreOptions { db: d.into(), from, collections: Vec::new(), drop_first: false, indexes: true };
+    let r = rt.block_on(restore(&c, &into(&copy, folder.clone()), Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+    assert_eq!((r.collections, r.docs.inserted, r.docs.failed), (5, 2502, 0));
+    assert_eq!(names(&copy), names(db));
+    assert_eq!(all(&copy, "users"), docs);
+    assert_eq!(all(&copy, "a/b c"), vec![doc! { "_id": "slash" }]);
+    assert_eq!(all(&copy, "adults").len(), all(db, "adults").len());
+    let stats = run(&copy, doc! { "collStats": "logs" });
+    assert_eq!(stats.get_bool("capped").ok(), Some(true));
+    let indexes = rt.block_on(rustyrobo::mongo::collect_cursor(&c, &copy, doc! { "listIndexes": "users", "cursor": {} }, 100, None)).unwrap();
+    let email = indexes.iter().find(|i| i.get_str("name").ok() == Some("email_1")).expect("email index");
+    assert_eq!(email.get_bool("unique").ok(), Some(true));
+
+    // Again: the duplicates are counted; dropping first starts again.
+    let r = rt.block_on(restore(&c, &into(&copy, folder.clone()), Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+    assert_eq!((r.docs.inserted, r.docs.failed), (0, 2502));
+    assert!(r.docs.first_error.unwrap_or_default().contains("E11000"));
+    let again = RestoreOptions { drop_first: true, ..into(&copy, folder.clone()) };
+    assert_eq!(rt.block_on(restore(&c, &again, Arc::new(AtomicBool::new(false)), |_| {})).unwrap().docs.inserted, 2502);
+
+    // Gzipped, and some of the collections.
+    let opts = DumpOptions { db: db.into(), collections: vec!["users".into(), "adults".into()], dir: dir.join("gz"), gzip: true, archive: false };
+    std::fs::create_dir_all(&opts.dir).unwrap();
+    assert_eq!(rt.block_on(dump(&c, &opts, &never, |_| {})).unwrap().collections, 2);
+    assert!(opts.target().join("users.bson.gz").is_file() && opts.target().join("users.metadata.json.gz").is_file());
+    let r = rt.block_on(restore(&c, &into(&gz, opts.target()), Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+    assert_eq!((r.collections, r.docs.inserted), (2, 2500));
+    assert_eq!(all(&gz, "users"), docs);
+    assert_eq!(names(&gz), vec![("adults".into(), "view".into()), ("users".into(), "collection".into())]);
+
+    // An archive, gzipped or not: one file, read back with its options, indexes and views.
+    for gzip in [false, true] {
+        let opts = DumpOptions { db: db.into(), collections: Vec::new(), dir: dir.clone(), gzip, archive: true };
+        let done = rt.block_on(dump(&c, &opts, &never, |_| {})).unwrap();
+        assert_eq!((done.collections, done.documents), (5, 2502));
+        assert!(opts.target().is_file() && opts.target().ends_with(if gzip { format!("{db}.archive.gz") } else { format!("{db}.archive") }));
+        let found = rustyrobo::dump::scan(&opts.target(), db).unwrap();
+        assert_eq!(found.iter().filter(|e| e.view).map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["adults"]);
+        let again = RestoreOptions { drop_first: true, ..into(&copy, opts.target()) };
+        let r = rt.block_on(restore(&c, &again, Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+        assert_eq!((r.collections, r.docs.inserted, r.docs.failed), (5, 2502, 0), "gzip: {gzip}");
+        assert_eq!(names(&copy), names(db));
+        assert_eq!(all(&copy, "users"), docs);
+        assert_eq!(all(&copy, "adults").len(), all(db, "adults").len());
+        assert_eq!(run(&copy, doc! { "collStats": "logs" }).get_bool("capped").ok(), Some(true));
+    }
+    let only = RestoreOptions { collections: vec!["logs".into()], drop_first: true, ..into(&gz, dir.join(format!("{db}.archive"))) };
+    let r = rt.block_on(restore(&c, &only, Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+    assert_eq!((r.collections, r.docs.inserted), (1, 1), "some collections of an archive");
+
+    // Cancelled between two batches.
+    let cancel = AtomicBool::new(false);
+    let opts = DumpOptions { db: db.into(), collections: vec!["users".into()], dir: dir.join("cancel"), gzip: false, archive: false };
+    std::fs::create_dir_all(&opts.dir).unwrap();
+    let e = rt.block_on(dump(&c, &opts, &cancel, |_| cancel.store(true, Ordering::Relaxed))).unwrap_err();
+    assert!(format!("{e:#}").contains("cancelled after 1000 documents"), "{e:#}");
+    for d in [db, copy.as_str(), gz.as_str()] {
+        run(d, doc! { "dropDatabase": 1 });
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dump_and_restore_on_a_modern_server() {
+    if !live() {
+        return;
+    }
+    dump_suite(&rt(), &mongo8(), "rr_e2e_dump_modern");
+}
+
+#[test]
+fn dump_and_restore_on_a_legacy_server() {
+    if !live() {
+        return;
+    }
+    dump_suite(&rt(), &mongo42(), "rr_e2e_dump_legacy");
+}
+
 #[test]
 fn import_and_export_on_a_modern_server() {
     if !live() {

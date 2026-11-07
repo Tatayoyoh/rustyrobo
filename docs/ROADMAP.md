@@ -28,6 +28,9 @@ here for the record, not as a commitment.
   JSON) and CSV (chosen fields, delimiter, nested fields as `a.b`, type detection on import), from
   the explorer (collection, database) and from the results of a query; runs in the background,
   with progress and cancel
+- [x] **Dump / restore** of a database in the formats of `mongodump`: folder (`.bson` + `.metadata.json`)
+  or archive (`--archive`), gzip optional; options, indexes and views, chosen collections, drop first,
+  into another database
 - [x] **Query history**: every executed script with its connection and database, searchable,
   opened again in a new shell (Ctrl+H)
 - [x] **Inline editing in the table view**: double-click a cell (or "Edit Value" in its menu) to
@@ -57,7 +60,7 @@ here for the record, not as a commitment.
 - [ ] [PRIORITIZED] **Copy / paste documents** between collections and servers (clipboard as Extended JSON).
 - [ ] **Import modes**: upsert or merge by `_id` (`update` with `upsert: true`) besides insert;
   stop on first error.
-- [ ] **More formats**: BSON / `mongodump` archives, SQL `INSERT` statements, Excel; export of aggregation results.
+- [ ] **More formats**: SQL `INSERT` statements, Excel; export of aggregation results.
 - [ ] **Saved import / export tasks** to run again (see Tasks).
 - [ ] **Compare & sync**: differences between two collections (by `_id`), then copy the differences one way.
 - [ ] **Data masking**: copy a collection with fields hidden, hashed or replaced.

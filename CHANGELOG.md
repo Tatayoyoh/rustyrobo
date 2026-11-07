@@ -4,6 +4,7 @@
 
 ### Added
 - Import and export: "Export Collection…" and "Import Documents…" in the menu of a collection, "Import Collection…" in the menus of a database
+- Dump and restore database
 - Query history in File > Query History… or (Ctrl+H)
 - Table view: double-click a cell for inline edit
 

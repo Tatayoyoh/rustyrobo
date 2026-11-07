@@ -52,6 +52,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Multi document selection
 - A favorite script manager
 - Import / export of collections and query results in JSON and CSV
+- Dump / restore of databases in the formats of mongodump (folder or archive), no tools to install
 - Query history: search the scripts you ran and open them again (Ctrl+H)
 - Edit values in place in the table view (double-click a cell)
 

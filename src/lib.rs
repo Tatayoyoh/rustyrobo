@@ -5,6 +5,7 @@ pub mod assets;
 pub mod autotest;
 pub mod bidi;
 pub mod bsonfmt;
+pub mod dump;
 pub mod fonts;
 pub mod history;
 pub mod mongo;

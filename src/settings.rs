@@ -390,6 +390,8 @@ pub struct AppSettings {
     pub favorites: Vec<FavoriteScript>,
     /// Folder and format of the last export, proposed for the next one.
     pub export: ExportDefaults,
+    /// Folder of the database of the last dump or restore (`…/<db>`).
+    pub last_dump: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -447,6 +449,7 @@ impl Default for AppSettings {
             tabbed_results: false,
             favorites: Vec::new(),
             export: Default::default(),
+            last_dump: String::new(),
         }
     }
 }

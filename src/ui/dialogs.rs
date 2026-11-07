@@ -13,6 +13,7 @@ use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
 use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, ExportDefaults, SshAuthMethod};
 use crate::shell::{QuerySpec, parse_shell_value};
+use crate::dump::{DumpEntry, DumpOptions, RestoreOptions};
 use crate::transfer::{Delimiter, ExportOptions, Format, ImportOptions};
 use crate::ui::icon;
 use crate::update::{Install, Os, Release};
@@ -132,6 +133,8 @@ pub enum Dialog {
     Index(Box<IndexForm>),
     Export(Box<ExportForm>),
     Import(Box<ImportForm>),
+    Dump(Box<DumpForm>),
+    Restore(Box<RestoreForm>),
     Function { server: u64, db: String, original: Option<String>, name: String, code: String, error: Option<String> },
     ShellTimeout { value: u32 },
     /// The appearance follows `edit`, and goes back to `original` unless saved.
@@ -342,6 +345,144 @@ impl ImportForm {
     }
 }
 
+/// What the dump dialog edits.
+#[derive(Clone)]
+pub struct DumpForm {
+    pub server: u64,
+    pub db: String,
+    /// Folder in which the folder or the archive of the database is written.
+    pub dir: String,
+    /// The collections of the explorer, with whether to dump them. Empty
+    /// when not loaded: all are dumped.
+    pub collections: Vec<(String, bool)>,
+    pub gzip: bool,
+    /// One file instead of a folder.
+    pub archive: bool,
+    pub error: Option<String>,
+}
+
+fn home_dir() -> String {
+    directories::UserDirs::new().map(|d| d.home_dir().display().to_string()).unwrap_or_default()
+}
+
+impl DumpForm {
+    fn new(server: u64, db: &str, collections: Vec<String>) -> Self {
+        DumpForm {
+            server,
+            db: db.to_string(),
+            dir: home_dir(),
+            collections: collections.into_iter().map(|c| (c, true)).collect(),
+            gzip: false,
+            archive: false,
+            error: None,
+        }
+    }
+
+    /// Proposes the folder and the format of the last dump or restore,
+    /// `last` being its folder or archive.
+    pub fn set_last(&mut self, last: &str) {
+        let path = std::path::Path::new(last);
+        if let Some(dir) = path.parent().filter(|d| !last.is_empty() && d.is_dir()) {
+            self.dir = dir.display().to_string();
+            self.archive = path.is_file();
+            self.gzip = self.archive && last.ends_with(".gz");
+        }
+    }
+
+    pub fn options(&self) -> Result<DumpOptions, String> {
+        let dir = std::path::PathBuf::from(self.dir.trim());
+        if self.dir.trim().is_empty() {
+            return Err("Choose a folder".into());
+        }
+        if !dir.is_dir() {
+            return Err(format!("Folder not found: {}", dir.display()));
+        }
+        let collections: Vec<String> = self.collections.iter().filter(|(_, on)| *on).map(|(c, _)| c.clone()).collect();
+        if !self.collections.is_empty() && collections.is_empty() {
+            return Err("Choose at least one collection".into());
+        }
+        // All of them: also those created since the explorer listed them.
+        let all = collections.len() == self.collections.len();
+        Ok(DumpOptions { db: self.db.clone(), collections: if all { Vec::new() } else { collections }, dir, gzip: self.gzip, archive: self.archive })
+    }
+}
+
+/// What the restore dialog edits.
+#[derive(Clone)]
+pub struct RestoreForm {
+    pub server: u64,
+    pub db: String,
+    /// Folder or archive.
+    pub from: String,
+    /// The collections of the dump, with whether to restore them, or why it cannot be read.
+    pub found: Result<Vec<(DumpEntry, bool)>, String>,
+    pub drop_first: bool,
+    pub indexes: bool,
+    pub error: Option<String>,
+}
+
+impl RestoreForm {
+    fn new(server: u64, db: &str) -> Self {
+        RestoreForm { server, db: db.to_string(), from: String::new(), found: Ok(Vec::new()), drop_first: false, indexes: true, error: None }
+    }
+
+    /// Proposes the dump of this database next to `last`, the folder or
+    /// archive of the last dump or restore, else `last`.
+    pub fn set_last(&mut self, last: &str) {
+        if last.is_empty() {
+            return;
+        }
+        let last = std::path::Path::new(last);
+        let name = crate::dump::escape(&self.db);
+        let siblings: Vec<std::path::PathBuf> = match last.parent() {
+            Some(p) if last.is_file() => vec![p.join(format!("{name}.archive")), p.join(format!("{name}.archive.gz"))],
+            Some(p) => vec![p.join(&name)],
+            None => Vec::new(),
+        };
+        let found = siblings.into_iter().find(|s| s.exists()).or_else(|| last.exists().then(|| last.to_path_buf()));
+        if let Some(path) = found {
+            self.set_path(path.display().to_string());
+        }
+    }
+
+    /// Lists the collections of the dump.
+    pub fn set_path(&mut self, from: String) {
+        self.from = from;
+        self.rescan();
+    }
+
+    pub fn rescan(&mut self) {
+        let from = self.from.trim();
+        self.found = if from.is_empty() {
+            Ok(Vec::new())
+        } else {
+            crate::dump::scan(std::path::Path::new(from), self.db.trim()).map(|v| v.into_iter().map(|e| (e, true)).collect()).map_err(|e| format!("{e:#}"))
+        };
+    }
+
+    pub fn options(&self) -> Result<RestoreOptions, String> {
+        let db = self.db.trim();
+        if db.is_empty() || db.contains(['/', '\\', '.', ' ', '"', '$']) {
+            return Err(format!("Invalid database name: {db}"));
+        }
+        let found = self.found.as_ref().map_err(|e| e.clone())?;
+        if found.is_empty() {
+            return Err(if self.from.trim().is_empty() { "Choose a folder or an archive".into() } else { "No collection in this dump".into() });
+        }
+        let collections: Vec<String> = found.iter().filter(|(_, on)| *on).map(|(e, _)| e.name.clone()).collect();
+        if collections.is_empty() {
+            return Err("Choose at least one collection".into());
+        }
+        Ok(RestoreOptions {
+            db: db.to_string(),
+            from: std::path::PathBuf::from(self.from.trim()),
+            collections: if collections.len() == found.len() { Vec::new() } else { collections },
+            drop_first: self.drop_first,
+            indexes: self.indexes,
+        })
+    }
+}
+
 const DB_ROLES: &[&str] = &["read", "readWrite", "dbAdmin", "dbOwner", "userAdmin"];
 const ADMIN_ROLES: &[&str] = &[
     "root", "readAnyDatabase", "readWriteAnyDatabase", "userAdminAnyDatabase", "dbAdminAnyDatabase",
@@ -480,6 +621,15 @@ impl Dialog {
         form.skip = if spec.skip > 0 { spec.skip.to_string() } else { String::new() };
         form.limit = if spec.limit > 0 { spec.limit.to_string() } else { String::new() };
         Dialog::Export(Box::new(form))
+    }
+
+    /// Dump of a database; `collections` are those listed in the explorer.
+    pub fn dump(server: u64, db: &str, collections: Vec<String>) -> Self {
+        Dialog::Dump(Box::new(DumpForm::new(server, db, collections)))
+    }
+
+    pub fn restore(server: u64, db: &str) -> Self {
+        Dialog::Restore(Box::new(RestoreForm::new(server, db)))
     }
 
     /// Import into `coll`, or into a collection named after the file.
@@ -989,6 +1139,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Dialog::Index(f) => index_dialog(ui, f, &theme, font, &mut actions),
             Dialog::Export(f) => export_dialog(ui, f, &theme, font, &mut actions),
             Dialog::Import(f) => import_dialog(ui, f, &theme, &mut actions),
+            Dialog::Dump(f) => dump_dialog(ui, f, &theme, &mut actions),
+            Dialog::Restore(f) => restore_dialog(ui, f, &theme, &mut actions),
             Dialog::Function { server, db, original, name, code, error } => {
                 let screen = ui.ctx().content_rect();
                 ui.set_width((screen.width() * 0.5).clamp(420.0, 800.0));
@@ -1401,10 +1553,10 @@ fn index_dialog(ui: &mut Ui, f: &mut IndexForm, theme: &crate::theme::Theme, fon
     }
 }
 
-fn file_row(ui: &mut Ui, path: &mut String, browse: impl FnOnce() -> Option<std::path::PathBuf>) -> bool {
+fn file_row(ui: &mut Ui, label: &str, path: &mut String, browse: impl FnOnce() -> Option<std::path::PathBuf>) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label("File:");
+        ui.label(label);
         let browse_w = 80.0;
         changed |= ui.add(egui::TextEdit::singleline(path).desired_width(ui.available_width() - browse_w)).changed();
         if ui.button("Browse…").clicked()
@@ -1473,7 +1625,7 @@ fn export_dialog(ui: &mut Ui, f: &mut ExportForm, theme: &crate::theme::Theme, f
     let current = std::path::Path::new(&f.path);
     let name = current.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let dir = current.parent().filter(|d| d.is_dir()).map(|d| d.to_path_buf());
-    file_row(ui, &mut f.path, || {
+    file_row(ui, "File:", &mut f.path, || {
         let picker = rfd::FileDialog::new().add_filter(format.label(), &[format.extension()]).add_filter("All files", &["*"]).set_file_name(name);
         match dir {
             Some(d) => picker.set_directory(d),
@@ -1508,7 +1660,7 @@ fn import_dialog(ui: &mut Ui, f: &mut ImportForm, theme: &crate::theme::Theme, a
     ui.set_width(520.0);
     title(ui, &format!("Import — {}", f.db));
     let mut path = f.path.clone();
-    if file_row(ui, &mut path, || {
+    if file_row(ui, "File:", &mut path, || {
         rfd::FileDialog::new().add_filter("JSON or CSV", &["json", "jsonl", "ndjson", "csv", "tsv"]).add_filter("All files", &["*"]).pick_file()
     }) {
         f.set_path(path);
@@ -1558,6 +1710,167 @@ fn import_dialog(ui: &mut Ui, f: &mut ImportForm, theme: &crate::theme::Theme, a
     match f.options() {
         Ok(opts) => {
             actions.push(Action::Import { server: f.server, opts: Box::new(opts) });
+            Outcome::Close
+        }
+        Err(e) => {
+            f.error = Some(e);
+            Outcome::Keep
+        }
+    }
+}
+
+/// Folder picker, opened in `current` when it exists.
+fn pick_folder(current: &str) -> Option<std::path::PathBuf> {
+    let picker = rfd::FileDialog::new();
+    let current = std::path::Path::new(current.trim());
+    if current.is_dir() { picker.set_directory(current) } else { picker }.pick_folder()
+}
+
+/// Checkboxes of a list of collections, with All / None.
+fn collection_checks<T>(ui: &mut Ui, id: &str, items: &mut [(T, bool)], label: impl Fn(&T) -> String) {
+    ui.horizontal(|ui| {
+        ui.label(format!("Collections ({} of {}):", items.iter().filter(|(_, on)| *on).count(), items.len()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("None").clicked() {
+                items.iter_mut().for_each(|(_, on)| *on = false);
+            }
+            if ui.small_button("All").clicked() {
+                items.iter_mut().for_each(|(_, on)| *on = true);
+            }
+        });
+    });
+    egui::Frame::new().stroke(ui.visuals().widgets.noninteractive.bg_stroke).corner_radius(4).inner_margin(4).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(id).max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
+            for (item, on) in items.iter_mut() {
+                ui.checkbox(on, label(item));
+            }
+        });
+    });
+}
+
+fn dump_dialog(ui: &mut Ui, f: &mut DumpForm, theme: &crate::theme::Theme, actions: &mut Vec<Action>) -> Outcome {
+    ui.set_width(520.0);
+    title(ui, &format!("Dump — {}", f.db));
+    let current = f.dir.clone();
+    file_row(ui, "Folder:", &mut f.dir, || pick_folder(&current));
+    ui.horizontal(|ui| {
+        ui.label("Format:");
+        ui.radio_value(&mut f.archive, false, "Folder (a file per collection)");
+        ui.radio_value(&mut f.archive, true, "Archive (one file)");
+    });
+    let target = DumpOptions { db: f.db.clone(), collections: Vec::new(), dir: f.dir.trim().into(), gzip: f.gzip, archive: f.archive }.target();
+    let what = if f.archive {
+        "an archive, like mongodump --archive"
+    } else {
+        "a folder in the format of mongodump: a .bson and a .metadata.json file per collection"
+    };
+    ui.label(RichText::new(format!("Writes {}, {what}.", target.display())).small().color(theme.text_weak));
+    ui.add_space(4.0);
+    if f.collections.is_empty() {
+        ui.label("All the collections and views of the database.");
+    } else {
+        collection_checks(ui, "dump-collections", &mut f.collections, |c| c.clone());
+    }
+    ui.checkbox(&mut f.gzip, "Compress (gzip, like mongodump --gzip)");
+    if target.is_dir() {
+        ui.label(RichText::new(format!("{} The folder exists: the files of the dumped collections will be replaced.", icon::INFO)).small().color(theme.text_weak));
+    } else if target.is_file() {
+        ui.label(RichText::new(format!("{} The file exists and will be replaced.", icon::INFO)).small().color(theme.text_weak));
+    }
+    error_line(ui, theme, &f.error);
+    let (ok, cancel) = buttons(ui, "Dump", !f.dir.trim().is_empty());
+    if cancel {
+        return Outcome::Close;
+    }
+    if !ok {
+        return Outcome::Keep;
+    }
+    match f.options() {
+        Ok(opts) => {
+            actions.push(Action::Dump { server: f.server, opts: Box::new(opts) });
+            Outcome::Close
+        }
+        Err(e) => {
+            f.error = Some(e);
+            Outcome::Keep
+        }
+    }
+}
+
+fn restore_dialog(ui: &mut Ui, f: &mut RestoreForm, theme: &crate::theme::Theme, actions: &mut Vec<Action>) -> Outcome {
+    ui.set_width(560.0);
+    title(ui, &format!("Restore — {}", f.db));
+    let mut from = f.from.clone();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("From:");
+        let buttons_w = 150.0;
+        changed |= ui.add(egui::TextEdit::singleline(&mut from).desired_width(ui.available_width() - buttons_w)).changed();
+        // The pickers open where the current dump is.
+        let current = std::path::Path::new(f.from.trim());
+        let start = if current.is_dir() { Some(current) } else { current.parent().filter(|p| p.is_dir()) };
+        let picker = || match start {
+            Some(s) => rfd::FileDialog::new().set_directory(s),
+            None => rfd::FileDialog::new(),
+        };
+        let (folder, archive) = (ui.button("Folder…").clicked(), ui.button("Archive…").clicked());
+        let picked = if folder {
+            picker().pick_folder()
+        } else if archive {
+            picker().add_filter("mongodump archive", &["archive", "gz", "agz"]).add_filter("All files", &["*"]).pick_file()
+        } else {
+            None
+        };
+        if let Some(p) = picked {
+            from = p.display().to_string();
+            changed = true;
+        }
+    });
+    if changed {
+        f.set_path(from);
+    }
+    ui.label(
+        RichText::new("A dump of rustyrobo or mongodump: the folder of a database, with its .bson and .metadata.json files, or an archive.")
+            .small()
+            .color(theme.text_weak),
+    );
+    ui.add_space(4.0);
+    egui::Grid::new("restore").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+        ui.label("Into database:");
+        // An archive of several databases is read for the one of this name.
+        if ui.add(egui::TextEdit::singleline(&mut f.db).desired_width(f32::INFINITY)).changed() && std::path::Path::new(f.from.trim()).is_file() {
+            f.rescan();
+        }
+        ui.end_row();
+    });
+    match &mut f.found {
+        Err(e) => {
+            ui.label(RichText::new(format!("{} {e}", icon::WARNING)).color(theme.error));
+        }
+        Ok(found) if found.is_empty() => {
+            if !f.from.trim().is_empty() {
+                ui.label(RichText::new(format!("{} No collection in this dump.", icon::WARNING)).color(theme.warning));
+            }
+        }
+        Ok(found) => collection_checks(ui, "restore-collections", found, |e| if e.view { format!("{} (view)", e.name) } else { e.name.clone() }),
+    }
+    ui.checkbox(&mut f.drop_first, "Drop each collection first");
+    ui.checkbox(&mut f.indexes, "Create the indexes");
+    if f.drop_first {
+        ui.label(RichText::new(format!("{} The documents and indexes of the restored collections of \"{}\" will be deleted first.", icon::WARNING, f.db.trim())).color(theme.warning));
+    }
+    error_line(ui, theme, &f.error);
+    let ready = f.found.as_ref().is_ok_and(|v| v.iter().any(|(_, on)| *on));
+    let (ok, cancel) = buttons(ui, "Restore", ready);
+    if cancel {
+        return Outcome::Close;
+    }
+    if !ok {
+        return Outcome::Keep;
+    }
+    match f.options() {
+        Ok(opts) => {
+            actions.push(Action::Restore { server: f.server, opts: Box::new(opts) });
             Outcome::Close
         }
         Err(e) => {

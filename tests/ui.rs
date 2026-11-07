@@ -953,6 +953,120 @@ fn export_and_import_dialogs() {
     assert!(h.state().dialog.is_none() && h.state().transfers.is_empty());
 }
 
+#[test]
+fn dump_and_restore_dialogs() {
+    use rustyrobo::app::Action;
+    use rustyrobo::ui::dialogs::Dialog;
+    let env = env("dump-dialogs", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+
+    // Dump: a folder and the collections listed in the explorer.
+    h.state_mut().actions.push(Action::Dialog(Dialog::dump(1, "shop", vec!["orders".into(), "users".into()])));
+    h.run_steps(3);
+    assert!(has_label(&h, "Dump — shop") && has_label(&h, "Collections (2 of 2)"));
+    let home = h.query_all_by(is_text_input).next().unwrap().value().unwrap();
+    retype(&mut h, &home, &env.dir.display().to_string());
+    assert!(has_label(&h, &env.dir.join("shop").display().to_string()), "where the files go");
+    h.get_by_label("None").click();
+    h.run_steps(2);
+    h.get_by_label("Dump").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Choose at least one collection"));
+    h.get_by_label("users").click();
+    h.get_by_label("Compress (gzip, like mongodump --gzip)").click();
+    h.run_steps(2);
+    h.get_by_label("Dump").click();
+    h.run_steps(3);
+    // Not connected: nothing runs, but the folder is kept for the next time.
+    assert!(h.state().dialog.is_none() && h.state().transfers.is_empty());
+    assert_eq!(saved_settings(&env).last_dump, env.dir.join("shop").display().to_string());
+    h.state_mut().actions.push(Action::Dialog(Dialog::dump(1, "shop", Vec::new())));
+    h.run_steps(3);
+    assert!(has_input(&h, &env.dir.display().to_string()), "the folder of the last dump");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // Restore: the dump of the database in that folder, if any.
+    let folder = env.dir.join("shop");
+    std::fs::create_dir_all(&folder).unwrap();
+    for f in ["users.bson", "users.metadata.json", "a%2Fb.bson.gz", "adults.metadata.json"] {
+        std::fs::write(folder.join(f), "").unwrap();
+    }
+    h.state_mut().actions.push(Action::Dialog(Dialog::restore(1, "shop")));
+    h.run_steps(3);
+    assert!(has_label(&h, "Restore — shop") && has_input(&h, &folder.display().to_string()));
+    assert!(has_label(&h, "Collections (3 of 3)") && has_label(&h, "a/b") && has_label(&h, "adults (view)"));
+    retype(&mut h, &folder.display().to_string(), &env.dir.display().to_string());
+    assert!(has_label(&h, "No collection in this dump"));
+    retype(&mut h, &env.dir.display().to_string(), &folder.display().to_string());
+    retype(&mut h, "shop", "shop copy");
+    h.get_by_label("Drop each collection first").click();
+    h.run_steps(2);
+    assert!(has_label(&h, "will be deleted first"));
+    h.get_by_label("Restore").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Invalid database name: shop copy"));
+    retype(&mut h, "shop copy", "shop_copy");
+    h.get_by_label("Restore").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none() && h.state().transfers.is_empty());
+
+    // A folder restored from is proposed again, also for another database.
+    let old = env.dir.join("backups").join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("users.bson"), "").unwrap();
+    h.state_mut().actions.push(Action::Dialog(Dialog::restore(1, "other")));
+    h.run_steps(3);
+    assert!(has_input(&h, &folder.display().to_string()), "the last one, with no dump of \"other\" next to it");
+    retype(&mut h, &folder.display().to_string(), &old.display().to_string());
+    h.get_by_label("Restore").click();
+    h.run_steps(3);
+    assert_eq!(saved_settings(&env).last_dump, old.display().to_string());
+    h.state_mut().actions.push(Action::Dialog(Dialog::restore(1, "other")));
+    h.run_steps(3);
+    assert!(has_input(&h, &old.display().to_string()));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    h.state_mut().actions.push(Action::Dialog(Dialog::dump(1, "other", Vec::new())));
+    h.run_steps(3);
+    assert!(has_input(&h, &env.dir.join("backups").display().to_string()), "dumps go next to it");
+
+    // An archive: one file, remembered with its format.
+    h.get_by_label("Archive (one file)").click();
+    h.get_by_label("Compress (gzip, like mongodump --gzip)").click();
+    h.run_steps(2);
+    let archive = env.dir.join("backups").join("other.archive.gz");
+    assert!(has_label(&h, &archive.display().to_string()), "where the archive goes");
+    h.get_by_label("Dump").click();
+    h.run_steps(3);
+    assert_eq!(saved_settings(&env).last_dump, archive.display().to_string());
+    // The archive of mongodump: a prelude with the collections, then their documents.
+    let mut file = vec![0x6d, 0xe2, 0x99, 0x81];
+    bson::doc! { "version": "0.1" }.to_writer(&mut file).unwrap();
+    for (name, kind) in [("orders", "collection"), ("recent", "view")] {
+        bson::doc! { "db": "other", "collection": name, "metadata": format!(r#"{{"type":"{kind}"}}"#), "size": 0, "type": kind }.to_writer(&mut file).unwrap();
+    }
+    file.extend([0xff; 4]);
+    let mut gz = flate2::write::GzEncoder::new(std::fs::File::create(&archive).unwrap(), flate2::Compression::default());
+    std::io::Write::write_all(&mut gz, &file).unwrap();
+    gz.finish().unwrap();
+    h.state_mut().actions.push(Action::Dialog(Dialog::dump(1, "other", Vec::new())));
+    h.run_steps(3);
+    match &h.state().dialog {
+        Some(Dialog::Dump(f)) => assert!(f.archive && f.gzip),
+        _ => panic!("no dump dialog"),
+    }
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    h.state_mut().actions.push(Action::Dialog(Dialog::restore(1, "other")));
+    h.run_steps(3);
+    assert!(has_input(&h, &archive.display().to_string()));
+    assert!(has_label(&h, "Collections (2 of 2)") && has_label(&h, "recent (view)"));
+}
+
 // -------------------------------------------------------- fonts and RTL
 
 /// App with the system fonts scanned and the connection manager closed.

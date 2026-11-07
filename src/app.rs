@@ -22,6 +22,7 @@ use crate::mongo::{self, ConnectSecrets, Connection, StepReport};
 use crate::settings::{AppSettings, ConnectionSettings, ExportDefaults, Orientation, ViewMode};
 use crate::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellReply};
 use crate::theme::{self, Theme};
+use crate::dump::{DumpOptions, RestoreOptions};
 use crate::transfer::{ExportOptions, ImportOptions};
 use crate::ui::connections::{ConnectionEditor, ConnectionList};
 use crate::ui::dialogs::Dialog;
@@ -151,6 +152,8 @@ pub enum Action {
     Dialog(Dialog),
     Export { server: u64, opts: Box<ExportOptions> },
     Import { server: u64, opts: Box<ImportOptions> },
+    Dump { server: u64, opts: Box<DumpOptions> },
+    Restore { server: u64, opts: Box<RestoreOptions> },
     CancelTransfer(u64),
     OpenFile,
     SaveFile { save_as: bool },
@@ -948,13 +951,18 @@ impl App {
                 });
             }
             Action::Dialog(mut d) => {
-                if let Dialog::Export(f) = &mut d {
-                    f.set_defaults(&self.settings.export);
+                match &mut d {
+                    Dialog::Export(f) => f.set_defaults(&self.settings.export),
+                    Dialog::Dump(f) => f.set_last(&self.settings.last_dump),
+                    Dialog::Restore(f) => f.set_last(&self.settings.last_dump),
+                    _ => {}
                 }
                 self.dialog = Some(d);
             }
             Action::Export { server, opts } => self.export(server, *opts),
             Action::Import { server, opts } => self.import(server, *opts),
+            Action::Dump { server, opts } => self.dump(server, *opts),
+            Action::Restore { server, opts } => self.restore(server, *opts),
             Action::CancelTransfer(id) => {
                 if let Some(t) = self.transfers.iter().find(|t| t.id == id) {
                     t.cancel.store(true, Ordering::Relaxed);
@@ -1068,6 +1076,40 @@ impl App {
         let refresh = Refresh::Collections(opts.db.clone());
         self.spawn(async move {
             let result = crate::transfer::import(&conn, &opts, cancel, progress).await.map(|i| i.summary()).map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, refresh }
+        });
+    }
+
+    /// Remembers the folder of a dump or restore, proposed by the next ones.
+    fn remember_dump(&mut self, folder: &std::path::Path) {
+        let folder = folder.display().to_string();
+        if folder != self.settings.last_dump {
+            self.settings.last_dump = folder;
+            self.run_action(Action::SaveSettings);
+        }
+    }
+
+    fn dump(&mut self, server: u64, opts: DumpOptions) {
+        self.remember_dump(&opts.target());
+        let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
+        let label = format!("Dump {}", opts.db);
+        self.log(LogLevel::Info, format!("{label} to {}…", opts.target().display()));
+        let (id, cancel, progress) = self.start_transfer(label);
+        self.spawn(async move {
+            let result = crate::dump::dump(&conn, &opts, &cancel, progress).await.map(|d| d.summary(&opts.target())).map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, refresh: Refresh::None }
+        });
+    }
+
+    fn restore(&mut self, server: u64, opts: RestoreOptions) {
+        self.remember_dump(&opts.from);
+        let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
+        let label = format!("Restore {}", opts.db);
+        self.log(LogLevel::Info, format!("{label} from {}…", opts.from.display()));
+        let (id, cancel, progress) = self.start_transfer(label);
+        let refresh = Refresh::Collections(opts.db.clone());
+        self.spawn(async move {
+            let result = crate::dump::restore(&conn, &opts, cancel, progress).await.map(|r| r.summary()).map_err(|e| mongo::error_message(&e));
             AppEvent::TransferDone { id, server, result, refresh }
         });
     }

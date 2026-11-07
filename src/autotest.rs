@@ -205,6 +205,19 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
         }
         33 => shot(&mut t, ctx, "15-table-edit"),
+        34 => {
+            if let Some(tab) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
+                tab.cell_edit = None;
+            }
+            if let Some(s) = app.servers.first() {
+                let listed = match s.dbs.iter().find(|d| d.name == "rrtest").map(|d| &d.collections) {
+                    Some(crate::app::Load::Ready(v)) => v.iter().map(|c| c.name.clone()).collect(),
+                    _ => Vec::new(),
+                };
+                app.dialog = Some(Dialog::dump(s.id, "rrtest", listed));
+            }
+        }
+        35 => shot(&mut t, ctx, "16-dump"),
         _ => {
             app.dialog = None;
             app.history_window = None;
