@@ -198,7 +198,7 @@ pub fn tick(app: &mut App, ctx: &Context) {
         32 => {
             set_mode(app, ViewMode::Table);
             if let Some(pane) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
-                let _ = pane.edit_cell(1, "tag");
+                let _ = pane.edit_cell(1, &["tag".to_string()]);
                 if let Some(e) = &mut pane.cell_edit {
                     e.text = "\"fizzbuzz\"".into();
                 }

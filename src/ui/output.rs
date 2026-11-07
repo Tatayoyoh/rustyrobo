@@ -42,17 +42,22 @@ pub struct OutputPane {
     /// The value under the pointer in the last frame.
     pub hovered: Option<HoveredValue>,
     find: PaneFind,
-    /// Table cell being edited in place.
+    /// Value being edited in place, in the table or the tree.
     pub cell_edit: Option<CellEdit>,
     /// Table cell of the last right-click, for its context menu.
     menu_cell: Option<(usize, String)>,
 }
 
-/// A table cell edited in place: a top-level field of a document.
+/// Why an object or an array cannot be edited in place.
+const CONTAINER: &str = "Objects and arrays are edited with Edit Document…";
+
+/// A value edited in place: a field of a document (a cell of the table), or
+/// any value inside it (a row of the tree).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellEdit {
     pub doc: usize,
-    pub column: String,
+    /// Keys leading to the value, as in the tree (`[2]` for an array element).
+    pub keys: Vec<String>,
     /// The value in shell syntax.
     pub text: String,
     pub error: Option<String>,
@@ -367,9 +372,10 @@ impl OutputPane {
         self.cell_edit = None;
     }
 
-    /// Why a table cell cannot be edited in place, if it cannot: only the
-    /// top-level fields of the documents of a `find`, other than `_id`.
-    pub fn cell_editable(&self, doc: usize, column: &str) -> Result<(), &'static str> {
+    /// Why a value cannot be edited in place, if it cannot: only the values
+    /// of the documents of a `find`, outside `_id`, that are not objects or
+    /// arrays. A missing top-level field can be added.
+    pub fn cell_editable(&self, doc: usize, keys: &[String]) -> Result<(), &'static str> {
         if self.source().is_none() {
             return Err("Only the results of a find can be edited");
         }
@@ -377,42 +383,44 @@ impl OutputPane {
         if !d.contains_key("_id") {
             return Err("The document has no _id");
         }
-        if column == "_id" {
+        let Some(first) = keys.first() else { return Err("Documents are edited with Edit Document…") };
+        if first == "_id" {
             return Err("The _id of a document cannot change");
         }
-        if column.contains('.') || column.starts_with('$') {
+        if keys.iter().any(|k| !is_index(k) && (k.contains('.') || k.starts_with('$'))) {
             return Err("Field names with a dot or a $ cannot be edited here");
         }
-        if d.get(column).is_some_and(bsonfmt::is_container) {
-            return Err("Objects and arrays are edited with Edit Document…");
+        match lookup(self.docs(), doc, keys) {
+            Some(v) if bsonfmt::is_container(v) => Err(CONTAINER),
+            None if keys.len() > 1 => Err("Not a value of the document"),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
-    /// Starts editing a table cell, with its value in shell syntax.
-    pub fn edit_cell(&mut self, doc: usize, column: &str) -> Result<(), &'static str> {
-        self.cell_editable(doc, column)?;
-        let value = self.docs().get(doc).and_then(|d| d.as_document()).and_then(|d| d.get(column));
+    /// Starts editing a value, in shell syntax.
+    pub fn edit_cell(&mut self, doc: usize, keys: &[String]) -> Result<(), &'static str> {
+        self.cell_editable(doc, keys)?;
         // Dates in UTC, legacy UUIDs as is: the text must read back as the same value.
-        let text = value.map(|v| bsonfmt::scalar_shell(v, FormatOptions::default())).unwrap_or_default();
-        self.cell_edit = Some(CellEdit { doc, column: column.to_string(), text, error: None, focused: false });
+        let text = lookup(self.docs(), doc, keys).map(|v| bsonfmt::scalar_shell(v, FormatOptions::default())).unwrap_or_default();
+        self.cell_edit = Some(CellEdit { doc, keys: keys.to_vec(), text, error: None, focused: false });
         Ok(())
     }
 
-    /// The command that sets (or, with `None`, removes) a top-level field of
-    /// a document of the page, with its database.
-    pub fn field_update(&self, doc: usize, column: &str, value: Option<Bson>) -> Option<(String, bson::Document)> {
+    /// The command that sets (or, with `None`, removes) a value of a
+    /// document of the page, with its database.
+    pub fn field_update(&self, doc: usize, keys: &[String], value: Option<Bson>) -> Option<(String, bson::Document)> {
         let (db, coll) = self.source()?;
         let id = self.docs().get(doc)?.as_document()?.get("_id")?.clone();
+        let path = dotted_path(keys);
         let change = match value {
-            Some(v) => doc! { "$set": { column: v } },
-            None => doc! { "$unset": { column: "" } },
+            Some(v) => doc! { "$set": { path: v } },
+            None => doc! { "$unset": { path: "" } },
         };
         Some((db, doc! { "update": coll, "updates": [{ "q": { "_id": id }, "u": change, "upsert": false }] }))
     }
 
-    /// Ends the edit of a cell with Enter: the update to send, if the value
-    /// changed. A text that does not parse keeps the edit open, with the error.
+    /// Ends an edit with Enter: the update to send, if the value changed. A
+    /// text that does not parse keeps the edit open, with the error.
     pub fn commit_cell(&mut self) -> Option<(String, bson::Document)> {
         let edit = self.cell_edit.take()?;
         if edit.text.trim().is_empty() {
@@ -426,11 +434,10 @@ impl OutputPane {
                 return None;
             }
         };
-        let old = self.docs().get(edit.doc).and_then(|d| d.as_document()).and_then(|d| d.get(&edit.column));
-        if old == Some(&value) {
+        if lookup(self.docs(), edit.doc, &edit.keys) == Some(&value) {
             return None;
         }
-        self.field_update(edit.doc, &edit.column, Some(value))
+        self.field_update(edit.doc, &edit.keys, Some(value))
     }
 
     fn source(&self) -> Option<(String, String)> {
@@ -832,6 +839,9 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let mono = FontId::monospace(cx.font_size);
     let indent = cx.font_size * 1.2;
     let mut hovered = None;
+    // The value being edited, out of the pane while the rows borrow it.
+    let mut edit = pane.cell_edit.take();
+    let (mut edit_drawn, mut edit_end, mut start_edit) = (false, None, None);
     let scroll_row = match &pane.find.hits {
         Hits::Rows { list, .. } if pane.find.open && pane.find.scroll > 0 => list.get(pane.find.current).and_then(|h| rows.iter().position(|r| r.path == h.path)),
         _ => None,
@@ -880,7 +890,15 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     let key_color = if r.depth == 0 { th.text } else { th.syntax.property };
                     cell_label(ui, &r.key, &font, key_color);
                 });
+                let editing = edit.as_mut().filter(|e| e.doc == r.doc && e.keys == r.keys);
                 row.col(|ui| {
+                    if let Some(e) = editing {
+                        edit_drawn = true;
+                        if let Some(end) = cell_editor(ui, e, &mono, th) {
+                            edit_end = Some(end);
+                        }
+                        return;
+                    }
                     if let Some((i, _)) = hit.filter(|(_, h)| h.in_value) {
                         pane.find.mark(ui, i, th);
                     }
@@ -900,8 +918,12 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 if resp.secondary_clicked() {
                     pane.selected.context(&r.path);
                 }
-                if resp.double_clicked() && r.container {
-                    toggle = Some(r.path.clone());
+                if resp.double_clicked() {
+                    if r.container {
+                        toggle = Some(r.path.clone());
+                    } else {
+                        start_edit = Some((r.doc, r.keys.clone()));
+                    }
                 }
                 resp.context_menu(|ui| {
                     let targets: Vec<Target<'_>> = if pane.selected.len() > 1 && pane.selected.contains(&r.path) {
@@ -909,12 +931,20 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     } else {
                         vec![Target { doc: r.doc, keys: Some(&r.keys), path: Some(&r.path) }]
                     };
+                    if let [_] = targets.as_slice()
+                        && !r.keys.is_empty()
+                    {
+                        cell_menu(ui, pane, cx_parts(cx), r.doc, &r.keys, &mut menu_actions);
+                    }
                     doc_menu(ui, pane, cx_parts(cx), &targets, &mut menu_actions);
                 });
             });
         });
 
     pane.hovered = hovered;
+    // Scrolled out of sight or folded: the edit is dropped, like a click elsewhere.
+    pane.cell_edit = edit.filter(|_| edit_drawn);
+    end_cell_edit(pane, cx, edit_end, start_edit);
     let expansion_changed = toggle.is_some() || !menu_actions.is_empty();
     if let Some(p) = toggle
         && !pane.expanded.remove(&p)
@@ -945,7 +975,7 @@ fn cx_parts(cx: &PaneCtx<'_>) -> MenuCx {
 #[allow(clippy::large_enum_variant)] // built only on menu clicks
 enum MenuAction {
     Push(Action),
-    EditCell(usize, String),
+    EditCell(usize, Vec<String>),
     ExpandAll(String),
     CollapseAll(String),
 }
@@ -954,8 +984,8 @@ fn apply_menu_actions(pane: &mut OutputPane, cx: &mut PaneCtx<'_>, list: Vec<Men
     for a in list {
         match a {
             MenuAction::Push(a) => cx.actions.push(a),
-            MenuAction::EditCell(doc, column) => {
-                let _ = pane.edit_cell(doc, &column);
+            MenuAction::EditCell(doc, keys) => {
+                let _ = pane.edit_cell(doc, &keys);
             }
             MenuAction::ExpandAll(path) => {
                 let mut parts = path.split('/');
@@ -1117,6 +1147,11 @@ fn documents_text(roots: &[&Bson], fmt: FormatOptions) -> String {
 }
 
 /// `a.b.0.c` from tree keys (`[0]` for array elements).
+/// A key of an array element in the tree: `[2]`.
+fn is_index(key: &str) -> bool {
+    key.strip_prefix('[').and_then(|k| k.strip_suffix(']')).is_some_and(|k| k.parse::<usize>().is_ok())
+}
+
 fn dotted_path(keys: &[String]) -> String {
     keys.iter().map(|k| k.strip_prefix('[').and_then(|k| k.strip_suffix(']')).unwrap_or(k)).collect::<Vec<_>>().join(".")
 }
@@ -1243,7 +1278,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let mut cell_to_show = None;
     let mut edit_drawn = false;
     let mut edit_end: Option<bool> = None;
-    let mut start_edit: Option<(usize, String)> = None;
+    let mut start_edit: Option<(usize, Vec<String>)> = None;
     let mut menu_cell = pane.menu_cell.clone();
 
     egui::ScrollArea::horizontal().id_salt(("table-h", cx.tab, cx.index)).show(ui, |ui| {
@@ -1292,7 +1327,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let mut pointed = None;
                 for c in &columns {
                     let v = if scalar_mode { Some(d) } else { d.as_document().and_then(|doc| doc.get(c)) };
-                    let editing = edit.as_mut().filter(|e| e.doc == i && &e.column == c);
+                    let editing = edit.as_mut().filter(|e| e.doc == i && e.keys.len() == 1 && &e.keys[0] == c);
                     let (rect, cell) = row.col(|ui| {
                         if let Some(e) = editing {
                             edit_drawn = true;
@@ -1322,7 +1357,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let resp = row.response();
                 if let Some(c) = pointed {
                     if resp.double_clicked() {
-                        start_edit = Some((i, c.clone()));
+                        start_edit = Some((i, vec![c.clone()]));
                     }
                     if resp.secondary_clicked() {
                         menu_cell = Some((i, c));
@@ -1343,7 +1378,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     if let [_] = targets.as_slice()
                         && let Some((_, column)) = menu_cell.as_ref().filter(|(doc, _)| *doc == i)
                     {
-                        cell_menu(ui, pane, menu, i, column, &mut menu_actions);
+                        cell_menu(ui, pane, menu, i, std::slice::from_ref(column), &mut menu_actions);
                     }
                     doc_menu(ui, pane, menu, &targets, &mut menu_actions);
                 });
@@ -1358,19 +1393,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     pane.menu_cell = menu_cell;
     // Scrolled out of sight: the edit is dropped, like a click elsewhere.
     pane.cell_edit = edit.filter(|_| edit_drawn);
-    match edit_end {
-        Some(true) => {
-            let column = pane.cell_edit.as_ref().map(|e| e.column.clone()).unwrap_or_default();
-            if let Some((db, cmd)) = pane.commit_cell() {
-                cx.actions.push(Action::Command { server: cx.server, db, cmd, label: format!("Update field {column}"), refresh: Refresh::Page { tab: cx.tab, out: cx.index } });
-            }
-        }
-        Some(false) => pane.cell_edit = None,
-        None => {}
-    }
-    if let Some((doc, column)) = start_edit {
-        let _ = pane.edit_cell(doc, &column);
-    }
+    end_cell_edit(pane, cx, edit_end, start_edit);
     match click {
         Some((path, Some(mods))) => {
             let n = pane.docs().len();
@@ -1382,6 +1405,24 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     apply_menu_actions(pane, cx, menu_actions);
     if pane.columns_cache.is_none() {
         pane.columns_cache = Some((columns, scalar_mode));
+    }
+}
+
+/// Ends the edit of a value (Enter saves it, Escape or a click elsewhere
+/// drops it), then starts the one asked by a double-click.
+fn end_cell_edit(pane: &mut OutputPane, cx: &mut PaneCtx<'_>, end: Option<bool>, start: Option<(usize, Vec<String>)>) {
+    match end {
+        Some(true) => {
+            let path = pane.cell_edit.as_ref().map(|e| dotted_path(&e.keys)).unwrap_or_default();
+            if let Some((db, cmd)) = pane.commit_cell() {
+                cx.actions.push(Action::Command { server: cx.server, db, cmd, label: format!("Update field {path}"), refresh: Refresh::Page { tab: cx.tab, out: cx.index } });
+            }
+        }
+        Some(false) => pane.cell_edit = None,
+        None => {}
+    }
+    if let Some((doc, keys)) = start {
+        let _ = pane.edit_cell(doc, &keys);
     }
 }
 
@@ -1410,30 +1451,29 @@ fn cell_editor(ui: &mut Ui, e: &mut CellEdit, font: &FontId, th: &Theme) -> Opti
     None
 }
 
-/// Items of the context menu for a table cell.
-fn cell_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, column: &str, out: &mut Vec<MenuAction>) {
-    let editable = pane.cell_editable(doc, column);
-    let r = menu::entry(ui, editable.is_ok(), &format!("Edit Value of \"{column}\""), "Double-click");
+/// Items of the context menu for a value: a cell of the table, a row of the tree.
+fn cell_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: &[String], out: &mut Vec<MenuAction>) {
+    let name = dotted_path(keys);
+    let editable = pane.cell_editable(doc, keys);
+    let r = menu::entry(ui, editable.is_ok(), &format!("Edit Value of \"{name}\""), "Double-click");
     if r.clicked() {
-        out.push(MenuAction::EditCell(doc, column.to_string()));
+        out.push(MenuAction::EditCell(doc, keys.to_vec()));
         ui.close();
     }
     if let Err(why) = editable {
         r.on_disabled_hover_text(why);
     }
-    let present = pane.docs().get(doc).and_then(|d| d.as_document()).is_some_and(|d| d.contains_key(column));
-    let unset = (editable.is_ok() || pane.docs().get(doc).and_then(|d| d.as_document()).and_then(|d| d.get(column)).is_some_and(bsonfmt::is_container))
-        && present
-        && column != "_id"
-        && !column.contains('.')
-        && !column.starts_with('$');
-    if menu::entry(ui, unset, &format!("Remove Field \"{column}\"…"), "").clicked()
-        && let Some((db, cmd)) = pane.field_update(doc, column, None)
+    // Objects and arrays too; not array elements, which $unset sets to null.
+    let unset = matches!(editable, Ok(()) | Err(CONTAINER))
+        && lookup(pane.docs(), doc, keys).is_some()
+        && !keys.last().is_some_and(|k| is_index(k));
+    if menu::entry(ui, unset, &format!("Remove Field \"{name}\"…"), "").clicked()
+        && let Some((db, cmd)) = pane.field_update(doc, keys, None)
     {
         out.push(MenuAction::Push(Action::Dialog(Dialog::confirm(
             "Remove Field",
-            format!("Remove the field \"{column}\" from this document?"),
-            Action::Command { server: cx.server, db, cmd, label: format!("Remove field {column}"), refresh: Refresh::Page { tab: cx.tab, out: cx.index } },
+            format!("Remove the field \"{name}\" from this document?"),
+            Action::Command { server: cx.server, db, cmd, label: format!("Remove field {name}"), refresh: Refresh::Page { tab: cx.tab, out: cx.index } },
         ))));
         ui.close();
     }
@@ -1759,6 +1799,7 @@ mod tests {
 
     #[test]
     fn table_cells_edited_in_place() {
+        let k = |c: &str| vec![c.to_string()];
         let spec = QuerySpec { db: "d".into(), coll: "c".into(), filter: doc! {}, projection: None, sort: None, skip: 0, limit: 0, hint: None, collation: None };
         let date = bson::DateTime::from_millis(1_700_000_000_000);
         let rows = vec![
@@ -1766,44 +1807,73 @@ mod tests {
             Bson::Document(doc! { "name": "no id" }),
         ];
         let mut p = pane(rows.clone(), Some(spec));
-        assert_eq!(p.cell_editable(0, "_id"), Err("The _id of a document cannot change"));
-        assert_eq!(p.cell_editable(0, "tags"), Err("Objects and arrays are edited with Edit Document…"));
-        assert!(p.cell_editable(0, "a.b").is_err());
-        assert_eq!(p.cell_editable(1, "name"), Err("The document has no _id"));
-        assert!(p.cell_editable(0, "missing").is_ok(), "a field the document lacks can be added");
-        assert!(pane(rows.clone(), None).cell_editable(0, "name").is_err(), "not a find");
+        assert_eq!(p.cell_editable(0, &k("_id")), Err("The _id of a document cannot change"));
+        assert_eq!(p.cell_editable(0, &k("tags")), Err("Objects and arrays are edited with Edit Document…"));
+        assert!(p.cell_editable(0, &k("a.b")).is_err());
+        assert_eq!(p.cell_editable(1, &k("name")), Err("The document has no _id"));
+        assert!(p.cell_editable(0, &k("missing")).is_ok(), "a field the document lacks can be added");
+        assert!(pane(rows.clone(), None).cell_editable(0, &k("name")).is_err(), "not a find");
 
         // The text reads back as the same value: no change, no command.
         for (column, text) in [("name", "\"Ada\""), ("n", "NumberLong(5)"), ("at", "ISODate(\"2023-11-14T22:13:20.000Z\")")] {
-            p.edit_cell(0, column).unwrap();
+            p.edit_cell(0, &k(column)).unwrap();
             assert_eq!(p.cell_edit.as_ref().unwrap().text, text);
             assert_eq!(p.commit_cell(), None, "{column}");
             assert!(p.cell_edit.is_none());
         }
 
         // A new value, with its type.
-        p.edit_cell(0, "n").unwrap();
+        p.edit_cell(0, &k("n")).unwrap();
         p.cell_edit.as_mut().unwrap().text = "42".into();
         let (db, cmd) = p.commit_cell().unwrap();
         assert_eq!(db, "d");
         assert_eq!(cmd, doc! { "update": "c", "updates": [{ "q": { "_id": 7 }, "u": { "$set": { "n": 42 } }, "upsert": false }] });
 
         // Bad syntax: the edit stays open with the error.
-        p.edit_cell(0, "name").unwrap();
+        p.edit_cell(0, &k("name")).unwrap();
         p.cell_edit.as_mut().unwrap().text = "{ oops".into();
         assert_eq!(p.commit_cell(), None);
         assert!(p.cell_edit.as_ref().unwrap().error.is_some());
 
         // Empty: nothing to do. Removing a field: $unset.
-        p.edit_cell(0, "missing").unwrap();
+        p.edit_cell(0, &k("missing")).unwrap();
         assert_eq!(p.cell_edit.as_ref().unwrap().text, "");
         assert_eq!(p.commit_cell(), None);
-        let (_, cmd) = p.field_update(0, "tags", None).unwrap();
+        let (_, cmd) = p.field_update(0, &k("tags"), None).unwrap();
         assert_eq!(cmd.get_array("updates").unwrap()[0].as_document().unwrap().get_document("u").unwrap(), &doc! { "$unset": { "tags": "" } });
 
         // A new page ends the edit.
-        p.edit_cell(0, "name").unwrap();
+        p.edit_cell(0, &k("name")).unwrap();
         p.set_page(rows, 0);
         assert!(p.cell_edit.is_none());
+    }
+
+    #[test]
+    fn tree_values_edited_in_place() {
+        let spec = QuerySpec { db: "d".into(), coll: "c".into(), filter: doc! {}, projection: None, sort: None, skip: 0, limit: 0, hint: None, collation: None };
+        let rows = vec![Bson::Document(doc! { "_id": { "a": 1 }, "address": { "city": "Paris", "zip": { "code": 75 } }, "tags": ["x", { "n": 1 }] })];
+        let mut p = pane(rows, Some(spec));
+        let keys = |ks: &[&str]| ks.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        assert!(p.cell_editable(0, &keys(&["address", "city"])).is_ok());
+        assert!(p.cell_editable(0, &keys(&["tags", "[0]"])).is_ok());
+        assert!(p.cell_editable(0, &keys(&["tags", "[1]", "n"])).is_ok());
+        assert_eq!(p.cell_editable(0, &keys(&["address", "zip"])), Err(CONTAINER));
+        assert_eq!(p.cell_editable(0, &keys(&["_id", "a"])), Err("The _id of a document cannot change"));
+        assert_eq!(p.cell_editable(0, &[]), Err("Documents are edited with Edit Document…"));
+        assert_eq!(p.cell_editable(0, &keys(&["address", "street"])), Err("Not a value of the document"));
+
+        // Nested fields and array elements, by their dotted path.
+        let set = |p: &mut OutputPane, ks: &[&str], text: &str| {
+            p.edit_cell(0, &keys(ks)).unwrap();
+            p.cell_edit.as_mut().unwrap().text = text.into();
+            let (_, cmd) = p.commit_cell().unwrap();
+            cmd.get_array("updates").unwrap()[0].as_document().unwrap().get_document("u").unwrap().clone()
+        };
+        assert_eq!(set(&mut p, &["address", "city"], "\"Lyon\""), doc! { "$set": { "address.city": "Lyon" } });
+        assert_eq!(set(&mut p, &["tags", "[0]"], "\"y\""), doc! { "$set": { "tags.0": "y" } });
+        assert_eq!(set(&mut p, &["tags", "[1]", "n"], "2"), doc! { "$set": { "tags.1.n": 2 } });
+        p.edit_cell(0, &keys(&["address", "city"])).unwrap();
+        assert_eq!(p.cell_edit.as_ref().unwrap().text, "\"Paris\"");
+        assert_eq!(p.commit_cell(), None, "unchanged");
     }
 }

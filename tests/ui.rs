@@ -2206,6 +2206,66 @@ fn live_history_and_export_of_the_results() {
 }
 
 #[test]
+fn live_tree_values_are_edited_in_place() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let _env = env("live-tree-edit", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "db.tree.drop(); db.tree.insertOne({ _id: 1, address: { city: 'Paris', zip: '75001' }, tags: ['a', 'b'] })".into(),
+        execute: true,
+        title: "seed".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+    h.state_mut().tabs[0].script = "db.tree.find({})".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 1));
+    h.key_press(Key::F2);
+    h.run_steps(3);
+    // The first document is open; a double-click opens its object and its array, without editing them.
+    for key in ["address", "tags"] {
+        let at = h.get_by_label(key).rect().center();
+        double_click_at(&mut h, at);
+    }
+    assert!(h.state().tabs[0].outputs[0].cell_edit.is_none());
+    let doc = |h: &Harness<'_, App>| h.state().tabs[0].outputs[0].docs()[0].as_document().unwrap().clone();
+
+    // Double-click a nested value: edited in place, saved by its dotted path.
+    let at = h.get_by_label("Paris").rect().center();
+    double_click_at(&mut h, at);
+    assert!(has_input(&h, "\"Paris\""), "editor with the value in shell syntax");
+    retype(&mut h, "\"Paris\"", "\"Lyon\"");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| doc(h).get_document("address").unwrap().get_str("city") == Ok("Lyon"));
+    assert!(h.state().tabs[0].outputs[0].cell_edit.is_none());
+
+    // An array element, from the menu.
+    h.get_by_label("b").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"tags.1\"").click();
+    h.run_steps(3);
+    retype(&mut h, "\"b\"", "NumberLong(2)");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| doc(h).get_array("tags").unwrap().get(1) == Some(&Bson::Int64(2)));
+
+    // A nested field can be removed.
+    h.get_by_label("75001").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Remove Field \"address.zip\"").click();
+    h.run_steps(5);
+    assert!(has_label(&h, "Remove the field \"address.zip\" from this document?"));
+    h.get_by_label("Yes").click();
+    wait_until(&mut h, "field removed", Duration::from_secs(15), |h| !doc(h).get_document("address").unwrap().contains_key("zip"));
+}
+
+#[test]
 fn live_table_cells_are_edited_in_place() {
     if !live() {
         return;
