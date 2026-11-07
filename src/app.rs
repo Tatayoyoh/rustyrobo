@@ -19,7 +19,7 @@ use crate::bsonfmt::FormatOptions;
 use crate::fonts::FontChoice;
 use crate::history::{History, HistoryEntry};
 use crate::mongo::{self, ConnectSecrets, Connection, StepReport};
-use crate::settings::{AppSettings, ConnectionSettings, Orientation, ViewMode};
+use crate::settings::{AppSettings, ConnectionSettings, ExportDefaults, Orientation, ViewMode};
 use crate::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellReply};
 use crate::theme::{self, Theme};
 use crate::transfer::{ExportOptions, ImportOptions};
@@ -947,7 +947,12 @@ impl App {
                     AppEvent::CommandDone { server, label, result: last, refresh }
                 });
             }
-            Action::Dialog(d) => self.dialog = Some(d),
+            Action::Dialog(mut d) => {
+                if let Dialog::Export(f) = &mut d {
+                    f.set_defaults(&self.settings.export);
+                }
+                self.dialog = Some(d);
+            }
             Action::Export { server, opts } => self.export(server, *opts),
             Action::Import { server, opts } => self.import(server, *opts),
             Action::CancelTransfer(id) => {
@@ -1031,6 +1036,17 @@ impl App {
     }
 
     fn export(&mut self, server: u64, opts: ExportOptions) {
+        // The next export proposes the same folder and format.
+        let defaults = ExportDefaults {
+            dir: opts.path.parent().map(|d| d.display().to_string()).filter(|d| !d.is_empty()).unwrap_or_else(|| self.settings.export.dir.clone()),
+            format: opts.format,
+            canonical: opts.canonical,
+            delimiter: opts.delimiter,
+        };
+        if defaults != self.settings.export {
+            self.settings.export = defaults;
+            self.run_action(Action::SaveSettings);
+        }
         let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
         let label = format!("Export {}.{}", opts.db, opts.coll);
         self.log(LogLevel::Info, format!("{label} to {}…", opts.path.display()));

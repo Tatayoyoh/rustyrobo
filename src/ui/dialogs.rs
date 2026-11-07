@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::app::{Action, App, Refresh};
 use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
-use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, SshAuthMethod};
+use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, ExportDefaults, SshAuthMethod};
 use crate::shell::{QuerySpec, parse_shell_value};
 use crate::transfer::{Delimiter, ExportOptions, Format, ImportOptions};
 use crate::ui::icon;
@@ -207,6 +207,15 @@ fn default_path(name: &str, ext: &str) -> String {
     dir.join(format!("{safe}.{ext}")).display().to_string()
 }
 
+/// `path` moved to `dir`, when it is an existing folder.
+fn in_dir(path: &str, dir: &str) -> String {
+    let dir = std::path::Path::new(dir);
+    match std::path::Path::new(path).file_name() {
+        Some(name) if !dir.as_os_str().is_empty() && dir.is_dir() => dir.join(name).display().to_string(),
+        _ => path.to_string(),
+    }
+}
+
 /// `path` with the extension of `format`, when it has the one of another format.
 fn with_extension(path: &str, format: Format) -> String {
     let p = std::path::Path::new(path);
@@ -217,6 +226,14 @@ fn with_extension(path: &str, format: Format) -> String {
 }
 
 impl ExportForm {
+    /// Proposes the folder and the format of the last export.
+    pub fn set_defaults(&mut self, d: &ExportDefaults) {
+        self.format = d.format;
+        self.canonical = d.canonical;
+        self.delimiter = d.delimiter;
+        self.path = with_extension(&in_dir(&self.path, &d.dir), d.format);
+    }
+
     fn new(server: u64, db: &str, coll: &str) -> Self {
         ExportForm {
             server,
@@ -1453,9 +1470,16 @@ fn export_dialog(ui: &mut Ui, f: &mut ExportForm, theme: &crate::theme::Theme, f
         }
     });
     let format = f.format;
-    let name = std::path::Path::new(&f.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let current = std::path::Path::new(&f.path);
+    let name = current.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let dir = current.parent().filter(|d| d.is_dir()).map(|d| d.to_path_buf());
     file_row(ui, &mut f.path, || {
-        rfd::FileDialog::new().add_filter(format.label(), &[format.extension()]).add_filter("All files", &["*"]).set_file_name(name).save_file()
+        let picker = rfd::FileDialog::new().add_filter(format.label(), &[format.extension()]).add_filter("All files", &["*"]).set_file_name(name);
+        match dir {
+            Some(d) => picker.set_directory(d),
+            None => picker,
+        }
+        .save_file()
     });
     if std::path::Path::new(f.path.trim()).is_file() {
         ui.label(RichText::new(format!("{} The file exists and will be replaced.", icon::INFO)).small().color(theme.text_weak));
@@ -1571,6 +1595,23 @@ mod tests {
         f.skip.clear();
         f.path = dir.join("no-such-dir-rr").join("x.json").display().to_string();
         assert!(f.options().unwrap_err().starts_with("Folder not found"));
+    }
+
+    #[test]
+    fn export_in_the_last_folder_and_format() {
+        let dir = std::env::temp_dir();
+        let mut f = ExportForm::new(1, "shop", "orders");
+        let default = f.path.clone();
+        f.set_defaults(&ExportDefaults::default());
+        assert_eq!((f.path.as_str(), f.format), (default.as_str(), Format::JsonLines), "no export yet");
+        f.set_defaults(&ExportDefaults { dir: dir.join("no-such-dir-rr").display().to_string(), ..Default::default() });
+        assert_eq!(f.path, default, "removed folder");
+        let last = ExportDefaults { dir: dir.display().to_string(), format: Format::Csv, canonical: false, delimiter: Delimiter::Semicolon };
+        f.set_defaults(&last);
+        assert_eq!(f.path, dir.join("orders.csv").display().to_string());
+        assert_eq!((f.format, f.delimiter), (Format::Csv, Delimiter::Semicolon));
+        f.set_defaults(&ExportDefaults { format: Format::JsonArray, canonical: true, ..last });
+        assert!(f.canonical && f.path.ends_with("orders.json"));
     }
 
     #[test]

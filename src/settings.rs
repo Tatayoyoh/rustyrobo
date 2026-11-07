@@ -388,6 +388,17 @@ pub struct AppSettings {
     pub show_logs: bool,
     pub tabbed_results: bool,
     pub favorites: Vec<FavoriteScript>,
+    /// Folder and format of the last export, proposed for the next one.
+    pub export: ExportDefaults,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportDefaults {
+    pub dir: String,
+    pub format: crate::transfer::Format,
+    pub canonical: bool,
+    pub delimiter: crate::transfer::Delimiter,
 }
 
 /// Script saved in the favorite scripts manager, filed under a connection
@@ -435,6 +446,7 @@ impl Default for AppSettings {
             show_logs: false,
             tabbed_results: false,
             favorites: Vec::new(),
+            export: Default::default(),
         }
     }
 }

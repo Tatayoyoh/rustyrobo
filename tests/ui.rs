@@ -18,6 +18,7 @@ use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort
 use rustyrobo::ui::editor::code_view;
 use rustyrobo::ui::icon;
 use rustyrobo::ui::output::{PaneCtx, show_pane};
+use rustyrobo::transfer::{Delimiter, Format};
 use rustyrobo::ui::query::OutputPane;
 use rustyrobo::{fonts, theme};
 
@@ -911,6 +912,22 @@ fn export_and_import_dialogs() {
     };
     assert!(error.starts_with("Query:"), "{error}");
     assert!(has_label(&h, &error));
+    // The folder and the format of an export are proposed for the next ones.
+    retype(&mut h, "{ broken", "{}");
+    h.get_by_label("Semicolon").click();
+    h.run_steps(2);
+    h.get_by_label("Export").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let saved = saved_settings(&env).export;
+    assert_eq!((saved.dir, saved.format, saved.delimiter), (env.dir.display().to_string(), Format::Csv, Delimiter::Semicolon));
+    h.state_mut().actions.push(Action::Dialog(Dialog::export(1, "shop", "users")));
+    h.run_steps(3);
+    assert!(has_input(&h, &env.dir.join("users.csv").display().to_string()));
+    match &h.state().dialog {
+        Some(Dialog::Export(f)) => assert_eq!((f.format, f.delimiter), (Format::Csv, Delimiter::Semicolon)),
+        _ => panic!("no export dialog"),
+    }
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none());

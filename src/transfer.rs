@@ -15,7 +15,7 @@ use bson::{Bson, Document, doc};
 
 use crate::mongo::{Connection, bson_as_i64};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Format {
     /// One document per line (mongoexport's default).
     #[default]
@@ -51,7 +51,7 @@ impl Format {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Delimiter {
     #[default]
     Comma,
