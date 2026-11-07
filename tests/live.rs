@@ -325,6 +325,110 @@ fn legacy_server_shell_api() {
     shell_suite(&rt, &mongo42(), "rr_e2e_legacy");
 }
 
+fn transfer_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
+    use rustyrobo::transfer::{Delimiter, ExportOptions, Format, ImportOptions, export, import};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let c = open(rt, s).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustyrobo-transfer-{db}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    rt.block_on(c.run_command(db, doc! { "dropDatabase": 1 }, None)).unwrap();
+    let date = bson::DateTime::parse_rfc3339_str("2024-05-06T07:08:09.010Z").unwrap();
+    let docs: Vec<bson::Document> = (0..2500)
+        .map(|i| doc! { "_id": i, "name": format!("n{i}"), "big": 5_000_000_000i64 + i as i64, "at": date, "address": { "city": "Paris", "zip": "007" }, "tags": ["a", i] })
+        .collect();
+    for chunk in docs.chunks(1000) {
+        rt.block_on(c.run_command(db, doc! { "insert": "src", "documents": chunk.to_vec() }, None)).unwrap();
+    }
+    let opts = |format: Format, file: &str| ExportOptions {
+        db: db.into(),
+        coll: "src".into(),
+        filter: doc! {},
+        projection: None,
+        sort: Some(doc! { "_id": 1 }),
+        skip: 0,
+        limit: 0,
+        format,
+        canonical: false,
+        fields: Vec::new(),
+        delimiter: Delimiter::Comma,
+        path: dir.join(file),
+    };
+    let into = |coll: &str, format: Format, file: &str| ImportOptions {
+        db: db.into(),
+        coll: coll.into(),
+        format,
+        delimiter: Delimiter::Comma,
+        detect_types: true,
+        drop_first: false,
+        path: dir.join(file),
+    };
+    let all = |coll: &str| -> Vec<bson::Document> {
+        rt.block_on(rustyrobo::mongo::collect_cursor(&c, db, doc! { "find": coll, "filter": {}, "sort": { "_id": 1 } }, 100_000, None)).unwrap()
+    };
+    let never = AtomicBool::new(false);
+
+    // Every format round-trips, types included, in batches.
+    for (format, file) in [(Format::JsonLines, "lines.json"), (Format::JsonArray, "array.json"), (Format::Csv, "docs.csv")] {
+        let progress = AtomicU64::new(0);
+        let n = rt.block_on(export(&c, &opts(format, file), &never, |n| progress.store(n, Ordering::Relaxed))).unwrap();
+        assert_eq!((n, progress.load(Ordering::Relaxed)), (2500, 2500), "{file}");
+        let coll = format!("back_{}", file.replace('.', "_"));
+        let done = rt.block_on(import(&c, &into(&coll, format, file), Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+        assert_eq!((done.inserted, done.failed), (2500, 0), "{file}");
+        assert_eq!(all(&coll), docs, "{file}: same documents and types");
+    }
+
+    // A query: filter, projection, skip and limit.
+    let mut q = opts(Format::Csv, "query.csv");
+    q.filter = doc! { "_id": { "$gte": 100 } };
+    q.projection = Some(doc! { "name": 1, "address.city": 1 });
+    q.skip = 5;
+    q.limit = 3;
+    assert_eq!(rt.block_on(export(&c, &q, &never, |_| {})).unwrap(), 3);
+    let text = std::fs::read_to_string(dir.join("query.csv")).unwrap();
+    assert_eq!(text, "_id,name,address.city\r\n105,n105,Paris\r\n106,n106,Paris\r\n107,n107,Paris\r\n");
+
+    // Duplicates are counted, the others inserted; dropping first starts again.
+    std::fs::write(dir.join("dups.json"), "{\"_id\": 1}\n{\"_id\": 1}\n{\"_id\": 2}\n").unwrap();
+    let done = rt.block_on(import(&c, &into("dups", Format::JsonLines, "dups.json"), Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
+    assert_eq!((done.inserted, done.failed), (2, 1));
+    assert!(done.first_error.as_deref().unwrap_or_default().contains("E11000"), "{done:?}");
+    let again = ImportOptions { drop_first: true, ..into("dups", Format::JsonLines, "dups.json") };
+    assert_eq!(rt.block_on(import(&c, &again, Arc::new(AtomicBool::new(false)), |_| {})).unwrap().inserted, 2);
+    let fresh = ImportOptions { drop_first: true, ..into("never_existed", Format::JsonLines, "dups.json") };
+    assert_eq!(rt.block_on(import(&c, &fresh, Arc::new(AtomicBool::new(false)), |_| {})).unwrap().inserted, 2, "nothing to drop");
+
+    // Cancelled: stops between two batches.
+    let cancel = AtomicBool::new(false);
+    let e = rt.block_on(export(&c, &opts(Format::JsonLines, "cancel.json"), &cancel, |_| cancel.store(true, Ordering::Relaxed))).unwrap_err();
+    assert!(e.to_string().starts_with("cancelled after 1000 documents"), "{e}");
+
+    // Errors of the server and of the file.
+    let mut bad = opts(Format::JsonLines, "bad.json");
+    bad.filter = doc! { "$bad": 1 };
+    assert!(rt.block_on(export(&c, &bad, &never, |_| {})).is_err());
+    std::fs::write(dir.join("broken.json"), "{\"a\": 1}\n{\"a\":").unwrap();
+    let e = rt.block_on(import(&c, &into("broken", Format::JsonLines, "broken.json"), Arc::new(AtomicBool::new(false)), |_| {})).unwrap_err();
+    assert!(format!("{e:#}").contains("document 2"), "{e:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn import_and_export_on_a_modern_server() {
+    if !live() {
+        return;
+    }
+    transfer_suite(&rt(), &mongo8(), "rr_e2e_transfer_modern");
+}
+
+#[test]
+fn import_and_export_on_a_legacy_server() {
+    if !live() {
+        return;
+    }
+    transfer_suite(&rt(), &mongo42(), "rr_e2e_transfer_legacy");
+}
+
 #[test]
 fn run_command_works_like_in_the_mongo_shell() {
     if !live() {

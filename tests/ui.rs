@@ -767,6 +767,160 @@ fn favorite_scripts_tree_and_drag_and_drop() {
     assert!(!has_label(&h, "logs"), "empty database gone");
 }
 
+/// Two clicks of the pointer (`Node::click` goes through AccessKit, which
+/// egui does not count as a double-click).
+fn double_click_at(h: &mut Harness<'_, App>, pos: egui::Pos2) {
+    h.hover_at(pos);
+    h.run_steps(1);
+    // All in one frame: the harness runs a frame per queued event, and a
+    // frame lasts longer than the double-click delay.
+    for pressed in [true, false, true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+}
+
+/// Replaces the content of the text field holding `value` by typing over it.
+fn retype(h: &mut Harness<'_, App>, value: &str, new: &str) {
+    let field = |h: &Harness<'_, App>, v: &str| h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some(v)).next().is_some();
+    assert!(field(h, value), "no text field holds {value:?}");
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some(value)).next().unwrap().focus();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some(value)).next().unwrap().type_text(new);
+    h.run_steps(2);
+}
+
+fn saved_history(env: &Env) -> rustyrobo::history::History {
+    serde_json::from_str(&std::fs::read_to_string(env.dir.join("history.json")).unwrap()).unwrap()
+}
+
+/// Is a list entry of the history window (a button holding `script`).
+fn history_entry(script: &'static str) -> impl Fn(&egui_kittest::kittest::AccessKitNode<'_>) -> bool {
+    move |n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains(script))
+}
+
+#[test]
+fn query_history_window() {
+    use rustyrobo::history::{History, HistoryEntry};
+    let conn = local_mongo8();
+    let entry = |script: &str, db: &str| HistoryEntry { connection: Some(conn.id), connection_name: "Old name".into(), db: db.into(), script: script.into(), ..Default::default() };
+    let history = History { entries: vec![entry("db.users.find({})", "shop"), entry("db.orders.count()", "shop"), entry("db.logs.drop()", "logs")] };
+    let env = env("history", &AppSettings { connections: vec![conn.clone()], ..Default::default() });
+    std::fs::write(env.dir.join("history.json"), serde_json::to_string(&history).unwrap()).unwrap();
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::H);
+    h.run_steps(3);
+    assert!(has_label(&h, "Query History"));
+    for script in ["db.users.find({})", "db.orders.count()", "db.logs.drop()"] {
+        assert!(h.query_by(history_entry(script)).is_some(), "{script}");
+    }
+    assert!(has_label(&h, "Local Mongo 8 · shop"), "current name of the connection");
+    assert_eq!(h.state().history_window.as_ref().unwrap().selected, Some(history.entries[2].id), "newest first, selected");
+
+    // The search field has the focus: typing filters.
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("")).next().unwrap().type_text("SHOP users");
+    h.run_steps(3);
+    assert!(h.query_by(history_entry("db.users.find({})")).is_some());
+    assert!(h.query_by(history_entry("db.orders.count()")).is_none() && h.query_by(history_entry("db.logs.drop()")).is_none());
+    replace_text(&mut h, "SHOP users", "nothing like this");
+    assert!(has_label(&h, "No matching queries"));
+    replace_text(&mut h, "nothing like this", "");
+
+    // Arrows select, the trash deletes, and the file follows.
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().history_window.as_ref().unwrap().selected, Some(history.entries[1].id));
+    h.get_by_label(icon::TRASH).click();
+    h.run_steps(3);
+    assert!(h.query_by(history_entry("db.orders.count()")).is_none());
+    assert_eq!(saved_history(&env).entries.len(), 2);
+
+    // Clear All asks first.
+    h.get_by_label("Clear All…").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Clear the 2 queries of the history?"));
+    h.get_by_label("Keep").click();
+    // The window shrinks, and moves to the centre a frame later.
+    h.run_steps(5);
+    assert_eq!(h.state().history.entries.len(), 2);
+    h.get_by_label("Clear All…").click();
+    h.run_steps(3);
+    h.get_by_label("Clear").click();
+    h.run_steps(3);
+    assert!(has_label(&h, "No queries yet"));
+    assert!(saved_history(&env).entries.is_empty());
+
+    // Recording can be turned off from the window.
+    h.get_by_label("Record executed scripts").click();
+    h.run_steps(2);
+    assert!(!saved_settings(&env).query_history);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().history_window.is_none());
+}
+
+#[test]
+fn export_and_import_dialogs() {
+    use rustyrobo::app::Action;
+    use rustyrobo::ui::dialogs::Dialog;
+    let env = env("transfer-dialogs", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+
+    h.state_mut().actions.push(Action::Dialog(Dialog::export(1, "shop", "orders")));
+    h.run_steps(3);
+    assert!(has_label(&h, "Export — shop.orders"));
+    let default = h.query_all_by(|n| is_text_input(n) && n.value().is_some_and(|v| v.ends_with("orders.json"))).next().unwrap().value().unwrap();
+    let path = env.dir.join("orders.json").display().to_string();
+    retype(&mut h, &default, &path);
+    assert!(has_input(&h, &path));
+    // CSV: fields and delimiter, and the extension follows.
+    h.get_by_label("CSV").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Semicolon").is_some() && h.query_by_label("Canonical").is_none());
+    assert!(has_input(&h, &env.dir.join("orders.csv").display().to_string()));
+    // A bad query keeps the dialog open with the error.
+    retype(&mut h, "{}", "{ broken");
+    h.get_by_label("Export").click();
+    h.run_steps(3);
+    let error = match &h.state().dialog {
+        Some(Dialog::Export(f)) => f.error.clone().unwrap_or_default(),
+        _ => panic!("dialog closed"),
+    };
+    assert!(error.starts_with("Query:"), "{error}");
+    assert!(has_label(&h, &error));
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+
+    // Import: the format and the collection follow the file name.
+    let file = env.dir.join("customers.csv");
+    std::fs::write(&file, "name,age\nAda,36\n").unwrap();
+    h.state_mut().actions.push(Action::Dialog(Dialog::import(1, "shop", None)));
+    h.run_steps(3);
+    assert!(has_label(&h, "Import — shop"));
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("")).next().unwrap().focus();
+    h.run_steps(2);
+    h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some("")).next().unwrap().type_text(&file.display().to_string());
+    h.run_steps(3);
+    assert!(has_input(&h, "customers"), "collection named after the file");
+    assert!(has_label(&h, "Detect numbers, booleans, dates and ObjectIds"), "CSV options");
+    h.get_by_label("Drop the collection first").click();
+    h.run_steps(2);
+    assert!(has_label(&h, "will be deleted"));
+    h.get_by_label("Import").click();
+    h.run_steps(3);
+    // Not connected: nothing runs, nothing breaks.
+    assert!(h.state().dialog.is_none() && h.state().transfers.is_empty());
+}
+
 // -------------------------------------------------------- fonts and RTL
 
 /// App with the system fonts scanned and the connection manager closed.
@@ -1791,3 +1945,153 @@ fn live_cross_script_variables() {
     assert_eq!(last_text(&h), "2undefined", "a Set keeps one 'dropped' entry");
 }
 
+
+#[test]
+fn live_history_and_export_of_the_results() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let env = env("live-history", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "db.exp.drop(); db.exp.insertMany([{ _id: 1, n: 'a' }, { _id: 2, n: 'b' }, { _id: 3, n: 'c' }])".into(),
+        execute: true,
+        title: "seed".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+    h.state_mut().tabs[0].script = "db.exp.find({ _id: { $gt: 1 } })".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 2));
+    h.run_steps(3);
+
+    // Both executions are in the history, with their connection and database.
+    let saved = saved_history(&env).entries;
+    assert_eq!(saved.len(), 2);
+    assert_eq!((saved[1].script.as_str(), saved[1].db.as_str(), saved[1].connection), ("db.exp.find({ _id: { $gt: 1 } })", "rrui", Some(s.connections[0].id)));
+
+    // The export button of the results exports the query.
+    h.get_by_label(rustyrobo::ui::ICON_EXPORT).click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Export — rrui.exp"));
+    assert!(h.query_all_by(|n| n.value().is_some_and(|v| v.contains("$gt"))).next().is_some(), "filter of the query");
+    let path = env.dir.join("exp.json");
+    let default = h.query_all_by(|n| is_text_input(n) && n.value().is_some_and(|v| v.ends_with("exp.json"))).next().unwrap().value().unwrap();
+    replace_text(&mut h, &default, &path.display().to_string());
+    h.get_by_label("Export").click();
+    wait_until(&mut h, "export", Duration::from_secs(15), |h| h.state().transfers.is_empty() && path.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"_id\":2,\"n\":\"b\"}\n{\"_id\":3,\"n\":\"c\"}\n");
+
+    // Imported back into another collection, which the explorer lists.
+    h.state_mut().actions.push(rustyrobo::app::Action::Import {
+        server: sid,
+        opts: Box::new(rustyrobo::transfer::ImportOptions {
+            db: "rrui".into(),
+            coll: "exp_back".into(),
+            format: rustyrobo::transfer::Format::JsonLines,
+            delimiter: Default::default(),
+            detect_types: true,
+            drop_first: true,
+            path: path.clone(),
+        }),
+    });
+    wait_until(&mut h, "import", Duration::from_secs(15), |h| h.state().transfers.is_empty());
+    h.run_steps(3);
+    assert!(h.state().logs.iter().any(|l| l.text.contains("Import into rrui.exp_back: 2 documents imported")));
+
+    // Opened again from the history, in a new shell on the same connection.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::H);
+    h.run_steps(3);
+    h.query_by(history_entry("db.exp.drop()")).expect("seed entry").click();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().history_window.is_none());
+    assert_eq!(h.state().tabs.len(), 2);
+    assert_eq!((h.state().tabs[1].server, h.state().tabs[1].db.as_str()), (sid, "rrui"));
+    assert!(h.state().tabs[1].script.starts_with("db.exp.drop();"));
+}
+
+#[test]
+fn live_table_cells_are_edited_in_place() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let _env = env("live-cells", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "db.cells.drop(); db.cells.insertMany([{ _id: 1, name: 'Ada', age: 36, tags: ['a'] }, { _id: 2, name: 'Linus', age: 28 }])".into(),
+        execute: true,
+        title: "seed".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+    h.state_mut().tabs[0].script = "db.cells.find({}).sort({ _id: 1 })".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 2));
+    h.key_press(Key::F3);
+    h.run_steps(3);
+    let value = |h: &Harness<'_, App>, doc: usize, field: &str| h.state().tabs[0].outputs[0].docs()[doc].as_document().unwrap().get(field).cloned();
+
+    // Double-click: the value in shell syntax, typed over, saved with Enter.
+    let at = h.get_by_label("Ada").rect().center();
+    double_click_at(&mut h, at);
+    assert!(has_input(&h, "\"Ada\""), "editor with the value in shell syntax");
+    retype(&mut h, "\"Ada\"", "\"Ada Lovelace\"");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| value(h, 0, "name") == Some(Bson::String("Ada Lovelace".into())));
+    assert!(h.state().tabs[0].outputs[0].cell_edit.is_none());
+
+    // From the menu: a number becomes a NumberLong; Escape cancels.
+    h.get_by_label("28").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"age\"").click();
+    h.run_steps(3);
+    retype(&mut h, "28", "NumberLong(29)");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| value(h, 1, "age") == Some(Bson::Int64(29)));
+    h.get_by_label("36").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"age\"").click();
+    h.run_steps(3);
+    retype(&mut h, "36", "99");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().tabs[0].outputs[0].cell_edit.is_none());
+    assert_eq!(value(&h, 0, "age"), Some(Bson::Int32(36)), "cancelled");
+
+    // Bad syntax keeps the editor open.
+    h.get_by_label("36").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"age\"").click();
+    h.run_steps(3);
+    retype(&mut h, "36", "{ oops");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().tabs[0].outputs[0].cell_edit.as_ref().is_some_and(|e| e.error.is_some()));
+    // Still focused: corrected and saved.
+    retype(&mut h, "{ oops", "37");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| value(h, 0, "age") == Some(Bson::Int32(37)));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // Arrays cannot be edited in place, but their field can be removed.
+    h.get_by_label("[ 1 element ]").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Remove Field \"tags\"").click();
+    h.run_steps(5);
+    assert!(has_label(&h, "Remove the field \"tags\" from this document?"));
+    h.get_by_label("Yes").click();
+    wait_until(&mut h, "field removed", Duration::from_secs(15), |h| h.state().tabs[0].outputs[0].docs().len() == 2 && value(h, 0, "tags").is_none());
+}

@@ -51,6 +51,9 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Native single binary, light on resources
 - Multi document selection
 - A favorite script manager
+- Import / export of collections and query results in JSON and CSV
+- Query history: search the scripts you ran and open them again (Ctrl+H)
+- Edit values in place in the table view (double-click a cell)
 
 ## Install
 
@@ -92,6 +95,14 @@ Settings are stored in `~/.config/rustyrobo/settings.json` (override with `RUSTY
 | ![](docs/screenshots/02-editor-general.png) | ![](docs/screenshots/04-editor-test.png) |
 | **Table view** | **Nord theme** |
 | ![](docs/screenshots/06-table.png) | ![](docs/screenshots/09-theme-nord.png) |
+| **Query history** | **Export** |
+| ![](docs/screenshots/13-history.png) | ![](docs/screenshots/14-export.png) |
+| **Editing in the table** | |
+| ![](docs/screenshots/15-table-edit.png) | |
+
+## Roadmap
+
+What Studio 3T offers and rustyrobo does not yet: see [ROADMAP.md](ROADMAP.md).
 
 ## License
 

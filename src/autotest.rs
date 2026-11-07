@@ -172,8 +172,42 @@ pub fn tick(app: &mut App, ctx: &Context) {
         24 => shot(&mut t, ctx, "11-update-chip"),
         25 => app.dialog = Some(Dialog::Update { release: app.update.clone().expect("set above"), os: crate::update::Os::current(), commands_open: true }),
         26 => shot(&mut t, ctx, "12-update"),
+        27 => {
+            app.dialog = None;
+            app.update = None;
+            // The scripts executed above are in the history.
+            app.history_window = Some(Default::default());
+        }
+        28 => shot(&mut t, ctx, "13-history"),
+        29 => {
+            app.history_window = None;
+            if let Some(s) = app.servers.first() {
+                app.dialog = Some(Dialog::export(s.id, "rrtest", "items"));
+            }
+        }
+        30 => shot(&mut t, ctx, "14-export"),
+        31 => {
+            app.dialog = None;
+            if let Some(tab) = app.tabs.last_mut() {
+                tab.script = "db.getCollection('items').find({})".into();
+                let id = tab.id;
+                app.actions.push(Action::Execute(id));
+            }
+            wait = 2.0;
+        }
+        32 => {
+            set_mode(app, ViewMode::Table);
+            if let Some(pane) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
+                let _ = pane.edit_cell(1, "tag");
+                if let Some(e) = &mut pane.cell_edit {
+                    e.text = "\"fizzbuzz\"".into();
+                }
+            }
+        }
+        33 => shot(&mut t, ctx, "15-table-edit"),
         _ => {
             app.dialog = None;
+            app.history_window = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

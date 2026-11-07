@@ -6,6 +6,7 @@ pub mod editing;
 pub mod editor;
 pub mod explorer;
 pub mod favorites;
+pub mod history;
 pub mod output;
 pub mod query;
 
@@ -34,6 +35,9 @@ pub const ICON_OPEN: &str = icon::FOLDER_OPEN;
 pub const ICON_SAVE: &str = icon::FLOPPY_DISK;
 pub const ICON_CONNECT: &str = icon::PLUG;
 pub const ICON_FAVORITE: &str = icon::STAR;
+pub const ICON_HISTORY: &str = icon::CLOCK_COUNTER_CLOCKWISE;
+pub const ICON_EXPORT: &str = icon::EXPORT;
+pub const ICON_IMPORT: &str = icon::DOWNLOAD_SIMPLE;
 
 /// Small coloured dot used for connection colour tags.
 pub fn color_dot(ui: &mut Ui, color: Option<[u8; 3]>, size: f32) {
@@ -130,6 +134,9 @@ fn menus(app: &mut App, ui: &mut Ui) {
             if menu_item(ui, &format!("{ICON_FAVORITE} Favorite Scripts…"), "") {
                 app.actions.push(Action::ShowFavorites);
             }
+            if menu_item(ui, &format!("{ICON_HISTORY} Query History…"), "Ctrl+H") {
+                app.actions.push(Action::ShowHistory);
+            }
             ui.separator();
             if menu_item(ui, "Exit", "Ctrl+Q") {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -219,6 +226,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
             changed |= check_item(ui, &mut s.line_numbers, "Show line numbers by default");
             changed |= check_item(ui, &mut s.disable_connection_shortcuts, "Disable connection shortcuts");
             changed |= check_item(ui, &mut s.auto_exec, "Automatically execute code in new tab");
+            changed |= check_item(ui, &mut s.query_history, "Record query history");
             if check_item(ui, &mut s.check_updates, "Check for updates at startup") {
                 changed = true;
                 if s.check_updates {
@@ -316,6 +324,9 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         if ui.button(format!("{ICON_FAVORITE} Favorite Scripts")).on_hover_text("Manage and load favorite scripts").clicked() {
             app.actions.push(Action::ShowFavorites);
         }
+        if ui.button(format!("{ICON_HISTORY} History")).on_hover_text("Query history (Ctrl+H)").clicked() {
+            app.actions.push(Action::ShowHistory);
+        }
         ui.separator();
         let tab = app.tabs.get(app.active_tab);
         let running = tab.is_some_and(|t| t.running);
@@ -349,6 +360,13 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
                 if ui.add(egui::Button::new(text).fill(app.theme.accent).corner_radius(10)).on_hover_text("A new version is available").clicked() {
                     app.actions.push(Action::Dialog(Dialog::update(Arc::clone(release))));
                 }
+            }
+            for t in &app.transfers {
+                if ui.small_button(icon::X).on_hover_text("Cancel").clicked() {
+                    app.actions.push(Action::CancelTransfer(t.id));
+                }
+                ui.label(RichText::new(format!("{}: {} documents", t.label, t.done)).color(app.theme.text_weak));
+                ui.spinner();
             }
             if let Some((msg, at, level)) = &app.toast {
                 if at.elapsed() < std::time::Duration::from_secs(6) {

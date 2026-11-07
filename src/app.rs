@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use bson::{Bson, Document, doc};
@@ -16,10 +17,12 @@ use uuid::Uuid;
 
 use crate::bsonfmt::FormatOptions;
 use crate::fonts::FontChoice;
+use crate::history::{History, HistoryEntry};
 use crate::mongo::{self, ConnectSecrets, Connection, StepReport};
 use crate::settings::{AppSettings, ConnectionSettings, Orientation, ViewMode};
 use crate::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellReply};
 use crate::theme::{self, Theme};
+use crate::transfer::{ExportOptions, ImportOptions};
 use crate::ui::connections::{ConnectionEditor, ConnectionList};
 use crate::ui::dialogs::Dialog;
 use crate::ui::query::{OutputPane, QueryTab, TabVar};
@@ -106,6 +109,8 @@ pub enum Refresh {
     Users(String),
     Functions(String),
     Tab(u64),
+    /// The page shown by a result pane: `out` of tab `tab`.
+    Page { tab: u64, out: usize },
 }
 
 #[derive(Clone)]
@@ -114,6 +119,11 @@ pub enum Action {
     InstallUpdate(Arc<crate::update::Release>),
     ShowConnections,
     ShowFavorites,
+    ShowHistory,
+    /// Opens a script of the history in a new shell, like a favorite.
+    OpenHistory(Uuid),
+    DeleteHistory(Uuid),
+    SaveHistory,
     /// Opens a favorite script in a new shell, on its connection (connecting
     /// first if needed), or on the active one.
     OpenFavorite(Uuid),
@@ -139,6 +149,9 @@ pub enum Action {
     Command { server: u64, db: String, cmd: Document, label: String, refresh: Refresh },
     Commands { server: u64, db: String, cmds: Vec<Document>, label: String, refresh: Refresh },
     Dialog(Dialog),
+    Export { server: u64, opts: Box<ExportOptions> },
+    Import { server: u64, opts: Box<ImportOptions> },
+    CancelTransfer(u64),
     OpenFile,
     SaveFile { save_as: bool },
     SaveSettings,
@@ -160,6 +173,10 @@ pub enum AppEvent {
     Shell(u64, ShellReply),
     Page(u64, usize, u64, Result<Vec<Bson>, String>),
     CommandDone { server: u64, label: String, result: Result<Document, String>, refresh: Refresh },
+    /// Documents exported or imported so far.
+    TransferProgress(u64, u64),
+    /// End of an export or import: what it did, or why it stopped.
+    TransferDone { id: u64, server: u64, result: Result<String, String>, refresh: Refresh },
     Test(u64, StepReport),
     TestDone(u64, Result<String, String>),
     Fonts(FontChoice, FontDefinitions),
@@ -181,6 +198,26 @@ pub struct LogEntry {
     pub text: String,
 }
 
+/// Script to open in a new shell, on its connection once connected.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScriptToOpen {
+    /// `None`: the active connection.
+    pub connection: Option<Uuid>,
+    pub db: String,
+    pub script: String,
+    /// Empty: from the script.
+    pub title: String,
+    pub favorite: Option<Uuid>,
+}
+
+/// An export or import running in the background.
+pub struct Transfer {
+    pub id: u64,
+    pub label: String,
+    pub done: u64,
+    pub cancel: Arc<AtomicBool>,
+}
+
 pub struct App {
     pub settings: AppSettings,
     pub rt: tokio::runtime::Runtime,
@@ -194,8 +231,11 @@ pub struct App {
     pub actions: Vec<Action>,
     pub conn_list: Option<ConnectionList>,
     pub favorites: Option<crate::ui::favorites::FavoritesManager>,
-    /// Favorite to open once its connection is established.
-    pending_favorite: Option<Uuid>,
+    pub history: History,
+    pub history_window: Option<crate::ui::history::HistoryWindow>,
+    pub transfers: Vec<Transfer>,
+    /// Script to open once its connection is established.
+    pending_script: Option<ScriptToOpen>,
     pub conn_editor: Option<ConnectionEditor>,
     pub dialog: Option<Dialog>,
     pub toast: Option<(String, Instant, LogLevel)>,
@@ -251,7 +291,10 @@ impl App {
             actions: Vec::new(),
             conn_list: None,
             favorites: None,
-            pending_favorite: None,
+            history: History::load(),
+            history_window: None,
+            transfers: Vec::new(),
+            pending_script: None,
             conn_editor: None,
             dialog: None,
             toast: None,
@@ -431,18 +474,16 @@ impl App {
                         if !default_db.is_empty() {
                             self.actions.push(Action::LoadCollections(id, default_db));
                         }
-                        let waiting = self.pending_favorite.and_then(|f| self.settings.favorites.iter().find(|x| x.id == f));
-                        if let Some(f) = waiting
-                            && f.connection == Some(conn_id)
+                        if self.pending_script.as_ref().is_some_and(|p| p.connection == Some(conn_id))
+                            && let Some(p) = self.pending_script.take()
                         {
-                            self.actions.push(Action::OpenFavorite(f.id));
-                            self.pending_favorite = None;
+                            self.open_script(p);
                         }
                     }
                     Err(e) => {
                         s.status = ServerStatus::Failed(e.clone());
                         let name = s.settings.name.clone();
-                        self.pending_favorite = None;
+                        self.pending_script = None;
                         self.log(LogLevel::Error, format!("Cannot connect to {name}: {e}"));
                         self.dialog = Some(Dialog::message("Cannot connect", format!("Cannot connect to the MongoDB at {name}.\n\nError:\n{e}")));
                     }
@@ -590,6 +631,30 @@ impl App {
                 }
                 self.refresh(server, refresh);
             }
+            AppEvent::TransferProgress(id, n) => {
+                if let Some(t) = self.transfers.iter_mut().find(|t| t.id == id) {
+                    t.done = n;
+                }
+            }
+            AppEvent::TransferDone { id, server, result, refresh } => {
+                let label = match self.transfers.iter().position(|t| t.id == id) {
+                    Some(i) => self.transfers.remove(i).label,
+                    None => return,
+                };
+                match result {
+                    // A warning: shown in the status bar too.
+                    Ok(msg) if msg.contains(" failed.") => self.log(LogLevel::Warn, format!("{label}: {msg}")),
+                    Ok(msg) => {
+                        self.log(LogLevel::Info, format!("{label}: {msg}"));
+                        self.toast = Some((format!("{label}: {msg}"), Instant::now(), LogLevel::Info));
+                    }
+                    Err(e) => {
+                        self.log(LogLevel::Error, format!("{label}: {e}"));
+                        self.dialog = Some(Dialog::message(&label, format!("Operation failed:\n\n{e}")));
+                    }
+                }
+                self.refresh(server, refresh);
+            }
             AppEvent::Test(token, step) => {
                 if let Some(ed) = &mut self.conn_editor
                     && ed.test_token == token
@@ -617,6 +682,11 @@ impl App {
             Refresh::Users(db) => self.actions.push(Action::LoadUsers(server, db)),
             Refresh::Functions(db) => self.actions.push(Action::LoadFunctions(server, db)),
             Refresh::Tab(t) => self.actions.push(Action::Execute(t)),
+            Refresh::Page { tab, out } => {
+                if let Some(p) = self.tabs.iter().find(|t| t.id == tab).and_then(|t| t.outputs.get(out)) {
+                    self.actions.push(Action::Page { tab, out, skip: p.skip, limit: p.page_size });
+                }
+            }
         }
     }
 
@@ -640,47 +710,23 @@ impl App {
                 let linked = self.tabs.get(self.active_tab).and_then(|t| t.favorite);
                 self.favorites = Some(crate::ui::favorites::FavoritesManager::new(linked));
             }
+            Action::ShowHistory => self.history_window = Some(Default::default()),
+            Action::DeleteHistory(id) => {
+                self.history.remove(id);
+                self.actions.push(Action::SaveHistory);
+            }
+            Action::SaveHistory => {
+                if let Err(e) = self.history.save() {
+                    self.log(LogLevel::Error, format!("Cannot save the query history: {e}"));
+                }
+            }
             Action::OpenFavorite(id) => {
                 let Some(fav) = self.settings.favorites.iter().find(|f| f.id == id).cloned() else { return };
-                let target = fav.connection.filter(|&c| self.settings.connection(c).is_some());
-                let server = match target {
-                    Some(c) => {
-                        let Some(s) = self.servers.iter().find(|s| s.settings.id == c) else {
-                            // Not connected yet: open once connected.
-                            self.pending_favorite = Some(id);
-                            self.actions.push(Action::Connect(c));
-                            return;
-                        };
-                        match s.status {
-                            ServerStatus::Connected(_) => s.id,
-                            ServerStatus::Connecting => {
-                                self.pending_favorite = Some(id);
-                                return;
-                            }
-                            ServerStatus::Failed(_) => {
-                                self.pending_favorite = Some(id);
-                                self.actions.push(Action::Connect(c));
-                                return;
-                            }
-                        }
-                    }
-                    None => {
-                        // The active shell's connection, else the first connected one.
-                        let active = self.tabs.get(self.active_tab).map(|t| t.server).filter(|&s| self.server(s).is_some_and(|s| s.conn().is_some()));
-                        let Some(server) = active.or_else(|| self.servers.iter().find(|s| s.conn().is_some()).map(|s| s.id)) else {
-                            self.log(LogLevel::Warn, format!("Connect to a server to load \"{}\"", fav.name));
-                            return;
-                        };
-                        server
-                    }
-                };
-                let n = self.tabs.len();
-                self.open_shell(server, fav.db, fav.script, false, fav.name, None);
-                if self.tabs.len() > n
-                    && let Some(t) = self.tabs.last_mut()
-                {
-                    t.favorite = Some(id);
-                }
+                self.open_script(ScriptToOpen { connection: fav.connection, db: fav.db, script: fav.script, title: fav.name, favorite: Some(id) });
+            }
+            Action::OpenHistory(id) => {
+                let Some(e) = self.history.get(id).cloned() else { return };
+                self.open_script(ScriptToOpen { connection: e.connection, db: e.db, script: e.script, title: String::new(), favorite: None });
             }
             Action::NewConnection => self.conn_editor = Some(ConnectionEditor::new(ConnectionSettings::default(), true)),
             Action::EditConnection(id) => {
@@ -902,6 +948,13 @@ impl App {
                 });
             }
             Action::Dialog(d) => self.dialog = Some(d),
+            Action::Export { server, opts } => self.export(server, *opts),
+            Action::Import { server, opts } => self.import(server, *opts),
+            Action::CancelTransfer(id) => {
+                if let Some(t) = self.transfers.iter().find(|t| t.id == id) {
+                    t.cancel.store(true, Ordering::Relaxed);
+                }
+            }
             Action::OpenFile => self.open_file(),
             Action::SaveFile { save_as } => self.save_file(save_as),
             Action::CheckForUpdate => self.check_for_update(),
@@ -918,6 +971,89 @@ impl App {
             Action::PreviewTheme => self.update_theme(),
             Action::ApplyFonts => self.load_fonts(),
         }
+    }
+
+    /// Opens a script in a new shell: on its connection, connecting first if
+    /// needed, or on the active one.
+    fn open_script(&mut self, s: ScriptToOpen) {
+        let target = s.connection.filter(|&c| self.settings.connection(c).is_some());
+        let server = match target {
+            Some(c) => {
+                let Some(srv) = self.servers.iter().find(|x| x.settings.id == c) else {
+                    // Not connected yet: open once connected.
+                    self.pending_script = Some(s);
+                    self.actions.push(Action::Connect(c));
+                    return;
+                };
+                match srv.status {
+                    ServerStatus::Connected(_) => srv.id,
+                    ServerStatus::Connecting => {
+                        self.pending_script = Some(s);
+                        return;
+                    }
+                    ServerStatus::Failed(_) => {
+                        self.pending_script = Some(s);
+                        self.actions.push(Action::Connect(c));
+                        return;
+                    }
+                }
+            }
+            None => {
+                // The active shell's connection, else the first connected one.
+                let active = self.tabs.get(self.active_tab).map(|t| t.server).filter(|&s| self.server(s).is_some_and(|s| s.conn().is_some()));
+                let Some(server) = active.or_else(|| self.servers.iter().find(|s| s.conn().is_some()).map(|s| s.id)) else {
+                    let name = if s.title.is_empty() { tab_title(&s.script) } else { s.title };
+                    self.log(LogLevel::Warn, format!("Connect to a server to load \"{name}\""));
+                    return;
+                };
+                server
+            }
+        };
+        let n = self.tabs.len();
+        self.open_shell(server, s.db, s.script, false, s.title, None);
+        if self.tabs.len() > n
+            && let Some(t) = self.tabs.last_mut()
+        {
+            t.favorite = s.favorite;
+        }
+    }
+
+    fn start_transfer(&mut self, label: String) -> (u64, Arc<AtomicBool>, impl Fn(u64) + Send + 'static) {
+        let id = self.next_id();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.transfers.push(Transfer { id, label, done: 0, cancel: Arc::clone(&cancel) });
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        let progress = move |n| {
+            let _ = tx.send(AppEvent::TransferProgress(id, n));
+            ctx.request_repaint();
+        };
+        (id, cancel, progress)
+    }
+
+    fn export(&mut self, server: u64, opts: ExportOptions) {
+        let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
+        let label = format!("Export {}.{}", opts.db, opts.coll);
+        self.log(LogLevel::Info, format!("{label} to {}…", opts.path.display()));
+        let (id, cancel, progress) = self.start_transfer(label);
+        self.spawn(async move {
+            let result = crate::transfer::export(&conn, &opts, &cancel, progress)
+                .await
+                .map(|n| format!("{n} document{} exported to {}", if n == 1 { "" } else { "s" }, opts.path.display()))
+                .map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, refresh: Refresh::None }
+        });
+    }
+
+    fn import(&mut self, server: u64, opts: ImportOptions) {
+        let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
+        let label = format!("Import into {}.{}", opts.db, opts.coll);
+        self.log(LogLevel::Info, format!("{label} from {}…", opts.path.display()));
+        let (id, cancel, progress) = self.start_transfer(label);
+        let refresh = Refresh::Collections(opts.db.clone());
+        self.spawn(async move {
+            let result = crate::transfer::import(&conn, &opts, cancel, progress).await.map(|i| i.summary()).map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, refresh }
+        });
     }
 
     fn update_theme(&mut self) {
@@ -1013,9 +1149,17 @@ impl App {
         tab.started = Some(Instant::now());
         tab.notice = None;
         let first = script.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().to_string();
-        let server = tab.server;
-        let name = self.server(server).map(|s| s.settings.name.clone()).unwrap_or_default();
+        let (server, db) = (tab.server, tab.db.clone());
+        let settings = self.server(server).map(|s| (s.settings.id, s.settings.name.clone()));
+        let name = settings.as_ref().map(|s| s.1.clone()).unwrap_or_default();
         self.log(LogLevel::Info, format!("[{name}] {first}"));
+        if self.settings.query_history {
+            let (connection, connection_name) = settings.map_or((None, String::new()), |(id, name)| (Some(id), name));
+            self.history.push(HistoryEntry { connection, connection_name, db, script, ..Default::default() });
+            if let Err(e) = self.history.save() {
+                self.log(LogLevel::Error, format!("Cannot save the query history: {e}"));
+            }
+        }
     }
 
     fn open_file(&mut self) {
@@ -1077,7 +1221,7 @@ impl App {
         let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         let tab_id = self.tabs.get(self.active_tab).map(|t| t.id);
-        let modal_open = self.conn_list.is_some() || self.conn_editor.is_some() || self.dialog.is_some() || self.favorites.is_some();
+        let modal_open = self.conn_list.is_some() || self.conn_editor.is_some() || self.dialog.is_some() || self.favorites.is_some() || self.history_window.is_some();
 
         if pressed(cmd, Key::N) {
             self.actions.push(Action::ShowConnections);
@@ -1097,6 +1241,9 @@ impl App {
             && let Some(t) = tab_id {
                 self.actions.push(Action::Execute(t));
             }
+        if pressed(cmd, Key::H) {
+            self.actions.push(Action::ShowHistory);
+        }
         if pressed(cmd, Key::O) {
             self.actions.push(Action::OpenFile);
         }
@@ -1287,10 +1434,11 @@ impl eframe::App for App {
         crate::ui::main_window(self, ui);
         crate::ui::connections::show(self, &ctx);
         crate::ui::favorites::show(self, &ctx);
+        crate::ui::history::show(self, &ctx);
         crate::ui::dialogs::show(self, &ctx);
         crate::autotest::tick(self, &ctx);
         self.process_actions();
-        if self.tabs.iter().any(|t| t.running) || self.servers.iter().any(|s| matches!(s.status, ServerStatus::Connecting)) {
+        if self.tabs.iter().any(|t| t.running) || !self.transfers.is_empty() || self.servers.iter().any(|s| matches!(s.status, ServerStatus::Connecting)) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -1302,6 +1450,9 @@ impl eframe::App for App {
         }
         let _ = self.settings.save();
         self.cancel_install();
+        for t in &self.transfers {
+            t.cancel.store(true, Ordering::Relaxed);
+        }
         let _guard = self.rt.enter();
         for s in &self.servers {
             if let Some(c) = s.conn() {
