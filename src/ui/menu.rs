@@ -25,13 +25,13 @@ fn kind(word: &str) -> Option<Kind> {
     }
 }
 
-/// Icon of an action, from the verb starting its label.
+/// Icon of an action, from the verb starting its label. Actions whose verb
+/// is coloured have none: the colour tells them apart already.
 pub fn icon_of(label: &str) -> Option<&'static str> {
     let verb = label.split_whitespace().next()?.to_ascii_lowercase();
     Some(match verb.as_str() {
-        "create" | "add" | "insert" | "new" => icon::PLUS,
-        "edit" | "update" | "rename" => icon::PENCIL_SIMPLE,
-        "remove" | "delete" | "drop" => icon::TRASH,
+        _ if kind(&verb).is_some() => return None,
+        "rename" => icon::PENCIL_SIMPLE,
         "copy" | "duplicate" => icon::COPY,
         "view" => icon::EYE,
         "open" => icon::TERMINAL_WINDOW,
@@ -46,8 +46,7 @@ pub fn icon_of(label: &str) -> Option<&'static str> {
         "close" => icon::X,
         "expand" => icon::ARROWS_OUT_SIMPLE,
         "collapse" => icon::ARROWS_IN_SIMPLE,
-        "kill" => icon::STOP_CIRCLE,
-        "repair" | "rebuild" => icon::WRENCH,
+        "repair" => icon::WRENCH,
         _ if label.contains("Statistics") => icon::CHART_BAR,
         _ => return None,
     })
@@ -122,10 +121,14 @@ mod tests {
 
     #[test]
     fn major_actions_have_an_icon() {
-        assert_eq!(icon_of("Add User…"), Some(icon::PLUS));
-        assert_eq!(icon_of("Drop Index…"), Some(icon::TRASH));
-        assert_eq!(icon_of("Edit Document…"), Some(icon::PENCIL_SIMPLE));
+        assert_eq!(icon_of("Rename Collection…"), Some(icon::PENCIL_SIMPLE));
         assert_eq!(icon_of("Database Statistics"), Some(icon::CHART_BAR));
         assert_eq!(icon_of("Server Status"), None);
+        // Coloured entries go without.
+        for label in ["Add User…", "Drop Index…", "Edit Document…", "Insert Document…", "Delete 2 Documents…"] {
+            assert_eq!(icon_of(label), None, "{label}");
+        }
+        assert_eq!(icon_of("Kill Operation…"), None);
+        assert_eq!(icon_of("Rebuild Indexes…"), None);
     }
 }
