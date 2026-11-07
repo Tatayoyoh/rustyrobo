@@ -185,6 +185,17 @@ impl egui::cache::ComputerMut<(&FontId, &str, &str), LayoutJob> for ReadOnlyHigh
     }
 }
 
+/// [`highlight_cached`] with right-to-left text in visual order: only for
+/// read-only text, since the offsets of an editor must follow its logical order.
+fn read_only_highlight_cached(ctx: &egui::Context, code: &str, theme: &Theme, font: &FontId) -> LayoutJob {
+    type Cache = egui::cache::FrameCache<LayoutJob, ReadOnlyHighlighter>;
+    ctx.memory_mut(|m| m.caches.cache::<Cache>().get((font, theme.name, code)).clone())
+}
+
+fn editor_job(ctx: &egui::Context, code: &str, theme: &Theme, font: &FontId, read_only: bool) -> LayoutJob {
+    if read_only { read_only_highlight_cached(ctx, code, theme, font) } else { highlight_cached(ctx, code, theme, font) }
+}
+
 pub fn highlight(src: &str, theme: &Theme, font: FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
     for (s, e, tok) in tokenize(src) {
@@ -796,8 +807,9 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
 
     let theme_copy = *theme;
     let font = opts.font.clone();
+    let read_only = opts.read_only;
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
-        let job = highlight_cached(ui.ctx(), buf.as_str(), &theme_copy, &font);
+        let job = editor_job(ui.ctx(), buf.as_str(), &theme_copy, &font, read_only);
         ui.fonts_mut(|f| f.layout_job(job))
     };
 
@@ -1091,8 +1103,7 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
     let mut view: &str = text;
     let theme_copy = *theme;
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
-        type Cache = egui::cache::FrameCache<LayoutJob, ReadOnlyHighlighter>;
-        let job = ui.ctx().memory_mut(|m| m.caches.cache::<Cache>().get((&font, theme_copy.name, buf.as_str())).clone());
+        let job = read_only_highlight_cached(ui.ctx(), buf.as_str(), &theme_copy, &font);
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let highlights = ui.painter().add(egui::Shape::Noop);
@@ -1267,6 +1278,16 @@ mod tests {
         assert!(job.sections.len() > 3);
         let empty = highlight("", t, FontId::monospace(12.0));
         assert_eq!(empty.text, "");
+    }
+
+    #[test]
+    fn only_a_read_only_editor_shows_right_to_left_words_in_visual_order() {
+        let (hello, world) = ("שלום", "עולם");
+        let code = format!("{{ \"a\" : \"{hello} {world}\" }}");
+        let (ctx, t, font) = (egui::Context::default(), &crate::theme::THEMES[0], FontId::monospace(12.0));
+        assert_eq!(editor_job(&ctx, &code, t, &font, false).text, code);
+        let shown = editor_job(&ctx, &code, t, &font, true).text;
+        assert!(shown.find(world) < shown.find(hello), "{shown}");
     }
 
     #[test]
