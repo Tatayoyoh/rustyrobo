@@ -1,4 +1,4 @@
-# Roadmap: Studio 3T features
+# Roadmap: diff with Studio 3T features
 
 What Studio 3T offers, compared with rustyrobo. Checked items exist in rustyrobo; the others are
 ideas to pick up later, with notes on how they would fit the architecture (`Action` → tokio task →
@@ -54,18 +54,16 @@ here for the record, not as a commitment.
 
 - [ ] **Nested arrays and documents in the table view**: step into a sub-document or array column
   as a table of its own.
-- [ ] **Copy / paste documents** between collections and servers (clipboard as Extended JSON).
+- [ ] [PRIORITIZED] **Copy / paste documents** between collections and servers (clipboard as Extended JSON).
 - [ ] **Import modes**: upsert or merge by `_id` (`update` with `upsert: true`) besides insert;
   stop on first error.
-- [ ] **More formats**: BSON / `mongodump` archives, SQL `INSERT` statements, Excel; export of
-  aggregation results.
+- [ ] **More formats**: BSON / `mongodump` archives, SQL `INSERT` statements, Excel; export of aggregation results.
 - [ ] **Saved import / export tasks** to run again (see Tasks).
-- [ ] **Compare & sync**: differences between two collections (by `_id`), then copy the
-  differences one way.
+- [ ] **Compare & sync**: differences between two collections (by `_id`), then copy the differences one way.
 - [ ] **Data masking**: copy a collection with fields hidden, hashed or replaced.
 - [ ] **Reschema**: restructure documents (embed, flatten, rename fields) into a new collection.
 - [ ] **SQL ↔ MongoDB migration**: from / to MySQL, PostgreSQL, SQL Server, Oracle.
-- [ ] **GridFS**: list `fs.files`, download, upload, delete files.
+- [ ] [PRIORITIZED] **GridFS**: list `fs.files`, download, upload, delete files.
 
 ## Schema and analysis
 
@@ -90,7 +88,7 @@ here for the record, not as a commitment.
 - [ ] **Kerberos (GSSAPI)** and **AWS IAM (`MONGODB-AWS`)** authentication (driver features to
   enable, plus the fields in the connection editor).
 - [ ] **HTTP / SOCKS5 proxies**.
-- [ ] **Read-only connections**: refuse write commands on a connection marked as production.
+- [ ] [PRIORITIZED] **Read-only connections**: refuse write commands on a connection marked as production.
 
 ## Tools and teamwork
 
