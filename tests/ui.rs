@@ -831,22 +831,37 @@ fn query_history_window() {
     assert!(has_label(&h, "No matching queries"));
     replace_text(&mut h, "nothing like this", "");
 
-    // Arrows select, the trash deletes, and the file follows.
+    // Arrows select, Del deletes, and the file follows.
     h.key_press(Key::ArrowDown);
     h.run_steps(2);
     assert_eq!(h.state().history_window.as_ref().unwrap().selected, Some(history.entries[1].id));
+    assert!(h.query_by_label(icon::TRASH).is_none(), "no delete button until a row is hovered");
+
+    // The open and delete buttons of a row show when the row is hovered, far apart.
+    let open = format!("{} Open", icon::ARROW_SQUARE_OUT);
+    assert!(h.query_by_label(&open).is_none());
+    h.query_by(history_entry("db.orders.count()")).unwrap().hover();
+    h.run_steps(2);
+    let gap = h.get_by_label(icon::TRASH).rect().min.x - h.get_by_label(&open).rect().max.x;
+    assert!(gap >= 24.0, "{gap}");
     h.get_by_label(icon::TRASH).click();
     h.run_steps(3);
     assert!(h.query_by(history_entry("db.orders.count()")).is_none());
     assert_eq!(saved_history(&env).entries.len(), 2);
 
-    // Clear All asks first.
+    // Clear All asks in a popup: Keep and Escape close it, not the window.
     h.get_by_label("Clear All…").click();
     h.run_steps(3);
-    assert!(has_label(&h, "Clear the 2 queries of the history?"));
+    assert!(has_label(&h, "Clear History") && has_label(&h, "Clear the 2 queries of the history?"));
     h.get_by_label("Keep").click();
-    // The window shrinks, and moves to the centre a frame later.
-    h.run_steps(5);
+    h.run_steps(3);
+    assert!(!has_label(&h, "Clear the 2 queries of the history?"));
+    h.get_by_label("Clear All…").click();
+    h.run_steps(3);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!has_label(&h, "Clear the 2 queries of the history?"));
+    assert!(h.state().history_window.is_some());
     assert_eq!(h.state().history.entries.len(), 2);
     h.get_by_label("Clear All…").click();
     h.run_steps(3);

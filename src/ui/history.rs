@@ -118,6 +118,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 return;
             }
             let row_h = ui.spacing().interact_size.y;
+            let open_label = format!("{} Open", icon::ARROW_SQUARE_OUT);
+            let open_w = egui::WidgetText::from(open_label.as_str()).into_galley(ui, None, f32::INFINITY, egui::TextStyle::Button).size().x
+                + 2.0 * ui.spacing().button_padding.x;
             egui::ScrollArea::vertical().max_height(list_h).auto_shrink([false, false]).show_rows(ui, row_h, found.len(), |ui, rows| {
                 for &i in &found[rows] {
                     let e = &app.history.entries[i];
@@ -125,11 +128,33 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     let line: String = e.first_line().chars().take(100).collect();
                     let at = e.at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M");
                     let meta = format!("{} · {} · {at}", connection_label(e, &app.settings.connections), e.db);
-                    let r = ui.add(
-                        egui::Button::selectable(selected, RichText::new(line).monospace())
-                            .right_text(RichText::new(meta).color(th.text_weak))
-                            .min_size(egui::vec2(ui.available_width(), row_h)),
-                    );
+                    // Room on the right for the open and delete buttons, shown
+                    // on hover, far apart to avoid deleting by mistake.
+                    let open_id = Id::new(("history-open", e.id));
+                    let del_id = Id::new(("history-delete", e.id));
+                    let row = egui::Button::selectable(selected, RichText::new(line).monospace())
+                        .right_text((
+                            RichText::new(meta).color(th.text_weak),
+                            egui::Atom::custom(open_id, egui::vec2(open_w, row_h - 4.0)),
+                            egui::Atom::custom(Id::new("history-gap"), egui::vec2(24.0, 0.0)),
+                            egui::Atom::custom(del_id, egui::Vec2::splat(row_h - 4.0)),
+                        ))
+                        .min_size(egui::vec2(ui.available_width(), row_h))
+                        .atom_ui(ui);
+                    if ui.rect_contains_pointer(row.response.rect) {
+                        if let Some(rect) = row.rect(open_id)
+                            && ui.put(rect, egui::Button::new(open_label.as_str())).on_hover_text("Open in a new shell (Enter)").clicked()
+                        {
+                            actions.push(Action::OpenHistory(e.id));
+                            close = true;
+                        }
+                        if let Some(rect) = row.rect(del_id)
+                            && ui.put(rect, egui::Button::new(icon::TRASH).frame_when_inactive(false)).on_hover_text("Delete from the history (Del)").clicked()
+                        {
+                            actions.push(Action::DeleteHistory(e.id));
+                        }
+                    }
+                    let r = row.response;
                     if selected && ui.input(|i| i.key_down(egui::Key::ArrowDown) || i.key_down(egui::Key::ArrowUp)) {
                         r.scroll_to_me(None);
                     }
@@ -169,25 +194,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             code_view(ui, Id::new("history-preview"), script, &th, FontId::monospace(font));
         });
 
-        if st.confirm_clear {
-            ui.add_space(6.0);
-            egui::Frame::new().fill(th.surface).corner_radius(4).inner_margin(8).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Clear the {} queries of the history?", app.history.entries.len())).color(th.warning));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button(RichText::new("Clear").color(th.error)).clicked() {
-                            app.history.entries.clear();
-                            st.confirm_clear = false;
-                            actions.push(Action::SaveHistory);
-                        }
-                        if ui.button("Keep").clicked() {
-                            st.confirm_clear = false;
-                        }
-                    });
-                });
-            });
-        }
-
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.checkbox(&mut app.settings.query_history, "Record executed scripts").changed() {
@@ -210,17 +216,35 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 {
                     ui.ctx().copy_text(e.script.clone());
                 }
-                if ui.add_enabled(sel.is_some(), egui::Button::new(icon::TRASH)).on_hover_text("Delete from the history (Del)").clicked()
-                    && let Some(id) = sel
-                {
-                    actions.push(Action::DeleteHistory(id));
-                }
                 if ui.add_enabled(!app.history.entries.is_empty(), egui::Button::new("Clear All…")).clicked() {
                     st.confirm_clear = true;
                 }
             });
         });
     });
+    // Clear All asks in a popup over the window.
+    if st.confirm_clear {
+        let confirm = egui::Modal::new(Id::new("history-clear")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading("Clear History");
+            ui.add_space(4.0);
+            ui.label(format!("Clear the {} queries of the history?", app.history.entries.len()));
+            ui.add_space(8.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button(RichText::new("Clear").color(th.error)).clicked() {
+                    app.history.entries.clear();
+                    st.confirm_clear = false;
+                    actions.push(Action::SaveHistory);
+                }
+                if ui.button("Keep").clicked() {
+                    st.confirm_clear = false;
+                }
+            });
+        });
+        if confirm.should_close() {
+            st.confirm_clear = false;
+        }
+    }
     // A window that settles on its size a frame later would stay misplaced
     // until the next input (see `dialogs::show`).
     let rect_id = Id::new("history-rect");
@@ -228,13 +252,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         ctx.data_mut(|d| d.insert_temp(rect_id, modal.response.rect));
         ctx.request_repaint();
     }
-    // Escape closes the confirmation first, then the window.
-    if modal.should_close() {
-        if st.confirm_clear {
-            st.confirm_clear = false;
-        } else {
-            close = true;
-        }
+    if modal.should_close() && !st.confirm_clear {
+        close = true;
     }
     if !close {
         app.history_window = Some(st);
