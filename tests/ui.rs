@@ -767,6 +767,19 @@ fn favorite_scripts_tree_and_drag_and_drop() {
     assert!(!has_label(&h, "logs"), "empty database gone");
 }
 
+/// Two clicks of the pointer (`Node::click` goes through AccessKit, which
+/// egui does not count as a double-click).
+fn double_click_at(h: &mut Harness<'_, App>, pos: egui::Pos2) {
+    h.hover_at(pos);
+    h.run_steps(1);
+    // All in one frame: the harness runs a frame per queued event, and a
+    // frame lasts longer than the double-click delay.
+    for pressed in [true, false, true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+}
+
 /// Replaces the content of the text field holding `value` by typing over it.
 fn retype(h: &mut Harness<'_, App>, value: &str, new: &str) {
     let field = |h: &Harness<'_, App>, v: &str| h.query_all_by(|n| is_text_input(n) && n.value().as_deref() == Some(v)).next().is_some();
@@ -2002,4 +2015,83 @@ fn live_history_and_export_of_the_results() {
     assert_eq!(h.state().tabs.len(), 2);
     assert_eq!((h.state().tabs[1].server, h.state().tabs[1].db.as_str()), (sid, "rrui"));
     assert!(h.state().tabs[1].script.starts_with("db.exp.drop();"));
+}
+
+#[test]
+fn live_table_cells_are_edited_in_place() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let _env = env("live-cells", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    h.state_mut().actions.push(rustyrobo::app::Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "db.cells.drop(); db.cells.insertMany([{ _id: 1, name: 'Ada', age: 36, tags: ['a'] }, { _id: 2, name: 'Linus', age: 28 }])".into(),
+        execute: true,
+        title: "seed".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+    h.state_mut().tabs[0].script = "db.cells.find({}).sort({ _id: 1 })".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 2));
+    h.key_press(Key::F3);
+    h.run_steps(3);
+    let value = |h: &Harness<'_, App>, doc: usize, field: &str| h.state().tabs[0].outputs[0].docs()[doc].as_document().unwrap().get(field).cloned();
+
+    // Double-click: the value in shell syntax, typed over, saved with Enter.
+    let at = h.get_by_label("Ada").rect().center();
+    double_click_at(&mut h, at);
+    assert!(has_input(&h, "\"Ada\""), "editor with the value in shell syntax");
+    retype(&mut h, "\"Ada\"", "\"Ada Lovelace\"");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| value(h, 0, "name") == Some(Bson::String("Ada Lovelace".into())));
+    assert!(h.state().tabs[0].outputs[0].cell_edit.is_none());
+
+    // From the menu: a number becomes a NumberLong; Escape cancels.
+    h.get_by_label("28").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"age\"").click();
+    h.run_steps(3);
+    retype(&mut h, "28", "NumberLong(29)");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| value(h, 1, "age") == Some(Bson::Int64(29)));
+    h.get_by_label("36").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"age\"").click();
+    h.run_steps(3);
+    retype(&mut h, "36", "99");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().tabs[0].outputs[0].cell_edit.is_none());
+    assert_eq!(value(&h, 0, "age"), Some(Bson::Int32(36)), "cancelled");
+
+    // Bad syntax keeps the editor open.
+    h.get_by_label("36").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Edit Value of \"age\"").click();
+    h.run_steps(3);
+    retype(&mut h, "36", "{ oops");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().tabs[0].outputs[0].cell_edit.as_ref().is_some_and(|e| e.error.is_some()));
+    // Still focused: corrected and saved.
+    retype(&mut h, "{ oops", "37");
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| value(h, 0, "age") == Some(Bson::Int32(37)));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // Arrays cannot be edited in place, but their field can be removed.
+    h.get_by_label("[ 1 element ]").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Remove Field \"tags\"").click();
+    h.run_steps(5);
+    assert!(has_label(&h, "Remove the field \"tags\" from this document?"));
+    h.get_by_label("Yes").click();
+    wait_until(&mut h, "field removed", Duration::from_secs(15), |h| h.state().tabs[0].outputs[0].docs().len() == 2 && value(h, 0, "tags").is_none());
 }

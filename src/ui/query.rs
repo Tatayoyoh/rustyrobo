@@ -154,7 +154,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         AutocompletionMode::NoCollectionNames => CompletionMode::NoCollectionNames,
         AutocompletionMode::None => CompletionMode::Off,
     };
-    let modal_open = app.dialog.is_some() || app.conn_list.is_some() || app.conn_editor.is_some() || app.favorites.is_some();
+    let modal_open = app.dialog.is_some() || app.conn_list.is_some() || app.conn_editor.is_some() || app.favorites.is_some() || app.history_window.is_some();
     let mut copied = None;
     let tab = &mut app.tabs[idx];
     // Ctrl+C and Ctrl+F apply to the results under the pointer, before the
@@ -162,7 +162,8 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
     if ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_pressed()) {
         tab.typing = false;
     }
-    if !modal_open && !tab.typing && let Some(pane) = tab.outputs.iter_mut().find(|o| o.pointer_over) {
+    // Not while a table cell is being edited: its text field takes the keys.
+    if !modal_open && !tab.typing && let Some(pane) = tab.outputs.iter_mut().find(|o| o.pointer_over && o.cell_edit.is_none()) {
         if copy_requested(ui) && let Some(text) = pane.hovered_text(fmt, copy_with_names(ui)) {
             take_copy_request(ui);
             copied = Some(text);

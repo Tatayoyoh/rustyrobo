@@ -30,6 +30,10 @@ here for the record, not as a commitment.
   with progress and cancel
 - [x] **Query history**: every executed script with its connection and database, searchable,
   opened again in a new shell (Ctrl+H)
+- [x] **Inline editing in the table view**: double-click a cell (or "Edit Value" in its menu) to
+  change a top-level value in shell syntax, its type included (`NumberLong(5)`, `ISODate(…)`), or
+  to add a field the document lacks; "Remove Field" unsets it. Sends `$set` / `$unset` on the
+  `_id` of the row and reloads the page. Objects and arrays still go through Edit Document
 
 ## Queries and aggregation
 
@@ -48,8 +52,6 @@ here for the record, not as a commitment.
 
 ## Data
 
-- [ ] **Inline editing in the table view**: edit a cell, change the type of a field, add a field;
-  sends `update` with `$set` on the `_id` of the row.
 - [ ] **Nested arrays and documents in the table view**: step into a sub-document or array column
   as a table of its own.
 - [ ] **Copy / paste documents** between collections and servers (clipboard as Extended JSON).

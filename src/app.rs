@@ -109,6 +109,8 @@ pub enum Refresh {
     Users(String),
     Functions(String),
     Tab(u64),
+    /// The page shown by a result pane: `out` of tab `tab`.
+    Page { tab: u64, out: usize },
 }
 
 #[derive(Clone)]
@@ -680,6 +682,11 @@ impl App {
             Refresh::Users(db) => self.actions.push(Action::LoadUsers(server, db)),
             Refresh::Functions(db) => self.actions.push(Action::LoadFunctions(server, db)),
             Refresh::Tab(t) => self.actions.push(Action::Execute(t)),
+            Refresh::Page { tab, out } => {
+                if let Some(p) = self.tabs.iter().find(|t| t.id == tab).and_then(|t| t.outputs.get(out)) {
+                    self.actions.push(Action::Page { tab, out, skip: p.skip, limit: p.page_size });
+                }
+            }
         }
     }
 

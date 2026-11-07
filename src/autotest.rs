@@ -186,6 +186,25 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
         }
         30 => shot(&mut t, ctx, "14-export"),
+        31 => {
+            app.dialog = None;
+            if let Some(tab) = app.tabs.last_mut() {
+                tab.script = "db.getCollection('items').find({})".into();
+                let id = tab.id;
+                app.actions.push(Action::Execute(id));
+            }
+            wait = 2.0;
+        }
+        32 => {
+            set_mode(app, ViewMode::Table);
+            if let Some(pane) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
+                let _ = pane.edit_cell(1, "tag");
+                if let Some(e) = &mut pane.cell_edit {
+                    e.text = "\"fizzbuzz\"".into();
+                }
+            }
+        }
+        33 => shot(&mut t, ctx, "15-table-edit"),
         _ => {
             app.dialog = None;
             app.history_window = None;
