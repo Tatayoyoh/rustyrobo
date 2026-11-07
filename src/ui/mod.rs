@@ -356,7 +356,7 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if let Some(release) = &app.update {
-                let text = RichText::new(format!("{} v{}", icon::ARROW_CIRCLE_UP, release.version)).strong().color(app.theme.on_accent);
+                let text = RichText::new(format!("{} v{} available", icon::ARROW_CIRCLE_UP, release.version)).strong().color(app.theme.on_accent);
                 if ui.add(egui::Button::new(text).fill(app.theme.accent).corner_radius(10)).on_hover_text("A new version is available").clicked() {
                     app.actions.push(Action::Dialog(Dialog::update(Arc::clone(release))));
                 }

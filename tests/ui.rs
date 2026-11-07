@@ -433,7 +433,7 @@ fn new_version_shows_a_chip_and_a_dialog() {
     h.run_steps(2);
 
     let open = |h: &mut Harness<'_, App>| {
-        h.get_by_label_contains("v9.9.9").click();
+        h.get_by_label_contains("v9.9.9 available").click();
         h.run_steps(4);
         assert!(has_label(h, "New version 9.9.9"));
     };
@@ -1991,7 +1991,7 @@ fn live_history_and_export_of_the_results() {
     assert_eq!((saved[1].script.as_str(), saved[1].db.as_str(), saved[1].connection), ("db.exp.find({ _id: { $gt: 1 } })", "rrui", Some(s.connections[0].id)));
 
     // The export button of the results exports the query.
-    h.get_by_label(rustyrobo::ui::ICON_EXPORT).click();
+    h.get_by_label(&format!("{} Export", rustyrobo::ui::ICON_EXPORT)).click();
     h.run_steps(3);
     assert!(has_label(&h, "Export — rrui.exp"));
     assert!(h.query_all_by(|n| n.value().is_some_and(|v| v.contains("$gt"))).next().is_some(), "filter of the query");

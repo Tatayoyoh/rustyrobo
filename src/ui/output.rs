@@ -659,7 +659,7 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     paging(ui, pane, cx);
                     if let OutputKind::Docs { spec: Some(spec), .. } = &pane.output.kind {
                         ui.separator();
-                        if ui.small_button(crate::ui::ICON_EXPORT).on_hover_text("Export the documents of this query").clicked() {
+                        if ui.small_button(format!("{} Export", crate::ui::ICON_EXPORT)).on_hover_text("Export the documents of this query").clicked() {
                             cx.actions.push(Action::Dialog(crate::ui::dialogs::Dialog::export_query(cx.server, spec)));
                         }
                     }
