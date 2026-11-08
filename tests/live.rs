@@ -568,6 +568,858 @@ fn import_and_export_on_a_legacy_server() {
     transfer_suite(&rt(), &mongo42(), "rr_e2e_transfer_legacy");
 }
 
+// ------------------------------------------------ what imports and restores keep
+
+/// A server of the test environment, with the container that holds the
+/// MongoDB tools of its version.
+struct Tools {
+    settings: ConnectionSettings,
+    container: &'static str,
+    /// Options of the tools, run in the container.
+    auth: &'static str,
+    name: &'static str,
+}
+
+fn modern_tools() -> Tools {
+    Tools { settings: mongo8(), container: "rr-mongo8", auth: "-u admin -p secret --authenticationDatabase admin", name: "modern" }
+}
+
+fn legacy_tools() -> Tools {
+    Tools { settings: mongo42(), container: "rr-mongo42", auth: "", name: "legacy" }
+}
+
+impl Tools {
+    /// Runs a shell script in the container.
+    fn sh(&self, script: &str) -> String {
+        let out = std::process::Command::new("docker").args(["exec", self.container, "sh", "-c", script]).output().expect("docker");
+        assert!(out.status.success(), "{script}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Runs mongodump, mongorestore, mongoexport or mongoimport.
+    fn tool(&self, name: &str, args: &str) -> String {
+        self.sh(&format!("{name} {} --quiet {args}", self.auth))
+    }
+
+    fn copy_in(&self, host: &std::path::Path, inside: &str) {
+        self.sh(&format!("rm -rf {inside} && mkdir -p $(dirname {inside})"));
+        docker_cp(&host.display().to_string(), &format!("{}:{inside}", self.container));
+    }
+
+    fn copy_out(&self, inside: &str, host: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(host);
+        let _ = std::fs::remove_file(host);
+        docker_cp(&format!("{}:{inside}", self.container), &host.display().to_string());
+    }
+}
+
+fn docker_cp(from: &str, to: &str) {
+    let out = std::process::Command::new("docker").args(["cp", from, to]).output().expect("docker");
+    assert!(out.status.success(), "docker cp {from} {to}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+fn run(rt: &tokio::runtime::Runtime, c: &Connection, db: &str, cmd: bson::Document) -> bson::Document {
+    let what = format!("{cmd:?}");
+    rt.block_on(c.run_command(db, cmd, None)).unwrap_or_else(|e| panic!("{}: {}", what.chars().take(200).collect::<String>(), rustyrobo::mongo::error_message(&e)))
+}
+
+fn insert(rt: &tokio::runtime::Runtime, c: &Connection, db: &str, coll: &str, docs: &[bson::Document]) {
+    for chunk in docs.chunks(500) {
+        let reply = run(rt, c, db, doc! { "insert": coll, "documents": chunk.to_vec() });
+        assert!(reply.get("writeErrors").is_none(), "{coll}: {reply:?}");
+    }
+}
+
+fn find_all(rt: &tokio::runtime::Runtime, c: &Connection, db: &str, coll: &str) -> Vec<bson::Document> {
+    rt.block_on(rustyrobo::mongo::collect_cursor(c, db, doc! { "find": coll, "filter": {}, "sort": { "_id": 1 } }, 1_000_000, None)).unwrap()
+}
+
+fn temp(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rustyrobo-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Whether the server is at least `major.minor`.
+fn at_least(c: &Connection, major: u32, minor: u32) -> bool {
+    let mut parts = c.version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) >= (major, minor)
+}
+
+/// A collection as an import or a restore may change it: type, options,
+/// indexes, and documents byte for byte (types, the sign of zero and NaN
+/// included).
+#[derive(Debug, PartialEq, Clone)]
+struct Kept {
+    kind: String,
+    options: bson::Document,
+    indexes: Vec<bson::Document>,
+    docs: Vec<Vec<u8>>,
+}
+
+/// Everything of a database an import or a restore may change, by
+/// collection; the definitions of views and the buckets of time series
+/// show in their collection.
+type Snapshot = std::collections::BTreeMap<String, Kept>;
+
+fn snapshot(rt: &tokio::runtime::Runtime, c: &Connection, db: &str) -> Snapshot {
+    let infos = rt.block_on(rustyrobo::mongo::collect_cursor(c, db, doc! { "listCollections": 1, "cursor": {} }, 10_000, None)).unwrap();
+    let mut out = Snapshot::new();
+    for info in infos {
+        let name = info.get_str("name").unwrap().to_string();
+        if name == "system.views" || name.starts_with("system.buckets.") {
+            continue;
+        }
+        let kind = info.get_str("type").unwrap_or("collection").to_string();
+        let (indexes, docs) = if kind == "view" {
+            (Vec::new(), Vec::new())
+        } else {
+            let mut indexes = rt.block_on(rustyrobo::mongo::collect_cursor(c, db, doc! { "listIndexes": &name, "cursor": {} }, 1000, None)).unwrap();
+            for i in &mut indexes {
+                i.remove("v");
+                i.remove("ns");
+            }
+            indexes.sort_by(|a, b| a.get_str("name").unwrap().cmp(b.get_str("name").unwrap()));
+            (indexes, find_all(rt, c, db, &name).iter().map(|d| bson::to_vec(d).unwrap()).collect())
+        };
+        out.insert(name, Kept { kind, options: info.get_document("options").cloned().unwrap_or_default(), indexes, docs });
+    }
+    out
+}
+
+/// Byte for byte, with the name of the first field that differs.
+fn assert_same_docs(got: &[bson::Document], expected: &[bson::Document], what: &str) {
+    assert_eq!(got.len(), expected.len(), "{what}: number of documents");
+    for (g, e) in got.iter().zip(expected) {
+        if bson::to_vec(g).unwrap() == bson::to_vec(e).unwrap() {
+            continue;
+        }
+        for (k, v) in e {
+            let raw = |b: Option<&Bson>| b.map(|b| bson::to_vec(&doc! { "v": b.clone() }).unwrap());
+            assert_eq!(raw(g.get(k)), raw(Some(v)), "{what}: {k}: {:?} instead of {v:?}", g.get(k));
+        }
+        panic!("{what}: other fields or order: {g:?}");
+    }
+}
+
+fn assert_same_db(got: &Snapshot, expected: &Snapshot, what: &str) {
+    assert_eq!(got.keys().collect::<Vec<_>>(), expected.keys().collect::<Vec<_>>(), "{what}: collections");
+    for (name, e) in expected {
+        let g = &got[name];
+        assert_eq!((&g.kind, &g.options, &g.indexes), (&e.kind, &e.options, &e.indexes), "{what}: {name}");
+        assert!(g.docs == e.docs, "{what}: documents of {name} differ ({} instead of {})", g.docs.len(), e.docs.len());
+    }
+}
+
+/// Documents with a value of each type BSON has, and the edge values that
+/// conversions lose most.
+fn every_type() -> Vec<bson::Document> {
+    use bson::spec::BinarySubtype;
+    use bson::{Binary, DateTime, Decimal128, Timestamp, oid::ObjectId};
+    let bin = |subtype: u8, bytes: &[u8]| Bson::Binary(Binary { subtype: BinarySubtype::from(subtype), bytes: bytes.to_vec() });
+    let dec = |s: &str| Bson::Decimal128(s.parse::<Decimal128>().unwrap());
+    let date = DateTime::from_millis;
+    let pointer = Bson::try_from(serde_json::json!({ "$dbPointer": { "$ref": "c", "$id": { "$oid": "5f1d7a0e1c9d440000a1b2c4" } } })).unwrap();
+    let mut deep = doc! { "bottom": 1 };
+    for _ in 0..90 {
+        deep = doc! { "d": deep };
+    }
+    let mut d = doc! {
+        "_id": ObjectId::parse_str("5f1d7a0e1c9d440000a1b2c3").unwrap(),
+        "double": 1.5, "whole": 2.0, "negZero": -0.0, "nan": f64::NAN, "inf": f64::INFINITY, "ninf": f64::NEG_INFINITY,
+        "tiny": 5e-324, "huge": f64::MAX, "third": 1.0 / 3.0, "big": 1e300,
+        "int": 7, "intMin": i32::MIN, "intMax": i32::MAX,
+        "long": 9_007_199_254_740_993i64, "smallLong": 5i64, "longMin": i64::MIN, "longMax": i64::MAX,
+    };
+    d.extend(doc! {
+        "dec": dec("123.456"), "decNaN": dec("NaN"), "decInf": dec("-Infinity"), "decTiny": dec("1E-6176"), "decNegZero": dec("-0"), "decLong": dec("1234567890123456789012345678901234"),
+        "string": "héllo \0 nul \n \"q\" \\ \u{1F600} שלום مرحبا 你好", "empty": "",
+        "date": date(1_706_933_106_789), "before1970": date(-1), "year1": date(-62_135_596_800_000), "after9999": date(253_402_300_800_000), "dateMin": DateTime::MIN, "dateMax": DateTime::MAX,
+    });
+    d.extend(doc! {
+        "binary": bin(0, &[1, 2, 3]), "function": bin(1, &[1]), "old": bin(2, &[1, 2]), "legacyUuid": bin(3, &[7; 16]), "uuid": bin(4, &[8; 16]),
+        "md5": bin(5, &[9; 16]), "encrypted": bin(6, &[1]), "sensitive": bin(8, &[1]), "user": bin(0x80, &[0xff]), "emptyBinary": bin(0, &[]),
+        "regex": Bson::RegularExpression(bson::Regex { pattern: "ab+c".into(), options: "im".into() }), "emptyRegex": Bson::RegularExpression(bson::Regex { pattern: String::new(), options: String::new() }),
+        "ts": Timestamp { time: 10, increment: 2 }, "tsMax": Timestamp { time: u32::MAX, increment: u32::MAX },
+    });
+    d.extend(doc! {
+        "min": Bson::MinKey, "max": Bson::MaxKey, "null": Bson::Null, "undefined": Bson::Undefined, "yes": true, "no": false,
+        "symbol": Bson::Symbol("sym".into()), "code": Bson::JavaScriptCode("function () { return 1 }".into()),
+        "codeScope": Bson::JavaScriptCodeWithScope(bson::JavaScriptCodeWithScope { code: "function () { return x }".into(), scope: doc! { "x": 1i64 } }),
+        "pointer": pointer,
+        "array": [1, "a", { "x": true }, [], [[1i64]]], "emptyArray": [], "emptyDoc": {},
+        "keys": { "": 1, "a.b": 2, "$dollar": 3, "ünï": 4, "with space": 5, "_id": 6 },
+        "deep": deep,
+    });
+    let mut other = d.clone();
+    other.insert("_id", "second");
+    other.insert("long", -1i64);
+    // In the order of their _id, a string before an ObjectId.
+    vec![other, d]
+}
+
+/// `v` as relaxed Extended JSON gives it back: a long that fits in 32 bits
+/// comes back as an int, with mongoimport too.
+fn relaxed(v: &Bson) -> Bson {
+    match v {
+        Bson::Int64(n) if i32::try_from(*n).is_ok() => Bson::Int32(*n as i32),
+        Bson::Document(d) => Bson::Document(d.iter().map(|(k, v)| (k.clone(), relaxed(v))).collect()),
+        Bson::Array(a) => Bson::Array(a.iter().map(relaxed).collect()),
+        Bson::JavaScriptCodeWithScope(c) => {
+            let Bson::Document(scope) = relaxed(&Bson::Document(c.scope.clone())) else { unreachable!() };
+            Bson::JavaScriptCodeWithScope(bson::JavaScriptCodeWithScope { code: c.code.clone(), scope })
+        }
+        other => other.clone(),
+    }
+}
+
+/// Extended JSON has one NaN: mongoimport reads it as the NaN of Go, whose
+/// last bit is set.
+fn one_nan(v: &Bson) -> Bson {
+    match v {
+        Bson::Double(f) if f.is_nan() => Bson::Double(f64::NAN),
+        Bson::Document(d) => Bson::Document(d.iter().map(|(k, v)| (k.clone(), one_nan(v))).collect()),
+        Bson::Array(a) => Bson::Array(a.iter().map(one_nan).collect()),
+        other => other.clone(),
+    }
+}
+
+fn one_nan_docs(docs: &[bson::Document]) -> Vec<bson::Document> {
+    docs.iter().map(|d| if let Bson::Document(d) = one_nan(&Bson::Document(d.clone())) { d } else { unreachable!() }).collect()
+}
+
+fn relaxed_docs(docs: &[bson::Document]) -> Vec<bson::Document> {
+    docs.iter().map(|d| if let Bson::Document(d) = relaxed(&Bson::Document(d.clone())) { d } else { unreachable!() }).collect()
+}
+
+fn import_options(db: &str, coll: &str, path: std::path::PathBuf, drop_first: bool) -> rustyrobo::transfer::ImportOptions {
+    rustyrobo::transfer::ImportOptions {
+        db: db.into(),
+        coll: coll.into(),
+        format: rustyrobo::transfer::Format::of_path(&path),
+        delimiter: rustyrobo::transfer::Delimiter::of_path(&path),
+        detect_types: true,
+        drop_first,
+        path,
+    }
+}
+
+fn export_options(db: &str, coll: &str, format: rustyrobo::transfer::Format, canonical: bool, path: std::path::PathBuf) -> rustyrobo::transfer::ExportOptions {
+    rustyrobo::transfer::ExportOptions {
+        db: db.into(),
+        coll: coll.into(),
+        filter: doc! {},
+        projection: None,
+        sort: Some(doc! { "_id": 1 }),
+        skip: 0,
+        limit: 0,
+        format,
+        canonical,
+        fields: Vec::new(),
+        delimiter: rustyrobo::transfer::Delimiter::Comma,
+        path,
+    }
+}
+
+fn restore_options(db: &str, from: std::path::PathBuf, drop_first: bool) -> rustyrobo::dump::RestoreOptions {
+    rustyrobo::dump::RestoreOptions { db: db.into(), from, collections: Vec::new(), drop_first, indexes: true }
+}
+
+fn never() -> Arc<std::sync::atomic::AtomicBool> {
+    Arc::new(std::sync::atomic::AtomicBool::new(false))
+}
+
+/// A database with what dumps and restores must keep: every type, a lot of
+/// documents, indexes of each kind, options, views, stored functions, odd
+/// names; a time series and a clustered collection on modern servers.
+fn seed(rt: &tokio::runtime::Runtime, c: &Connection, db: &str) {
+    run(rt, c, db, doc! { "dropDatabase": 1 });
+    insert(rt, c, db, "types", &every_type());
+    let many: Vec<bson::Document> = (0..2500)
+        // Dates far ahead: the TTL monitor deletes nothing during the tests.
+        .map(|i| doc! { "_id": i, "email": format!("u{i}@x"), "age": i % 90, "name": format!("n{i}"), "at": bson::DateTime::from_millis(4_000_000_000_000 + i as i64 * 1000), "text": "lorem ipsum" })
+        .collect();
+    insert(rt, c, db, "many", &many);
+    run(rt, c, db, doc! { "createIndexes": "many", "indexes": [
+        { "key": { "email": 1 }, "name": "email_1", "unique": true },
+        { "key": { "age": -1, "name": 1 }, "name": "age_name" },
+        { "key": { "name": 1 }, "name": "partial", "partialFilterExpression": { "age": { "$gt": 10 } } },
+        { "key": { "at": 1 }, "name": "ttl", "expireAfterSeconds": 31_536_000 },
+        { "key": { "text": "text" }, "name": "text" },
+        { "key": { "age": 1 }, "name": "sparse", "sparse": true },
+    ] });
+    run(rt, c, db, doc! { "create": "capped", "capped": true, "size": 65536, "max": 100 });
+    insert(rt, c, db, "capped", &(0..10).map(|i| doc! { "_id": i }).collect::<Vec<_>>());
+    // Documents its validator came after, which a restore must keep.
+    insert(rt, c, db, "valid", &[doc! { "_id": 1, "n": 1 }, doc! { "_id": 2, "n": "not a number" }]);
+    run(rt, c, db, doc! { "collMod": "valid", "validator": { "n": { "$type": "number" } }, "validationLevel": "moderate" });
+    run(rt, c, db, doc! { "create": "collated", "collation": { "locale": "fr", "strength": 2 } });
+    insert(rt, c, db, "collated", &[doc! { "_id": "é" }]);
+    run(rt, c, db, doc! { "create": "adults", "viewOn": "many", "pipeline": [{ "$match": { "age": { "$gte": 18 } } }] });
+    insert(rt, c, db, "system.js", &[doc! { "_id": "double", "value": Bson::JavaScriptCode("function (x) { return 2 * x }".into()) }]);
+    insert(rt, c, db, "x+y", &[doc! { "_id": "plus" }]);
+    insert(rt, c, db, "a/b c", &[doc! { "_id": "slash" }]);
+    run(rt, c, db, doc! { "create": "empty" });
+    if !c.is_legacy() {
+        run(rt, c, db, doc! { "create": "ts", "timeseries": { "timeField": "t", "metaField": "m" } });
+        let measurements: Vec<bson::Document> = (0..300).map(|i| doc! { "_id": i, "t": bson::DateTime::from_millis(1_700_000_000_000 + i * 60_000), "m": format!("s{}", i % 3), "v": i as f64 / 3.0 }).collect();
+        insert(rt, c, db, "ts", &measurements);
+        if at_least(c, 5, 3) {
+            run(rt, c, db, doc! { "create": "clustered", "clusteredIndex": { "key": { "_id": 1 }, "unique": true } });
+            insert(rt, c, db, "clustered", &[doc! { "_id": 1 }, doc! { "_id": 2 }]);
+        }
+    }
+}
+
+/// Exports and imports, dumps and restores, of rustyrobo and of the MongoDB
+/// tools, between them: the documents come back byte for byte, with the
+/// options, indexes and views of their collections.
+fn fidelity_suite(rt: &tokio::runtime::Runtime, t: &Tools) {
+    use rustyrobo::dump::{DumpOptions, dump, restore};
+    use rustyrobo::transfer::{Format, export, import};
+    let c = open(rt, &t.settings).unwrap();
+    let db = format!("rr_e2e_fidelity_{}", t.name);
+    let copy = format!("{db}_copy");
+    let dir = temp(&format!("fidelity-{}", t.name));
+    let inside = format!("/tmp/rr-e2e-{}", t.name);
+    seed(rt, &c, &db);
+    let source = snapshot(rt, &c, &db);
+    let types = find_all(rt, &c, &db, "types");
+    assert_same_docs(&types, &every_type(), "inserted as built");
+
+    // Our exports, read back by our import.
+    for (format, canonical, file) in [(Format::JsonLines, true, "lines.json"), (Format::JsonArray, true, "array.json"), (Format::JsonLines, false, "relaxed.json"), (Format::JsonArray, false, "relaxed-array.json")] {
+        let path = dir.join(file);
+        assert_eq!(rt.block_on(export(&c, &export_options(&db, "types", format, canonical, path.clone()), &std::sync::atomic::AtomicBool::new(false), |_| {})).unwrap(), 2);
+        let done = rt.block_on(import(&c, &import_options(&db, "back", path, true), never(), |_| {})).unwrap();
+        assert_eq!((done.inserted, done.failed), (2, 0), "{file}");
+        let expected = if canonical { types.clone() } else { relaxed_docs(&types) };
+        assert_same_docs(&find_all(rt, &c, &db, "back"), &expected, file);
+    }
+    run(rt, &c, &db, doc! { "drop": "back" });
+
+    // mongoexport, read by our import.
+    t.sh(&format!("rm -rf {inside} && mkdir -p {inside}"));
+    for (format, file) in [("canonical", "tool.json"), ("relaxed", "tool-relaxed.json")] {
+        t.tool("mongoexport", &format!("-d {db} -c types --jsonFormat={format} --sort '{{_id: 1}}' -o {inside}/{file}"));
+        t.copy_out(&format!("{inside}/{file}"), &dir.join(file));
+        rt.block_on(import(&c, &import_options(&db, "back", dir.join(file), true), never(), |_| {})).unwrap();
+        let expected = if format == "canonical" { types.clone() } else { relaxed_docs(&types) };
+        assert_same_docs(&find_all(rt, &c, &db, "back"), &expected, file);
+    }
+    // Our export, read by mongoimport.
+    for (format, canonical, file, options) in [(Format::JsonLines, true, "ours.json", ""), (Format::JsonArray, true, "ours-array.json", "--jsonArray"), (Format::JsonLines, false, "ours-relaxed.json", "")] {
+        rt.block_on(export(&c, &export_options(&db, "types", format, canonical, dir.join(file)), &std::sync::atomic::AtomicBool::new(false), |_| {})).unwrap();
+        t.copy_in(&dir.join(file), &format!("{inside}/{file}"));
+        t.tool("mongoimport", &format!("-d {db} -c back --drop {options} --file {inside}/{file}"));
+        let expected = if canonical { types.clone() } else { relaxed_docs(&types) };
+        assert_same_docs(&one_nan_docs(&find_all(rt, &c, &db, "back")), &expected, &format!("mongoimport of {file}"));
+    }
+    run(rt, &c, &db, doc! { "drop": "back" });
+
+    // Our dumps, restored by us, into an empty database and over one.
+    for (gzip, archive) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("gzip {gzip}, archive {archive}");
+        let opts = DumpOptions { db: db.clone(), collections: Vec::new(), dir: dir.join("ours"), gzip, archive };
+        std::fs::create_dir_all(&opts.dir).unwrap();
+        let _ = std::fs::remove_dir_all(opts.target());
+        rt.block_on(dump(&c, &opts, &std::sync::atomic::AtomicBool::new(false), |_| {})).unwrap();
+        run(rt, &c, &copy, doc! { "dropDatabase": 1 });
+        for drop_first in [false, true] {
+            let r = rt.block_on(restore(&c, &restore_options(&copy, opts.target(), drop_first), never(), |_| {})).unwrap();
+            assert!(r.problems.is_empty() && r.docs.failed == 0, "{what}, drop {drop_first}: {}", r.summary());
+            assert_same_db(&snapshot(rt, &c, &copy), &source, &format!("{what}, drop {drop_first}"));
+        }
+        // Read by mongorestore.
+        let name = if archive { "in.archive".to_string() } else { "in".to_string() };
+        t.copy_in(&opts.target(), &format!("{inside}/{name}"));
+        let from = if archive { format!("--archive={inside}/{name}") } else { format!("--dir={inside}/{name}") };
+        let ns = if archive { format!("--nsFrom='{db}.*' --nsTo='{copy}.*'") } else { format!("-d {copy}") };
+        let gz = if gzip { "--gzip" } else { "" };
+        t.tool("mongorestore", &format!("--drop --bypassDocumentValidation {gz} {ns} {from}"));
+        let mut restored = snapshot(rt, &c, &copy);
+        if c.is_legacy() && !archive {
+            // mongorestore 4.2 reads the "+" of mongodump 100 (a space) as a "+".
+            let slash = restored.remove("a/b+c").expect("a/b c as mongorestore 4.2 names it");
+            restored.insert("a/b c".into(), slash);
+        }
+        assert_same_db(&restored, &source, &format!("mongorestore of our dump, {what}"));
+    }
+
+    // The dumps of mongodump, restored by us.
+    for (gzip, archive) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("mongodump, gzip {gzip}, archive {archive}");
+        let gz = if gzip { "--gzip" } else { "" };
+        let (target, from) = if archive {
+            t.tool("mongodump", &format!("-d {db} {gz} --archive={inside}/dump.archive"));
+            (format!("{inside}/dump.archive"), dir.join("dump.archive"))
+        } else {
+            t.sh(&format!("rm -rf {inside}/dump"));
+            t.tool("mongodump", &format!("-d {db} {gz} -o {inside}/dump"));
+            (format!("{inside}/dump/{db}"), dir.join("dump"))
+        };
+        t.copy_out(&target, &from);
+        run(rt, &c, &copy, doc! { "dropDatabase": 1 });
+        let r = rt.block_on(restore(&c, &restore_options(&copy, from.clone(), false), never(), |_| {})).unwrap();
+        assert!(r.problems.is_empty() && r.docs.failed == 0, "{what}: {}", r.summary());
+        assert_same_db(&snapshot(rt, &c, &copy), &source, &what);
+        let r = rt.block_on(restore(&c, &restore_options(&copy, from, true), never(), |_| {})).unwrap();
+        assert!(r.problems.is_empty(), "{what}, again: {}", r.summary());
+        assert_same_db(&snapshot(rt, &c, &copy), &source, &format!("{what}, over itself"));
+    }
+    for d in [&db, &copy] {
+        run(rt, &c, d, doc! { "dropDatabase": 1 });
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn everything_comes_back_on_a_modern_server() {
+    if !live() {
+        return;
+    }
+    fidelity_suite(&rt(), &modern_tools());
+}
+
+#[test]
+fn everything_comes_back_on_a_legacy_server() {
+    if !live() {
+        return;
+    }
+    fidelity_suite(&rt(), &legacy_tools());
+}
+
+/// An import that does not complete leaves the collection as it was: a
+/// file it cannot read changes nothing, "drop first" replaces only with
+/// all the documents of the file.
+fn import_safety_suite(rt: &tokio::runtime::Runtime, t: &Tools) {
+    use rustyrobo::transfer::{Progress, import};
+    use std::sync::atomic::Ordering;
+    let c = open(rt, &t.settings).unwrap();
+    let db = format!("rr_e2e_import_safety_{}", t.name);
+    let dir = temp(&format!("import-safety-{}", t.name));
+    run(rt, &c, &db, doc! { "dropDatabase": 1 });
+    let precious: Vec<bson::Document> = (0..50).map(|i| doc! { "_id": i, "email": format!("u{i}@x"), "n": i }).collect();
+    insert(rt, &c, &db, "precious", &precious);
+    run(rt, &c, &db, doc! { "createIndexes": "precious", "indexes": [{ "key": { "email": 1 }, "name": "email_1", "unique": true }] });
+    run(rt, &c, &db, doc! { "collMod": "precious", "validator": { "n": { "$type": "number" } } });
+    run(rt, &c, &db, doc! { "create": "precious_view", "viewOn": "precious", "pipeline": [] });
+    let before = snapshot(rt, &c, &db);
+    let file = |name: &str, content: Vec<u8>| {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    };
+    let lines = |n: usize| -> String { (0..n).map(|i| format!("{{\"_id\":{},\"email\":\"l{i}@x\",\"n\":{i}}}\n", 1000 + i)).collect() };
+    let mut failing: Vec<(&str, std::path::PathBuf, &str)> = vec![
+        ("broken at the first document", file("first.json", b"{\"a\":".to_vec()), "document 1"),
+        ("broken after two batches", file("late.json", format!("{}{{\"a\":", lines(2500)).into_bytes()), "document 2501"),
+        ("broken in an array", file("array.json", format!("[{}oops]", lines(1500).replace('\n', ",")).into_bytes()), "document 1501"),
+        ("not UTF-8", file("latin1.csv", [b"n\n".to_vec(), "1\n".repeat(1500).into_bytes(), b"caf\xe9\n".to_vec()].concat()), "line 1502: the file is not UTF-8 text"),
+        ("two columns for one field", file("conflict.csv", b"a,a.b\n1,2\n".to_vec()), "write the same field"),
+        ("a number too big", file("big-number.json", format!("{}{{\"n\":18446744073709551615}}", lines(10)).into_bytes()), "does not fit in a 64-bit integer"),
+        ("a document over 16 MB", file("too-big.json", format!("{}{{\"s\":\"{}\"}}\n", lines(1200), "x".repeat(16 * 1024 * 1024)).into_bytes()), "more than the 16 MB"),
+    ];
+    if c.is_legacy() {
+        // A field name the server refuses.
+        failing.push(("refused by the server", file("dollar.json", format!("{}{{\"_id\":1,\"$set\":1}}\n", lines(10)).into_bytes()), "refused"));
+    }
+    let dups = file("dups.json", format!("{}{{\"_id\":1000}}\n", lines(1500)).into_bytes());
+    for (what, path, expected) in &failing {
+        for drop_first in [true, false] {
+            let e = rt.block_on(import(&c, &import_options(&db, "precious", path.clone(), drop_first), never(), |_| {}));
+            if !drop_first && *what == "refused by the server" {
+                // Added to the collection: counted.
+                assert_eq!(e.unwrap().failed, 1);
+                run(rt, &c, &db, doc! { "delete": "precious", "deletes": [{ "q": { "_id": { "$gte": 1000 } }, "limit": 0 }] });
+                continue;
+            }
+            let e = format!("{:#}", e.unwrap_err());
+            assert!(e.contains(expected), "{what}, drop {drop_first}: {e}");
+            if *what == "refused by the server" {
+                assert!(e.ends_with("precious was left as it was"), "{e}");
+            }
+            assert_same_db(&snapshot(rt, &c, &db), &before, &format!("{what}, drop {drop_first}"));
+        }
+    }
+    // Duplicates in the file: counted when added, but no replacement by an incomplete copy.
+    let e = rt.block_on(import(&c, &import_options(&db, "precious", dups.clone(), true), never(), |_| {})).unwrap_err().to_string();
+    assert!(e.starts_with("1 document refused (E11000") && e.ends_with(": precious was left as it was"), "{e}");
+    assert_same_db(&snapshot(rt, &c, &db), &before, "duplicates in the file");
+
+    // Cancelled while reading the file, or while writing: left as it was.
+    for phase in ["reading", "writing"] {
+        let cancel = never();
+        let flag = Arc::clone(&cancel);
+        let e = rt.block_on(import(&c, &import_options(&db, "precious", dups.clone(), true), cancel, |p| {
+            if matches!((phase, p), ("reading", Progress::Checked(_)) | ("writing", Progress::Written(_))) {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        let expected = if phase == "reading" { "cancelled: nothing was imported" } else { "cancelled: precious was left as it was" };
+        assert_eq!(e, expected);
+        assert_same_db(&snapshot(rt, &c, &db), &before, &format!("cancelled while {phase}"));
+    }
+    // Without "drop first", a cancel says what was added.
+    let cancel = never();
+    let flag = Arc::clone(&cancel);
+    let e = rt.block_on(import(&c, &import_options(&db, "scratch", dups.clone(), false), cancel, |p| {
+        if matches!(p, Progress::Written(_)) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }))
+    .unwrap_err()
+    .to_string();
+    assert_eq!(e, "cancelled after 1000 documents were imported");
+    assert_eq!(find_all(rt, &c, &db, "scratch").len(), 1000);
+    run(rt, &c, &db, doc! { "drop": "scratch" });
+
+    // Done: replaced by the documents of the file, without the indexes and
+    // options of the old one, like a drop. The view stays.
+    let good = file("good.json", b"{\"_id\":\"a\"}\n{\"_id\":\"b\"}\n".to_vec());
+    let done = rt.block_on(import(&c, &import_options(&db, "precious", good.clone(), true), never(), |_| {})).unwrap();
+    assert_eq!((done.inserted, done.failed), (2, 0));
+    let after = snapshot(rt, &c, &db);
+    assert_eq!(after.keys().collect::<Vec<_>>(), ["precious", "precious_view"], "no temporary collection left");
+    assert_eq!(find_all(rt, &c, &db, "precious"), vec![doc! { "_id": "a" }, doc! { "_id": "b" }]);
+    assert_eq!(after["precious"].indexes.len(), 1);
+    assert_eq!(after["precious"].options, doc! {});
+    assert_eq!(after["precious_view"], before["precious_view"]);
+    // Over a view: a collection takes its place.
+    rt.block_on(import(&c, &import_options(&db, "precious_view", good.clone(), true), never(), |_| {})).unwrap();
+    assert_eq!(snapshot(rt, &c, &db)["precious_view"].kind, "collection");
+    assert_eq!(find_all(rt, &c, &db, "precious_view").len(), 2);
+
+    // Big documents: each batch stays under the size of a command; the
+    // largest document MongoDB takes goes in.
+    let mut big = String::new();
+    for i in 0..15 {
+        big.push_str(&format!("{{\"_id\":{i},\"s\":\"{}\"}}\n", "x".repeat(500 * 1024)));
+    }
+    big.push_str(&format!("{{\"_id\":\"big\",\"s\":\"{}\"}}\n{{\"_id\":\"after\"}}\n", "y".repeat(9 * 1024 * 1024)));
+    let largest = 16 * 1024 * 1024 - bson::to_vec(&doc! { "_id": "largest", "s": "" }).unwrap().len();
+    big.push_str(&format!("{{\"_id\":\"largest\",\"s\":\"{}\"}}\n", "z".repeat(largest)));
+    let path = file("big.json", big.into_bytes());
+    for drop_first in [false, true] {
+        let done = rt.block_on(import(&c, &import_options(&db, "big", path.clone(), drop_first), never(), |_| {})).unwrap();
+        assert_eq!((done.inserted, done.failed), (18, 0), "drop {drop_first}");
+        assert_eq!(find_all(rt, &c, &db, "big").len(), 18);
+        if !drop_first {
+            run(rt, &c, &db, doc! { "drop": "big" });
+        }
+    }
+    run(rt, &c, &db, doc! { "dropDatabase": 1 });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn imports_never_lose_a_collection_on_a_modern_server() {
+    if !live() {
+        return;
+    }
+    import_safety_suite(&rt(), &modern_tools());
+}
+
+#[test]
+fn imports_never_lose_a_collection_on_a_legacy_server() {
+    if !live() {
+        return;
+    }
+    import_safety_suite(&rt(), &legacy_tools());
+}
+
+/// A restore that does not complete leaves the database as it was: a
+/// damaged dump changes nothing; "drop first" replaces a collection only
+/// with its complete copy, and a collection the server refuses is left as
+/// it was while the others are restored.
+fn restore_safety_suite(rt: &tokio::runtime::Runtime, t: &Tools) {
+    use rustyrobo::dump::{DumpOptions, dump, restore};
+    use rustyrobo::transfer::Progress;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let c = open(rt, &t.settings).unwrap();
+    let db = format!("rr_e2e_restore_safety_{}", t.name);
+    let dir = temp(&format!("restore-safety-{}", t.name));
+    seed(rt, &c, &db);
+    let dumped = snapshot(rt, &c, &db);
+    let folder = DumpOptions { db: db.clone(), collections: Vec::new(), dir: dir.clone(), gzip: false, archive: false };
+    let archive = DumpOptions { archive: true, ..folder.clone() };
+    let gz_archive = DumpOptions { archive: true, gzip: true, ..folder.clone() };
+    for o in [&folder, &archive, &gz_archive] {
+        rt.block_on(dump(&c, o, &AtomicBool::new(false), |_| {})).unwrap();
+    }
+    // The database as it is when restored over: changed since the dump.
+    let change = || {
+        run(rt, &c, &db, doc! { "update": "many", "updates": [{ "q": { "_id": 1 }, "u": { "$set": { "email": "changed@x" } } }] });
+        run(rt, &c, &db, doc! { "delete": "types", "deletes": [{ "q": { "_id": "second" }, "limit": 1 }] });
+        insert(rt, &c, &db, "later", &[doc! { "_id": "not in the dump" }]);
+        run(rt, &c, &db, doc! { "collMod": "adults", "viewOn": "many", "pipeline": [{ "$match": { "age": { "$lt": 5 } } }] });
+        if !c.is_legacy() {
+            insert(rt, &c, &db, "ts", &[doc! { "_id": "later", "t": bson::DateTime::from_millis(1_800_000_000_000), "m": "s9", "v": 0.0 }]);
+        }
+    };
+    change();
+    let before = snapshot(rt, &c, &db);
+    let restoring = |from: &std::path::Path, drop_first: bool| rt.block_on(restore(&c, &restore_options(&db, from.to_path_buf(), drop_first), never(), |_| {}));
+
+    // Damaged dumps change nothing, whatever is damaged.
+    let damaged = |name: &str, from: &std::path::Path, change: &dyn Fn(&std::path::Path)| -> std::path::PathBuf {
+        let to = dir.join("damaged").join(name);
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        if from.is_dir() {
+            std::fs::create_dir_all(&to).unwrap();
+            for e in std::fs::read_dir(from).unwrap() {
+                let e = e.unwrap();
+                std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+            }
+        } else {
+            std::fs::copy(from, &to).unwrap();
+        }
+        change(&to);
+        to
+    };
+    let cut = |path: &std::path::Path, n: usize| {
+        let bytes = std::fs::read(path).unwrap();
+        std::fs::write(path, &bytes[..bytes.len() - n]).unwrap();
+    };
+    let archive_bytes = std::fs::read(archive.target()).unwrap();
+    let doc_of_many = bson::to_vec(&find_all(rt, &c, &db, "many")[2000]).unwrap();
+    // In the text of the last field: still a document, another one.
+    let flip_at = archive_bytes.windows(doc_of_many.len()).position(|w| w == doc_of_many).expect("a document of many in the archive") + doc_of_many.len() - 4;
+    let last_eof = archive_bytes.windows(4).rposition(|w| w == [0xff; 4]).unwrap();
+    let cases: Vec<(&str, std::path::PathBuf, &str)> = vec![
+        ("a .bson file cut short", damaged("cut", &folder.target(), &|d| cut(&d.join("many.bson"), 10)), "truncated file"),
+        ("a .bson file with garbage", damaged("garbage", &folder.target(), &|d| std::fs::write(d.join("capped.bson"), b"\x10\x00\x00\x00garbage!!!!!").unwrap()), "capped.bson"),
+        ("a metadata file that is not JSON", damaged("metadata", &folder.target(), &|d| std::fs::write(d.join("adults.metadata.json"), "{ nope").unwrap()), "invalid JSON"),
+        ("an archive with a changed byte", damaged("flipped.archive", &archive.target(), &|p| {
+            let mut b = std::fs::read(p).unwrap();
+            b[flip_at] ^= 0x01;
+            std::fs::write(p, b).unwrap();
+        }), "many"),
+        ("an archive cut between two blocks", damaged("cut.archive", &archive.target(), &|p| std::fs::write(p, &archive_bytes[..last_eof - 60]).unwrap()), "truncated"),
+        ("a gzipped archive cut short", damaged("cut.archive.gz", &gz_archive.target(), &|p| cut(p, 100)), "archive"),
+    ];
+    for (what, from, expected) in &cases {
+        for drop_first in [true, false] {
+            let e = format!("{:#}", restoring(from, drop_first).unwrap_err());
+            assert!(e.contains(expected), "{what}, drop {drop_first}: {e}");
+            assert_same_db(&snapshot(rt, &c, &db), &before, &format!("{what}, drop {drop_first}"));
+        }
+    }
+
+    // Cancelled while reading the dump, or while writing: left as it was.
+    for from in [folder.target(), archive.target()] {
+        for phase in ["reading", "writing"] {
+            let cancel = never();
+            let flag = Arc::clone(&cancel);
+            let e = rt
+                .block_on(restore(&c, &restore_options(&db, from.clone(), true), cancel, |p| {
+                    if matches!((phase, p), ("reading", Progress::Checked(_)) | ("writing", Progress::Written(_))) {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }))
+                .unwrap_err()
+                .to_string();
+            assert!(e.starts_with("cancelled"), "{e}");
+            let restored = snapshot(rt, &c, &db);
+            for (name, kept) in &before {
+                // What was restored before the cancel is as dumped, the rest as it was.
+                assert!(restored.get(name) == Some(kept) || dumped.get(name) == restored.get(name), "cancelled while {phase}: {name} is neither as it was nor as dumped");
+            }
+            assert!(restored.keys().all(|k| !k.contains(".rr-tmp-")), "no temporary collection left: {:?}", restored.keys());
+            if restored != before {
+                seed(rt, &c, &db);
+                change();
+                assert_same_db(&snapshot(rt, &c, &db), &before, "state before, made again");
+            }
+        }
+    }
+
+    // The server refuses a collection: it is left as it was, the others are restored.
+    let refusals: Vec<(&str, std::path::PathBuf, &str, &str)> = vec![
+        ("options the server refuses", damaged("options", &folder.target(), &|d| std::fs::write(d.join("many.metadata.json"), r#"{"options":{"capped":true},"indexes":[],"collectionName":"many","type":"collection"}"#).unwrap()), "many", "InvalidOptions"),
+        ("a document refused", damaged("dup", &folder.target(), &|d| {
+            let mut bytes = std::fs::read(d.join("many.bson")).unwrap();
+            bytes.extend(bson::to_vec(&doc! { "_id": 5, "email": "dup@x" }).unwrap());
+            std::fs::write(d.join("many.bson"), bytes).unwrap();
+        }), "many", "1 document refused (E11000"),
+        ("an index the documents break", damaged("index", &folder.target(), &|d| {
+            let path = d.join("many.metadata.json");
+            let text = std::fs::read_to_string(&path).unwrap().replace(r#""name":"sparse""#, r#""name":"sparse","unique":true"#);
+            std::fs::write(path, text).unwrap();
+        }), "many", "indexes: "),
+    ];
+    for (what, from, coll, expected) in &refusals {
+        let r = restoring(from, true).unwrap();
+        assert_eq!(r.problems.len(), 1, "{what}: {}", r.summary());
+        assert!(r.problems[0].starts_with(&format!("{coll}: ")) && r.problems[0].contains(expected) && r.problems[0].ends_with("left as it was"), "{what}: {}", r.problems[0]);
+        assert!(r.incomplete());
+        let after = snapshot(rt, &c, &db);
+        for (name, kept) in &after {
+            let expected = if name == coll || name == "later" { &before[name] } else { &dumped[name] };
+            assert_eq!(kept, expected, "{what}: {name}");
+        }
+        assert_eq!(after.keys().collect::<Vec<_>>(), before.keys().collect::<Vec<_>>(), "{what}");
+    }
+
+    // Complete: as dumped, and what the dump does not hold stays.
+    for from in [folder.target(), archive.target(), gz_archive.target()] {
+        let r = restoring(&from, true).unwrap();
+        assert!(!r.incomplete(), "{}", r.summary());
+        let mut expected = dumped.clone();
+        expected.insert("later".into(), before["later"].clone());
+        assert_same_db(&snapshot(rt, &c, &db), &expected, &format!("restored from {}", from.display()));
+    }
+    // Without "drop first": added to what is there, the duplicates and the
+    // views that exist told.
+    let r = restoring(&folder.target(), false).unwrap();
+    assert!(r.incomplete());
+    assert_eq!(r.docs.inserted, 0, "{}", r.summary());
+    if c.is_legacy() {
+        assert!(r.problems.contains(&"adults: exists, left as it was".to_string()), "{:?}", r.problems);
+    }
+    // The duplicate key error of a collation is not UTF-8 on 4.2: the
+    // collection is told, the others restored.
+    let collated = r.problems.iter().filter(|p| p.starts_with("collated: ")).count();
+    assert_eq!(r.problems.len(), collated + usize::from(c.is_legacy()), "{:?}", r.problems);
+
+    run(rt, &c, &db, doc! { "dropDatabase": 1 });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restores_never_lose_a_collection_on_a_modern_server() {
+    if !live() {
+        return;
+    }
+    restore_safety_suite(&rt(), &modern_tools());
+}
+
+#[test]
+fn restores_never_lose_a_collection_on_a_legacy_server() {
+    if !live() {
+        return;
+    }
+    restore_safety_suite(&rt(), &legacy_tools());
+}
+
+/// The dumps of each mongodump, also of another server version: the names
+/// of their files read right, what the server cannot take reported.
+#[test]
+fn dumps_of_each_mongodump_are_restored() {
+    if !live() {
+        return;
+    }
+    use rustyrobo::dump::restore;
+    let rt = rt();
+    let fixture = |p: &str| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(p);
+    for t in [modern_tools(), legacy_tools()] {
+        let c = open(&rt, &t.settings).unwrap();
+        let db = format!("rr_e2e_fixtures_{}", t.name);
+        for tool in ["mongodb-8", "mongodb-7", "mongodb-4.2"] {
+            for from in ["rr_fixture", "gzip/rr_fixture", "rr_fixture.archive", "rr_fixture.archive.gz"] {
+                let what = format!("{tool}/{from} into {}", t.name);
+                run(&rt, &c, &db, doc! { "dropDatabase": 1 });
+                // "x y" is another collection than "x+y": a 4.2 dump writes "x+y" as it is.
+                insert(&rt, &c, &db, "x y", &[doc! { "_id": "other" }]);
+                let r = rt.block_on(restore(&c, &restore_options(&db, fixture(&format!("{tool}/{from}")), true), never(), |_| {})).unwrap();
+                let s = snapshot(&rt, &c, &db);
+                assert_eq!(find_all(&rt, &c, &db, "x y"), vec![doc! { "_id": "other" }], "{what}");
+                assert_eq!(find_all(&rt, &c, &db, "x+y").len(), 1, "{what}");
+                assert_eq!(find_all(&rt, &c, &db, "a/b c").len(), 1, "{what}");
+                assert_eq!(find_all(&rt, &c, &db, "users").len(), 3, "{what}");
+                assert_eq!(s["users"].indexes.len(), 3, "{what}");
+                assert_eq!(s["adults"].kind, "view", "{what}");
+                assert_eq!(s["capped"].options.get_bool("capped"), Ok(true), "{what}");
+                assert_eq!(find_all(&rt, &c, &db, "system.js").len(), 1, "{what}");
+                if tool != "mongodb-4.2" && c.is_legacy() {
+                    // No time series before MongoDB 5.0.
+                    assert_eq!(r.problems.len(), 1, "{what}: {}", r.summary());
+                    assert!(r.problems[0].starts_with("ts: "), "{what}: {}", r.problems[0]);
+                    assert!(!s.contains_key("ts"));
+                } else {
+                    assert!(r.problems.is_empty(), "{what}: {}", r.summary());
+                }
+                if tool != "mongodb-4.2" && !c.is_legacy() {
+                    let ts = find_all(&rt, &c, &db, "ts");
+                    assert_eq!(ts.iter().map(|d| d.get_f64("v").unwrap_or_else(|_| d.get_i32("v").unwrap() as f64)).collect::<Vec<_>>(), [1.0, 2.0, 3.0], "{what}: the measurements of the buckets");
+                }
+            }
+        }
+        run(&rt, &c, &db, doc! { "dropDatabase": 1 });
+    }
+}
+
+/// With the privileges of readWrite only: what needs more (documents
+/// against their validator, buckets of time series before MongoDB 8.2) is
+/// refused before anything is dropped.
+#[test]
+fn restores_with_read_write_privileges_only() {
+    if !live() {
+        return;
+    }
+    use rustyrobo::dump::{DumpOptions, dump, restore};
+    let rt = rt();
+    let admin = open(&rt, &mongo8()).unwrap();
+    let db = "rr_e2e_read_write";
+    seed(&rt, &admin, db);
+    let dir = temp("read-write");
+    let o = DumpOptions { db: db.into(), collections: Vec::new(), dir: dir.clone(), gzip: false, archive: false };
+    rt.block_on(dump(&admin, &o, &std::sync::atomic::AtomicBool::new(false), |_| {})).unwrap();
+    let before = snapshot(&rt, &admin, db);
+    let _ = rt.block_on(admin.run_command(db, doc! { "dropUser": "rr_rw" }, None));
+    run(&rt, &admin, db, doc! { "createUser": "rr_rw", "pwd": "pw", "roles": [{ "role": "readWrite", "db": db }] });
+    let mut s = mongo8();
+    s.credentials.database = db.into();
+    s.credentials.username = "rr_rw".into();
+    s.credentials.password = "pw".into();
+    let rw = open(&rt, &s).unwrap();
+
+    let r = rt.block_on(restore(&rw, &restore_options(db, o.target(), true), never(), |_| {})).unwrap();
+    let after = snapshot(&rt, &admin, db);
+    // The document its validator refuses keeps the collection as it was.
+    assert!(r.problems.iter().any(|p| p.starts_with("valid: 1 document refused (Document failed validation") && p.ends_with("left as it was")), "{:?}", r.problems);
+    assert_eq!(after["valid"], before["valid"]);
+    if at_least(&rw, 8, 2) {
+        assert!(!r.problems.iter().any(|p| p.starts_with("ts:")), "rawData takes the buckets: {:?}", r.problems);
+    } else {
+        assert!(r.problems.iter().any(|p| p.starts_with("ts: Unauthorized")), "{:?}", r.problems);
+    }
+    assert_eq!(after["ts"].docs, before["ts"].docs, "the time series is never lost");
+    assert_eq!(after.len(), before.len());
+
+    // A dump made with readWrite: the measurements of the time series,
+    // when its buckets cannot be read, restored all the same.
+    let o = DumpOptions { dir: dir.join("rw"), ..o };
+    std::fs::create_dir_all(&o.dir).unwrap();
+    rt.block_on(dump(&rw, &o, &std::sync::atomic::AtomicBool::new(false), |_| {})).unwrap();
+    let copy = "rr_e2e_read_write_copy";
+    run(&rt, &admin, copy, doc! { "dropDatabase": 1 });
+    let r = rt.block_on(restore(&admin, &restore_options(copy, o.target(), true), never(), |_| {})).unwrap();
+    assert!(r.problems.is_empty(), "{}", r.summary());
+    // Put in buckets again, the measurements come back with their fields in
+    // another order.
+    let fields_in_order = |docs: &[Vec<u8>]| -> Vec<Vec<(String, Bson)>> {
+        docs.iter()
+            .map(|raw| {
+                let mut fields: Vec<(String, Bson)> = bson::Document::from_reader(raw.as_slice()).unwrap().into_iter().collect();
+                fields.sort_by(|a, b| a.0.cmp(&b.0));
+                fields
+            })
+            .collect()
+    };
+    assert_eq!(fields_in_order(&snapshot(&rt, &admin, copy)["ts"].docs), fields_in_order(&before["ts"].docs));
+    drop(rw);
+    run(&rt, &admin, db, doc! { "dropUser": "rr_rw" });
+    for d in [db, copy] {
+        run(&rt, &admin, d, doc! { "dropDatabase": 1 });
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn run_command_works_like_in_the_mongo_shell() {
     if !live() {
