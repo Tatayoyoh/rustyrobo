@@ -1,15 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 ### Added
-- Import and export: "Export Collection…" and "Import Documents…" in the menu of a collection, "Import Collection…" in the menus of a database
-- Dump and restore database
+- Import and export of collections and query results in JSON (one document per line or an array, relaxed or canonical Extended JSON) and CSV (chosen fields, delimiter, nested fields as `a.b`, type detection on import): "Export Collection…" and "Import Documents…" in the menu of a collection, "Import Collection…" in the menus of a database, "Export" in the results. The folder and format of the last export are proposed
+- Dump and restore of databases in the formats of mongodump, folder or archive, gzip optional, without the MongoDB tools: options, indexes, views and time series, chosen collections, into another database. mongorestore reads these dumps, and the restore reads those of mongodump 4.2 and 100
 - Imports and restores keep your data safe: the whole file or dump is read before anything is written, so a damaged one changes nothing; "Drop first" fills a new collection that replaces the old one only once complete, so a failure, a refused document or a cancel leaves it as it was. A collection the server refuses is reported and the others are restored; "Done, but not completely" tells what was not
-- Restore reads the dumps of each mongodump: names with `+` or spaces of mongodump 4.2 and 100, time series buckets as both name them, archives cut short (refused)
-- Quitting while an import, export, dump or restore runs asks first, telling what stopping each one leaves; "Stop and Quit" waits for them to put back what they were replacing. An update installed meanwhile restarts only then
-- Query history in File > Query History… or (Ctrl+H)
-- Table and tree views: double-click a value for inline edit
+- Quitting while an import, export, dump or restore runs asks first, telling what stopping each one leaves; "Stop and Quit" waits for them to put back what they were replacing
+- Query history in File > Query History… (Ctrl+H): every executed script with its connection and database, searchable, opened again in a new shell
+- Table and tree views: double-click a value to edit it in place
 - Context menus: icons, and action words coloured by kind (create, edit, delete)
 
 ### Fixed
