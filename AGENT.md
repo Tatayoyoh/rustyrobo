@@ -108,6 +108,8 @@ Key design rules:
 - `db.runCommand()` returns the `{ ok: 0, ... }` reply of a refused command, like the mongo shell (`__runCommand`). The shell's own
   helpers go through `__cmd`, which throws it.
 - Statement splitting is heuristic; chunks that fail to parse are merged with the next one.
+- The test servers need `ulimits: nofile: 64000` (`dev/docker-compose.yml`): with the soft limit of
+  1024 of some Docker set-ups, WiredTiger runs out of files during the live tests and mongod aborts.
 - Theme colours must pass the WCAG checks in `theme::tests` (text ≥ 4.5:1, syntax ≥ 3:1).
 
 ## Conventions

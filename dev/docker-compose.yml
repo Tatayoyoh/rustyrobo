@@ -9,6 +9,9 @@ services:
     image: ${MONGO_MODERN_IMAGE:-mongo:8}
     container_name: rr-mongo8
     ports: ["27117:27017"]
+    # WiredTiger keeps a file open per collection and index: the soft limit
+    # of 1024 of some Docker set-ups crashes mongod (MongoDB advises 64000).
+    ulimits: { nofile: 64000 }
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: secret
@@ -22,6 +25,7 @@ services:
     image: mongo:4.2
     container_name: rr-mongo42
     ports: ["27142:27017"]
+    ulimits: { nofile: 64000 }
     healthcheck:
       test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 3s
