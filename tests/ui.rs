@@ -1118,7 +1118,7 @@ fn transfers_tell_when_they_read_and_when_they_write() {
     h.get_by_label("Close").click();
     h.run_steps(2);
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    h.state_mut().transfers.push(rustyrobo::app::Transfer { id: 99, label: "Import into shop.orders".into(), done: Progress::Checked(1500), cancel: cancel.clone() });
+    h.state_mut().transfers.push(rustyrobo::app::Transfer { id: 99, label: "Import into shop.orders".into(), done: Progress::Checked(1500), cancel: cancel.clone(), stop: "" });
     h.run_steps(2);
     assert!(has_label(&h, "Import into shop.orders: reading the file, 1500 documents"), "nothing is written while the file is read");
     h.state_mut().transfers[0].done = Progress::Written(1000);
@@ -1130,6 +1130,145 @@ fn transfers_tell_when_they_read_and_when_they_write() {
     h.query_all_by_label(icon::X).min_by(|a, b| distance(a).total_cmp(&distance(b))).unwrap().click();
     h.run_steps(2);
     assert!(cancel.load(std::sync::atomic::Ordering::Relaxed), "cancelled from the status bar");
+}
+
+/// Asks the window to close, as its close button, Exit or Ctrl+Q do.
+fn request_close(h: &mut Harness<'_, App>) {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+}
+
+fn sent(h: &Harness<'_, App>, command: &egui::ViewportCommand) -> bool {
+    h.output().viewport_output.values().any(|v| v.commands.contains(command))
+}
+
+/// The app without its connection manager.
+fn closed_manager_harness() -> Harness<'static, App> {
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    h
+}
+
+/// A transfer as the app runs it, and its cancel flag.
+fn running(h: &mut Harness<'_, App>, id: u64, label: &str, done: rustyrobo::transfer::Progress, stop: &'static str) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    h.state_mut().transfers.push(rustyrobo::app::Transfer { id, label: label.into(), done, cancel: cancel.clone(), stop });
+    cancel
+}
+
+fn transfer_over(h: &mut Harness<'_, App>, id: u64) {
+    let done = rustyrobo::app::AppEvent::TransferDone { id, server: 0, result: Err("cancelled: nothing was imported".into()), warning: false, refresh: rustyrobo::app::Refresh::None };
+    h.state().tx.send(done).unwrap();
+}
+
+#[test]
+fn quitting_during_a_transfer_asks_first() {
+    use rustyrobo::transfer::Progress;
+    use std::sync::atomic::Ordering;
+    let _env = env("quit-transfer", &AppSettings::default());
+    let mut h = closed_manager_harness();
+    let cancel_close = egui::ViewportCommand::CancelClose;
+
+    // Nothing running: it closes.
+    request_close(&mut h);
+    assert!(!sent(&h, &cancel_close));
+    assert!(h.state().quit.is_none());
+
+    // Transfers running: asked first, with what stopping each one leaves.
+    let import = running(&mut h, 101, "Import into shop.orders", Progress::Written(1000), "Stopped, it leaves the collection as it was.");
+    let restore = running(&mut h, 102, "Restore shop", Progress::Checked(10), "Stopped, it keeps the documents already restored.");
+    request_close(&mut h);
+    assert!(sent(&h, &cancel_close), "the close is cancelled");
+    h.run_steps(2);
+    assert!(has_label(&h, "Quit Rustyrobo?") && has_label(&h, "2 transfers are not done:"));
+    assert!(has_label(&h, "Import into shop.orders") && has_label(&h, "Stopped, it leaves the collection as it was."));
+    assert!(has_label(&h, "Restore shop") && has_label(&h, "Nothing is written yet: it reads its file."), "still reading its dump");
+
+    // Kept running: Escape, or Cancel.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().quit.is_none() && !has_label(&h, "Quit Rustyrobo?"));
+    request_close(&mut h);
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().quit.is_none());
+    assert!(!import.load(Ordering::Relaxed) && !restore.load(Ordering::Relaxed), "not stopped");
+    assert_eq!(h.state().transfers.len(), 2);
+
+    // Stop and Quit: stopped, then closed once they are over.
+    request_close(&mut h);
+    h.run_steps(2);
+    h.get_by_label("Stop and Quit").click();
+    h.run_steps(2);
+    assert!(import.load(Ordering::Relaxed) && restore.load(Ordering::Relaxed), "both stopped");
+    assert!(has_label(&h, "Stopping the transfers…"));
+    assert!(!sent(&h, &egui::ViewportCommand::Close), "they put back what they changed first");
+    transfer_over(&mut h, 101);
+    h.run_steps(2);
+    assert!(!sent(&h, &egui::ViewportCommand::Close), "one is still ending");
+    transfer_over(&mut h, 102);
+    h.run_steps(2);
+    assert!(sent(&h, &egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none(), "what they say when they stop goes to the logs only");
+    assert!(h.state().logs.iter().any(|l| l.text.starts_with("Restore shop: cancelled")));
+    request_close(&mut h);
+    assert!(!sent(&h, &cancel_close), "this time it closes");
+}
+
+#[test]
+fn quitting_can_be_forced_while_transfers_stop() {
+    use rustyrobo::transfer::Progress;
+    let _env = env("quit-now", &AppSettings::default());
+    let mut h = closed_manager_harness();
+    // A dialog open under the question stays when the quit is cancelled.
+    h.state_mut().actions.push(rustyrobo::app::Action::Dialog(rustyrobo::ui::dialogs::Dialog::export(1, "shop", "orders")));
+    h.run_steps(2);
+    let _cancel = running(&mut h, 7, "Export shop.orders", Progress::Written(5), "Stopped, it leaves an incomplete file.");
+    request_close(&mut h);
+    h.run_steps(2);
+    assert!(has_label(&h, "A transfer is not done:") && has_label(&h, "Stopped, it leaves an incomplete file."));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().quit.is_none());
+    assert!(matches!(h.state().dialog, Some(rustyrobo::ui::dialogs::Dialog::Export(_))), "the export dialog is still open");
+
+    // Quit Now, without waiting.
+    request_close(&mut h);
+    h.run_steps(2);
+    h.get_by_label("Stop and Quit").click();
+    h.run_steps(2);
+    h.get_by_label("Quit Now").click();
+    h.run_steps(1);
+    assert!(sent(&h, &egui::ViewportCommand::Close));
+    // Or after a while, when a transfer does not end.
+    h.state_mut().quit = Some(rustyrobo::app::Quit { stopping: Instant::now().checked_sub(rustyrobo::app::QUIT_WAIT + Duration::from_secs(1)) });
+    h.run_steps(1);
+    assert!(sent(&h, &egui::ViewportCommand::Close));
+    // A close asked again while they stop is not cancelled.
+    request_close(&mut h);
+    assert!(!sent(&h, &egui::ViewportCommand::CancelClose));
+}
+
+#[test]
+fn an_update_waits_for_the_transfers_to_restart() {
+    use rustyrobo::transfer::Progress;
+    let _env = env("update-transfer", &AppSettings::default());
+    let mut h = closed_manager_harness();
+    h.state_mut().update_target = Some("/no/such/program".into());
+    let _cancel = running(&mut h, 8, "Dump shop", Progress::Written(5), "Stopped, it leaves an incomplete dump.");
+    h.state().tx.send(rustyrobo::app::AppEvent::UpdateInstalled(Ok(()))).unwrap();
+    h.step();
+    assert!(sent(&h, &egui::ViewportCommand::Close) && h.state().restart_on_quit, "started once the user quits");
+    request_close(&mut h);
+    h.run_steps(2);
+    assert!(has_label(&h, "Dump shop"));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(!h.state().restart_on_quit, "no restart later on");
+    assert!(h.state().logs.iter().any(|l| l.text.contains("the new version starts with the next launch")));
 }
 
 // -------------------------------------------------------- fonts and RTL
@@ -2258,6 +2397,46 @@ fn live_restore_that_is_not_complete_says_so() {
     };
     assert!(message.starts_with("Done, but not completely:") && message.contains("1 collection restored") && message.contains("bad: ") && message.ends_with("left as it was"), "{message}");
     assert!(has_label(&h, "Done, but not completely"));
+}
+
+#[test]
+fn live_quitting_during_an_import_leaves_the_collection_as_it_was() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let env = env("live-quit-import", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    let conn = h.state().servers[0].conn().cloned().unwrap();
+    let run = |h: &Harness<'_, App>, cmd: bson::Document| h.state().rt.block_on(conn.run_command("rrui_quit", cmd, None)).unwrap();
+    run(&h, doc! { "dropDatabase": 1 });
+    run(&h, doc! { "insert": "precious", "documents": [{ "_id": 1 }, { "_id": 2 }, { "_id": 3 }] });
+    let file = env.dir.join("big.json");
+    std::fs::write(&file, (0..300_000).map(|i| format!("{{\"_id\":{i},\"s\":\"some text\"}}\n")).collect::<String>()).unwrap();
+    let opts = rustyrobo::transfer::ImportOptions {
+        db: "rrui_quit".into(),
+        coll: "precious".into(),
+        format: rustyrobo::transfer::Format::JsonLines,
+        delimiter: Default::default(),
+        detect_types: true,
+        drop_first: true,
+        path: file,
+    };
+    h.state_mut().actions.push(rustyrobo::app::Action::Import { server: sid, opts: Box::new(opts) });
+    wait_until(&mut h, "writing", Duration::from_secs(30), |h| h.state().transfers.first().is_some_and(|t| matches!(t.done, rustyrobo::transfer::Progress::Written(n) if n > 0)));
+    request_close(&mut h);
+    h.run_steps(2);
+    assert!(has_label(&h, "Stopped, it leaves the collection as it was."));
+    h.get_by_label("Stop and Quit").click();
+    wait_until(&mut h, "quit", Duration::from_secs(15), |h| sent(h, &egui::ViewportCommand::Close));
+    let collections = run(&h, doc! { "listCollections": 1, "nameOnly": true });
+    let names: Vec<String> = collections.get_document("cursor").unwrap().get_array("firstBatch").unwrap().iter().map(|c| c.as_document().unwrap().get_str("name").unwrap().to_string()).collect();
+    assert_eq!(names, vec!["precious"], "no temporary collection left");
+    let count = run(&h, doc! { "count": "precious" });
+    assert_eq!(count.get_i32("n").ok().map(i64::from).or(count.get_i64("n").ok()), Some(3), "as it was");
+    run(&h, doc! { "dropDatabase": 1 });
 }
 
 #[test]

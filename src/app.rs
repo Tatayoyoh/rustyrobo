@@ -220,6 +220,14 @@ pub struct Transfer {
     pub label: String,
     pub done: Progress,
     pub cancel: Arc<AtomicBool>,
+    /// What stopping it once it writes leaves, told before quitting.
+    pub stop: &'static str,
+}
+
+/// Quitting while transfers run, once confirmed.
+pub struct Quit {
+    /// Since when the transfers stopped to quit are ending.
+    pub stopping: Option<Instant>,
 }
 
 pub struct App {
@@ -242,6 +250,10 @@ pub struct App {
     pending_script: Option<ScriptToOpen>,
     pub conn_editor: Option<ConnectionEditor>,
     pub dialog: Option<Dialog>,
+    /// Asked before quitting while transfers run, on top of any dialog.
+    pub quit: Option<Quit>,
+    /// An update waits for the transfers to stop: started when quitting.
+    pub restart_on_quit: bool,
     pub toast: Option<(String, Instant, LogLevel)>,
     next_id: u64,
     theme_name: String,
@@ -265,6 +277,8 @@ pub struct App {
 }
 
 pub const FIND_LIMIT_STATUS: Duration = Duration::from_secs(4);
+/// Longest wait, when quitting, for the stopped transfers to end.
+pub const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -301,6 +315,8 @@ impl App {
             pending_script: None,
             conn_editor: None,
             dialog: None,
+            quit: None,
+            restart_on_quit: false,
             toast: None,
             next_id: 1,
             system_dark,
@@ -413,15 +429,23 @@ impl App {
         self.install = crate::update::Install::Idle;
     }
 
-    /// Starts the new program and closes this one.
+    /// Starts the new program and closes this one. While transfers run, the
+    /// new one starts only once the user has chosen to stop them and quit.
     fn restart(&mut self) {
-        let started = self.update_target.as_ref().ok_or_else(|| "unknown path".to_string()).and_then(|exe| {
-            std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn().map_err(|e| e.to_string())
-        });
-        match started {
+        if !self.transfers.is_empty() {
+            self.restart_on_quit = true;
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        match self.start_new_program() {
             Ok(_) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(e) => self.install = crate::update::Install::Failed(format!("Updated, but could not restart: {e}. Restart Rustyrobo to use the new version.")),
         }
+    }
+
+    fn start_new_program(&self) -> Result<(), String> {
+        let exe = self.update_target.as_ref().ok_or_else(|| "unknown path".to_string())?;
+        std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
 
     // ------------------------------------------------------------ events
@@ -645,11 +669,15 @@ impl App {
                     Some(i) => self.transfers.remove(i).label,
                     None => return,
                 };
+                // Stopped to quit: in the logs only.
+                let quitting = self.quit.as_ref().is_some_and(|q| q.stopping.is_some());
                 match result {
                     // Not all of it: shown until read.
                     Ok(msg) if warning => {
                         self.log(LogLevel::Warn, format!("{label}: {msg}"));
-                        self.dialog = Some(Dialog::message(&label, format!("Done, but not completely:\n\n{msg}")));
+                        if !quitting {
+                            self.dialog = Some(Dialog::message(&label, format!("Done, but not completely:\n\n{msg}")));
+                        }
                     }
                     Ok(msg) => {
                         self.log(LogLevel::Info, format!("{label}: {msg}"));
@@ -657,7 +685,9 @@ impl App {
                     }
                     Err(e) => {
                         self.log(LogLevel::Error, format!("{label}: {e}"));
-                        self.dialog = Some(Dialog::message(&label, format!("Operation failed:\n\n{e}")));
+                        if !quitting {
+                            self.dialog = Some(Dialog::message(&label, format!("Operation failed:\n\n{e}")));
+                        }
                     }
                 }
                 self.refresh(server, refresh);
@@ -1035,10 +1065,10 @@ impl App {
         }
     }
 
-    fn start_transfer(&mut self, label: String) -> (u64, Arc<AtomicBool>, impl Fn(Progress) + Send + 'static) {
+    fn start_transfer(&mut self, label: String, stop: &'static str) -> (u64, Arc<AtomicBool>, impl Fn(Progress) + Send + 'static) {
         let id = self.next_id();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.transfers.push(Transfer { id, label, done: Progress::Written(0), cancel: Arc::clone(&cancel) });
+        self.transfers.push(Transfer { id, label, done: Progress::Written(0), cancel: Arc::clone(&cancel), stop });
         let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
         let progress = move |n| {
             let _ = tx.send(AppEvent::TransferProgress(id, n));
@@ -1062,7 +1092,7 @@ impl App {
         let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
         let label = format!("Export {}.{}", opts.db, opts.coll);
         self.log(LogLevel::Info, format!("{label} to {}…", opts.path.display()));
-        let (id, cancel, progress) = self.start_transfer(label);
+        let (id, cancel, progress) = self.start_transfer(label, "Stopped, it leaves an incomplete file.");
         self.spawn(async move {
             let result = crate::transfer::export(&conn, &opts, &cancel, |n| progress(Progress::Written(n)))
                 .await
@@ -1076,7 +1106,8 @@ impl App {
         let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
         let label = format!("Import into {}.{}", opts.db, opts.coll);
         self.log(LogLevel::Info, format!("{label} from {}…", opts.path.display()));
-        let (id, cancel, progress) = self.start_transfer(label);
+        let stop = if opts.drop_first { "Stopped, it leaves the collection as it was." } else { "Stopped, it keeps the documents already imported." };
+        let (id, cancel, progress) = self.start_transfer(label, stop);
         let refresh = Refresh::Collections(opts.db.clone());
         self.spawn(async move {
             let result = crate::transfer::import(&conn, &opts, cancel, progress).await;
@@ -1100,7 +1131,7 @@ impl App {
         let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
         let label = format!("Dump {}", opts.db);
         self.log(LogLevel::Info, format!("{label} to {}…", opts.target().display()));
-        let (id, cancel, progress) = self.start_transfer(label);
+        let (id, cancel, progress) = self.start_transfer(label, "Stopped, it leaves an incomplete dump.");
         self.spawn(async move {
             let result = crate::dump::dump(&conn, &opts, &cancel, |n| progress(Progress::Written(n)))
                 .await
@@ -1115,7 +1146,12 @@ impl App {
         let Some(conn) = self.server(server).and_then(|s| s.conn().cloned()) else { return };
         let label = format!("Restore {}", opts.db);
         self.log(LogLevel::Info, format!("{label} from {}…", opts.from.display()));
-        let (id, cancel, progress) = self.start_transfer(label);
+        let stop = if opts.drop_first {
+            "Stopped, it leaves the collections not restored yet as they were."
+        } else {
+            "Stopped, it keeps the documents already restored."
+        };
+        let (id, cancel, progress) = self.start_transfer(label, stop);
         let refresh = Refresh::Collections(opts.db.clone());
         self.spawn(async move {
             let result = crate::dump::restore(&conn, &opts, cancel, progress).await;
@@ -1494,7 +1530,38 @@ pub fn tab_title(script: &str) -> String {
     if first.chars().count() > 28 { format!("{t}…") } else { t }
 }
 
+impl App {
+    /// Asks before quitting while transfers run, and once asked to stop
+    /// them, quits when they are over: a transfer stopped halfway puts back
+    /// what it changed (the new collection of a replacement) first.
+    fn confirm_quit(&mut self, ctx: &egui::Context) {
+        let requested = ctx.input(|i| i.viewport().close_requested());
+        match self.quit.as_ref().and_then(|q| q.stopping) {
+            // A request now is this one, or the user insisting: it closes.
+            Some(since) => {
+                if !requested && (self.transfers.is_empty() || since.elapsed() > QUIT_WAIT) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+            None if requested && !self.transfers.is_empty() => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.quit = Some(Quit { stopping: None });
+                // Seen also when closed from the taskbar.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            None => {}
+        }
+    }
+}
+
 impl eframe::App for App {
+    /// Also called while the window is hidden.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.confirm_quit(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_events();
@@ -1505,6 +1572,7 @@ impl eframe::App for App {
         crate::ui::favorites::show(self, &ctx);
         crate::ui::history::show(self, &ctx);
         crate::ui::dialogs::show(self, &ctx);
+        crate::ui::dialogs::quit(self, &ctx);
         crate::autotest::tick(self, &ctx);
         self.process_actions();
         if self.tabs.iter().any(|t| t.running) || !self.transfers.is_empty() || self.servers.iter().any(|s| matches!(s.status, ServerStatus::Connecting)) {
@@ -1527,6 +1595,9 @@ impl eframe::App for App {
             if let Some(c) = s.conn() {
                 c.shutdown();
             }
+        }
+        if self.restart_on_quit {
+            let _ = self.start_new_program();
         }
     }
 }

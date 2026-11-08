@@ -120,6 +120,10 @@ Key design rules:
 - mongodump names the buckets of a time series `system.buckets.<name>` when the server has no
   `rawData` (before MongoDB 8.2), `<name>` since; mongorestore 100.20 goes by the server version of
   the archive. Dump and restore follow both.
+- Every close (window button, Exit, Ctrl+Q, the restart after an update) is a `close_requested` of
+  the root viewport: `App::confirm_quit` cancels it while transfers run. It runs in
+  `eframe::App::logic`, which is also called while the window is hidden. Tests send
+  `ViewportEvent::Close` through `Harness::input_mut`.
 - The test servers need `ulimits: nofile: 64000` (`dev/docker-compose.yml`): with the soft limit of
   1024 of some Docker set-ups, WiredTiger runs out of files during the live tests and mongod aborts.
 - Theme colours must pass the WCAG checks in `theme::tests` (text ≥ 4.5:1, syntax ≥ 3:1).

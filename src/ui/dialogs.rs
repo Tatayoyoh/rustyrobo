@@ -8,13 +8,13 @@ use bson::{Bson, Document, doc};
 use egui::{FontId, Id, RichText, Ui};
 use uuid::Uuid;
 
-use crate::app::{Action, App, Refresh};
+use crate::app::{Action, App, Quit, Refresh};
 use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
 use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, ExportDefaults, SshAuthMethod};
 use crate::shell::{QuerySpec, parse_shell_value};
 use crate::dump::{DumpEntry, DumpOptions, RestoreOptions};
-use crate::transfer::{Delimiter, ExportOptions, Format, ImportOptions};
+use crate::transfer::{Delimiter, ExportOptions, Format, ImportOptions, Progress};
 use crate::ui::icon;
 use crate::update::{Install, Os, Release};
 
@@ -1382,6 +1382,72 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.dialog = Some(dlg);
     }
     app.actions.extend(actions);
+}
+
+/// Asked before quitting while transfers run (see `App::confirm_quit`):
+/// what stopping each one leaves; then waits for them to end.
+pub fn quit(app: &mut App, ctx: &egui::Context) {
+    let Some(q) = &app.quit else { return };
+    let stopping = q.stopping.is_some();
+    let theme = app.theme;
+    // Quit, or keep the transfers running.
+    let mut choice: Option<bool> = None;
+    let mut now = false;
+    let resp = egui::Modal::new(Id::new("quit-dialog")).show(ctx, |ui| {
+        ui.set_max_width(520.0);
+        title(ui, "Quit Rustyrobo?");
+        if stopping {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Stopping the transfers…");
+            });
+            ui.label(RichText::new("Rustyrobo quits once they have ended their batch and put back what they were replacing.").small().color(theme.text_weak));
+            now = close_button(ui, "Quit Now");
+            return;
+        }
+        match app.transfers.len() {
+            0 => ui.label("The transfers are over."),
+            1 => ui.label("A transfer is not done:"),
+            n => ui.label(format!("{n} transfers are not done:")),
+        };
+        for t in &app.transfers {
+            ui.add_space(4.0);
+            ui.label(RichText::new(&t.label).strong());
+            let what = match t.done {
+                Progress::Checked(_) => "Nothing is written yet: it reads its file.",
+                Progress::Written(_) => t.stop,
+            };
+            ui.label(RichText::new(what).color(theme.text_weak));
+        }
+        let (ok, cancel) = buttons(ui, "Stop and Quit", true);
+        if ok {
+            choice = Some(true);
+        } else if cancel {
+            choice = Some(false);
+        }
+    });
+    if now {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+    // Escape or a click outside keeps the transfers running, unless they are stopping already.
+    if !stopping && resp.should_close() {
+        choice = Some(false);
+    }
+    match choice {
+        Some(true) => {
+            for t in &app.transfers {
+                t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            app.quit = Some(Quit { stopping: Some(Instant::now()) });
+        }
+        Some(false) => {
+            app.quit = None;
+            if std::mem::take(&mut app.restart_on_quit) {
+                app.log(crate::app::LogLevel::Info, "Updated: the new version starts with the next launch of Rustyrobo");
+            }
+        }
+        None => {}
+    }
 }
 
 fn font_picker(ui: &mut Ui, id: &str, font: &mut Option<String>, families: &[String]) {
