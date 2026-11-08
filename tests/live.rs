@@ -681,7 +681,17 @@ fn snapshot(rt: &tokio::runtime::Runtime, c: &Connection, db: &str) -> Snapshot 
                 i.remove("ns");
             }
             indexes.sort_by(|a, b| a.get_str("name").unwrap().cmp(b.get_str("name").unwrap()));
-            (indexes, find_all(rt, c, db, &name).iter().map(|d| bson::to_vec(d).unwrap()).collect())
+            let mut docs = find_all(rt, c, db, &name);
+            if kind == "timeseries" {
+                // The server keeps the fields of measurements in no order:
+                // that of their bucket, which changes once it is compressed.
+                for d in &mut docs {
+                    let mut fields: Vec<(String, Bson)> = std::mem::take(d).into_iter().collect();
+                    fields.sort_by(|a, b| a.0.cmp(&b.0));
+                    *d = fields.into_iter().collect();
+                }
+            }
+            (indexes, docs.iter().map(|d| bson::to_vec(d).unwrap()).collect())
         };
         out.insert(name, Kept { kind, options: info.get_document("options").cloned().unwrap_or_default(), indexes, docs });
     }
@@ -1400,18 +1410,7 @@ fn restores_with_read_write_privileges_only() {
     run(&rt, &admin, copy, doc! { "dropDatabase": 1 });
     let r = rt.block_on(restore(&admin, &restore_options(copy, o.target(), true), never(), |_| {})).unwrap();
     assert!(r.problems.is_empty(), "{}", r.summary());
-    // Put in buckets again, the measurements come back with their fields in
-    // another order.
-    let fields_in_order = |docs: &[Vec<u8>]| -> Vec<Vec<(String, Bson)>> {
-        docs.iter()
-            .map(|raw| {
-                let mut fields: Vec<(String, Bson)> = bson::Document::from_reader(raw.as_slice()).unwrap().into_iter().collect();
-                fields.sort_by(|a, b| a.0.cmp(&b.0));
-                fields
-            })
-            .collect()
-    };
-    assert_eq!(fields_in_order(&snapshot(&rt, &admin, copy)["ts"].docs), fields_in_order(&before["ts"].docs));
+    assert_eq!(snapshot(&rt, &admin, copy)["ts"].docs, before["ts"].docs);
     drop(rw);
     run(&rt, &admin, db, doc! { "dropUser": "rr_rw" });
     for d in [db, copy] {
