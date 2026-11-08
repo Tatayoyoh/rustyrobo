@@ -935,6 +935,17 @@ fn export_and_import_dialogs() {
     h.state_mut().actions.push(Action::Dialog(Dialog::export(1, "shop", "orders")));
     h.run_steps(3);
     assert!(has_label(&h, "Export — shop.orders"));
+    // Canonical by default, the info button tells why.
+    assert!(matches!(&h.state().dialog, Some(Dialog::Export(f)) if f.canonical));
+    assert!(!has_label(&h, "Canonical, the default, also writes the type of each number"));
+    h.get_by_label(icon::INFO).click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Canonical or relaxed Extended JSON") && has_label(&h, "Canonical, the default, also writes the type of each number"));
+    assert!(has_label(&h, "like NumberLong(5), comes back as a 32-bit one"));
+    h.get_by_label(icon::INFO).click();
+    h.run_steps(3);
+    assert!(!has_label(&h, "Canonical, the default, also writes the type of each number"), "closed by a second click");
+    assert!(matches!(&h.state().dialog, Some(Dialog::Export(_))), "the export dialog stays");
     let default = h.query_all_by(|n| is_text_input(n) && n.value().is_some_and(|v| v.ends_with("orders.json"))).next().unwrap().value().unwrap();
     let path = env.dir.join("orders.json").display().to_string();
     retype(&mut h, &default, &path);
@@ -2335,7 +2346,7 @@ fn live_history_and_export_of_the_results() {
     replace_text(&mut h, &default, &path.display().to_string());
     h.get_by_label("Export").click();
     wait_until(&mut h, "export", Duration::from_secs(15), |h| h.state().transfers.is_empty() && path.exists());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"_id\":2,\"n\":\"b\"}\n{\"_id\":3,\"n\":\"c\"}\n");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"_id\":{\"$numberInt\":\"2\"},\"n\":\"b\"}\n{\"_id\":{\"$numberInt\":\"3\"},\"n\":\"c\"}\n", "canonical by default");
 
     // Imported back into another collection, which the explorer lists.
     h.state_mut().actions.push(rustyrobo::app::Action::Import {

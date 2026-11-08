@@ -394,13 +394,20 @@ pub struct AppSettings {
     pub last_dump: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportDefaults {
     pub dir: String,
     pub format: crate::transfer::Format,
     pub canonical: bool,
     pub delimiter: crate::transfer::Delimiter,
+}
+
+impl Default for ExportDefaults {
+    fn default() -> Self {
+        // Canonical Extended JSON keeps the type of every value.
+        ExportDefaults { dir: String::new(), format: Default::default(), canonical: true, delimiter: Default::default() }
+    }
 }
 
 /// Script saved in the favorite scripts manager, filed under a connection

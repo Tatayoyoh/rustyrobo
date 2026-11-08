@@ -248,7 +248,7 @@ impl ExportForm {
             skip: String::new(),
             limit: String::new(),
             format: Format::JsonLines,
-            canonical: false,
+            canonical: true,
             fields: String::new(),
             delimiter: Delimiter::Comma,
             path: default_path(coll, "json"),
@@ -1635,6 +1635,13 @@ fn file_row(ui: &mut Ui, label: &str, path: &mut String, browse: impl FnOnce() -
     changed
 }
 
+/// What the info button next to "Canonical Extended JSON" tells.
+const EXTENDED_JSON: &[&str] = &[
+    "JSON has no type for dates, ObjectIds, 64-bit integers, decimals or binary data. Extended JSON writes them as small objects, like {\"$oid\": \"…\"} or {\"$date\": …}, so that they can be read back.",
+    "Canonical, the default, also writes the type of each number: {\"$numberInt\": \"1\"}, {\"$numberLong\": \"5\"}, {\"$numberDouble\": \"1.5\"}. Every value comes back exactly as it was, imported here, with mongoimport or by a MongoDB driver: the choice for a backup, or a copy to another server.",
+    "Relaxed writes numbers as plain JSON numbers, and dates as text (2024-01-02T03:04:05.006Z): a smaller file, easier to read or to give to other programs. But a number then does not tell its type: a 64-bit integer small enough for 32 bits, like NumberLong(5), comes back as a 32-bit one (NumberInt), as with mongoexport and mongoimport. Doubles keep their decimal point (2.0) and stay doubles.",
+];
+
 fn export_dialog(ui: &mut Ui, f: &mut ExportForm, theme: &crate::theme::Theme, font: f32, actions: &mut Vec<Action>) -> Outcome {
     ui.set_width(560.0);
     title(ui, &format!("Export — {}.{}", f.db, f.coll));
@@ -1683,7 +1690,19 @@ fn export_dialog(ui: &mut Ui, f: &mut ExportForm, theme: &crate::theme::Theme, f
             ui.end_row();
         } else {
             ui.label("");
-            ui.checkbox(&mut f.canonical, "Canonical Extended JSON (keeps every type, e.g. {\"$numberLong\": \"1\"})");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut f.canonical, "Canonical Extended JSON (keeps every type)");
+                let info = ui.small_button(icon::INFO).on_hover_text("Canonical or relaxed: what changes");
+                egui::Popup::from_toggle_button_response(&info).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).width(440.0).show(|ui| {
+                    ui.set_max_width(440.0);
+                    ui.label(RichText::new("Canonical or relaxed Extended JSON").strong());
+                    ui.add_space(4.0);
+                    for paragraph in EXTENDED_JSON {
+                        ui.add(egui::Label::new(*paragraph).wrap());
+                        ui.add_space(4.0);
+                    }
+                });
+            });
             ui.end_row();
         }
     });
@@ -1985,6 +2004,10 @@ mod tests {
         let default = f.path.clone();
         f.set_defaults(&ExportDefaults::default());
         assert_eq!((f.path.as_str(), f.format), (default.as_str(), Format::JsonLines), "no export yet");
+        assert!(f.canonical, "canonical by default: it keeps every type");
+        // Settings saved before the export remembered its options.
+        assert!(serde_json::from_str::<ExportDefaults>(r#"{"dir":"/tmp"}"#).unwrap().canonical);
+        assert!(!serde_json::from_str::<ExportDefaults>(r#"{"canonical":false}"#).unwrap().canonical, "the choice of the last export");
         f.set_defaults(&ExportDefaults { dir: dir.join("no-such-dir-rr").display().to_string(), ..Default::default() });
         assert_eq!(f.path, default, "removed folder");
         let last = ExportDefaults { dir: dir.display().to_string(), format: Format::Csv, canonical: false, delimiter: Delimiter::Semicolon };
