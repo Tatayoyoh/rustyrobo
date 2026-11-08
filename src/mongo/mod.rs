@@ -423,6 +423,21 @@ pub fn command_failure(e: &anyhow::Error) -> Option<Document> {
     Some(reply(&c.message, c.code, &c.code_name))
 }
 
+/// The code of the server error `e` holds, if it holds one.
+pub fn error_code(e: &anyhow::Error) -> Option<i32> {
+    command_failure(e)?.get_i32("code").ok()
+}
+
+/// Whether the driver could not read the reply of the server, like the
+/// duplicate key error of a collation on MongoDB 4.2, whose key is not
+/// UTF-8: the server did reply.
+pub fn is_unreadable_reply(e: &anyhow::Error) -> bool {
+    if let Some(me) = e.downcast_ref::<mongodb::error::Error>() {
+        return matches!(me.kind.as_ref(), mongodb::error::ErrorKind::InvalidResponse { .. });
+    }
+    e.downcast_ref::<mongodb_legacy::error::Error>().is_some_and(|me| matches!(me.kind.as_ref(), mongodb_legacy::error::ErrorKind::InvalidResponse { .. }))
+}
+
 pub fn error_message(e: &anyhow::Error) -> String {
     if let Some(me) = e.downcast_ref::<mongodb::error::Error>() {
         use mongodb::error::ErrorKind as K;

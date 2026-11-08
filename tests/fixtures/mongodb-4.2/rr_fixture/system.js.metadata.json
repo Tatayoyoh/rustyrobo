@@ -1,0 +1,1 @@
+{"options":{},"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_","ns":"rr_fixture.system.js"}],"uuid":"4a3322862884418fae04f4479976bf7b"}

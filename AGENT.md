@@ -38,6 +38,8 @@ src/
   fonts.rs         bundled fonts, system fonts as fallbacks (scan in background, mmap), user's choice
   bidi.rs          right-to-left text in visual order, for read-only views
   bsonfmt.rs       BSON → shell syntax, short values, type names, legacy UUIDs
+  transfer.rs      import / export (JSON, CSV), batches, replacing a collection safely
+  dump.rs          dump / restore in the formats of mongodump (folder, archive, gzip)
   autotest.rs      scripted UI walkthrough (RUSTYROBO_AUTOTEST)
   mongo/
     mod.rs         Connection: dual driver backend, connect diagnostics, run_command
@@ -73,6 +75,13 @@ Key design rules:
 - The JS ↔ Rust bridge exchanges **canonical Extended JSON** strings. `serde_json` has
   `preserve_order` on: command key order matters (first key = command name).
 - Through an SSH tunnel the driver connects to `127.0.0.1:<port>` with `directConnection=true`.
+- **Imports and restores never lose data.** They read their whole input before writing anything;
+  "drop first" fills `<name>.rr-tmp-<hex>` and renames it over the collection once complete, and
+  only when no document was refused (`transfer::Target`). What cannot be renamed (time series,
+  `system.js`) is tried on such a copy first, and dropped last. A collection the server refuses is a
+  problem of the restore, not an error that stops it. `tests/live.rs` checks all of it byte for byte
+  against the MongoDB tools of the containers; `tests/fixtures` holds dumps of mongodump 4.2, and
+  100 on MongoDB 7 and 8 (`dev/dump-fixtures.sh`).
 
 ## Gotchas
 
@@ -108,6 +117,9 @@ Key design rules:
 - `db.runCommand()` returns the `{ ok: 0, ... }` reply of a refused command, like the mongo shell (`__runCommand`). The shell's own
   helpers go through `__cmd`, which throws it.
 - Statement splitting is heuristic; chunks that fail to parse are merged with the next one.
+- mongodump names the buckets of a time series `system.buckets.<name>` when the server has no
+  `rawData` (before MongoDB 8.2), `<name>` since; mongorestore 100.20 goes by the server version of
+  the archive. Dump and restore follow both.
 - The test servers need `ulimits: nofile: 64000` (`dev/docker-compose.yml`): with the soft limit of
   1024 of some Docker set-ups, WiredTiger runs out of files during the live tests and mongod aborts.
 - Theme colours must pass the WCAG checks in `theme::tests` (text ≥ 4.5:1, syntax ≥ 3:1).

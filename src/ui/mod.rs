@@ -17,6 +17,7 @@ use egui::{Align, Color32, Layout, RichText, Ui};
 
 use crate::app::{Action, App, LogLevel};
 use crate::settings::{AutocompletionMode, Orientation, TimeZoneMode, UuidEncoding, ViewMode};
+use crate::transfer::Progress;
 use crate::ui::dialogs::Dialog;
 
 /// Icons are glyphs of the Phosphor font, see [`crate::fonts::bundled`].
@@ -366,7 +367,11 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
                 if ui.small_button(icon::X).on_hover_text("Cancel").clicked() {
                     app.actions.push(Action::CancelTransfer(t.id));
                 }
-                ui.label(RichText::new(format!("{}: {} documents", t.label, t.done)).color(app.theme.text_weak));
+                let done = match t.done {
+                    Progress::Checked(n) => format!("reading the file, {n} documents"),
+                    Progress::Written(n) => format!("{n} documents"),
+                };
+                ui.label(RichText::new(format!("{}: {done}", t.label)).color(app.theme.text_weak));
                 ui.spinner();
             }
             if let Some((msg, at, level)) = &app.toast {

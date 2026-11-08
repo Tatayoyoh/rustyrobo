@@ -5,6 +5,8 @@
 ### Added
 - Import and export: "Export Collection…" and "Import Documents…" in the menu of a collection, "Import Collection…" in the menus of a database
 - Dump and restore database
+- Imports and restores keep your data safe: the whole file or dump is read before anything is written, so a damaged one changes nothing; "Drop first" fills a new collection that replaces the old one only once complete, so a failure, a refused document or a cancel leaves it as it was. A collection the server refuses is reported and the others are restored; "Done, but not completely" tells what was not
+- Restore reads the dumps of each mongodump: names with `+` or spaces of mongodump 4.2 and 100, time series buckets as both name them, archives cut short (refused)
 - Query history in File > Query History… or (Ctrl+H)
 - Table and tree views: double-click a value for inline edit
 - Context menus: icons, and action words coloured by kind (create, edit, delete)

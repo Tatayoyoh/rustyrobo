@@ -388,14 +388,20 @@ fn transfer_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str
     let text = std::fs::read_to_string(dir.join("query.csv")).unwrap();
     assert_eq!(text, "_id,name,address.city\r\n105,n105,Paris\r\n106,n106,Paris\r\n107,n107,Paris\r\n");
 
-    // Duplicates are counted, the others inserted; dropping first starts again.
+    // Duplicates are counted, the others inserted. Dropping first replaces
+    // the collection only with all the documents of the file.
     std::fs::write(dir.join("dups.json"), "{\"_id\": 1}\n{\"_id\": 1}\n{\"_id\": 2}\n").unwrap();
     let done = rt.block_on(import(&c, &into("dups", Format::JsonLines, "dups.json"), Arc::new(AtomicBool::new(false)), |_| {})).unwrap();
     assert_eq!((done.inserted, done.failed), (2, 1));
     assert!(done.first_error.as_deref().unwrap_or_default().contains("E11000"), "{done:?}");
     let again = ImportOptions { drop_first: true, ..into("dups", Format::JsonLines, "dups.json") };
+    let e = rt.block_on(import(&c, &again, Arc::new(AtomicBool::new(false)), |_| {})).unwrap_err().to_string();
+    assert!(e.starts_with("1 document refused (E11000") && e.ends_with(": dups was left as it was"), "{e}");
+    std::fs::write(dir.join("unique.json"), "{\"_id\": 3}\n{\"_id\": 4}\n").unwrap();
+    let again = ImportOptions { drop_first: true, ..into("dups", Format::JsonLines, "unique.json") };
     assert_eq!(rt.block_on(import(&c, &again, Arc::new(AtomicBool::new(false)), |_| {})).unwrap().inserted, 2);
-    let fresh = ImportOptions { drop_first: true, ..into("never_existed", Format::JsonLines, "dups.json") };
+    assert_eq!(all("dups"), vec![doc! { "_id": 3 }, doc! { "_id": 4 }]);
+    let fresh = ImportOptions { drop_first: true, ..into("never_existed", Format::JsonLines, "unique.json") };
     assert_eq!(rt.block_on(import(&c, &fresh, Arc::new(AtomicBool::new(false)), |_| {})).unwrap().inserted, 2, "nothing to drop");
 
     // Cancelled: stops between two batches.
@@ -410,6 +416,7 @@ fn transfer_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str
     std::fs::write(dir.join("broken.json"), "{\"a\": 1}\n{\"a\":").unwrap();
     let e = rt.block_on(import(&c, &into("broken", Format::JsonLines, "broken.json"), Arc::new(AtomicBool::new(false)), |_| {})).unwrap_err();
     assert!(format!("{e:#}").contains("document 2"), "{e:#}");
+    assert!(all("broken").is_empty(), "the file is read to the end before anything is written");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

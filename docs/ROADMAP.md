@@ -29,8 +29,12 @@ here for the record, not as a commitment.
   the explorer (collection, database) and from the results of a query; runs in the background,
   with progress and cancel
 - [x] **Dump / restore** of a database in the formats of `mongodump`: folder (`.bson` + `.metadata.json`)
-  or archive (`--archive`), gzip optional; options, indexes and views, chosen collections, drop first,
-  into another database
+  or archive (`--archive`), gzip optional; options, indexes and views, time series, chosen
+  collections, drop first, into another database. Read back by mongorestore, and reads the dumps of
+  mongodump 4.2 and 100
+- [x] **Safe imports and restores**: the input is read whole before anything is written; "drop
+  first" replaces a collection only by its complete copy (temporary collection renamed over it);
+  tested byte for byte against the MongoDB tools, with damaged files, cancels and refusals
 - [x] **Query history**: every executed script with its connection and database, searchable,
   opened again in a new shell (Ctrl+H)
 - [x] **Inline editing in the table view**: double-click a cell (or "Edit Value" in its menu) to

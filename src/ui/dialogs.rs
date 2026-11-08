@@ -1697,7 +1697,8 @@ fn import_dialog(ui: &mut Ui, f: &mut ImportForm, theme: &crate::theme::Theme, a
         ui.label(RichText::new("The first line holds the field names; a.b makes a sub-document.").small().color(theme.text_weak));
     }
     if f.drop_first && !f.coll.trim().is_empty() {
-        ui.label(RichText::new(format!("{} All the documents and indexes of \"{}\" will be deleted.", icon::WARNING, f.coll.trim())).color(theme.warning));
+        let warning = format!("{} \"{}\" will be replaced by the documents of the file once they are all in: its documents and indexes will be deleted.", icon::WARNING, f.coll.trim());
+        ui.label(RichText::new(warning).color(theme.warning));
     }
     error_line(ui, theme, &f.error);
     let (ok, cancel) = buttons(ui, "Import", !f.path.trim().is_empty() && !f.coll.trim().is_empty());
@@ -1857,7 +1858,8 @@ fn restore_dialog(ui: &mut Ui, f: &mut RestoreForm, theme: &crate::theme::Theme,
     ui.checkbox(&mut f.drop_first, "Drop each collection first");
     ui.checkbox(&mut f.indexes, "Create the indexes");
     if f.drop_first {
-        ui.label(RichText::new(format!("{} The documents and indexes of the restored collections of \"{}\" will be deleted first.", icon::WARNING, f.db.trim())).color(theme.warning));
+        let warning = format!("{} Each restored collection of \"{}\" will be replaced by its copy once complete: its documents and indexes will be deleted.", icon::WARNING, f.db.trim());
+        ui.label(RichText::new(warning).color(theme.warning));
     }
     error_line(ui, theme, &f.error);
     let ready = f.found.as_ref().is_ok_and(|v| v.iter().any(|(_, on)| *on));

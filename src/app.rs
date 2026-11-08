@@ -23,7 +23,7 @@ use crate::settings::{AppSettings, ConnectionSettings, ExportDefaults, Orientati
 use crate::shell::{DropVars, OutputKind, ShellHandle, ShellOptions, ShellReply};
 use crate::theme::{self, Theme};
 use crate::dump::{DumpOptions, RestoreOptions};
-use crate::transfer::{ExportOptions, ImportOptions};
+use crate::transfer::{ExportOptions, ImportOptions, Progress};
 use crate::ui::connections::{ConnectionEditor, ConnectionList};
 use crate::ui::dialogs::Dialog;
 use crate::ui::query::{OutputPane, QueryTab, TabVar};
@@ -176,10 +176,11 @@ pub enum AppEvent {
     Shell(u64, ShellReply),
     Page(u64, usize, u64, Result<Vec<Bson>, String>),
     CommandDone { server: u64, label: String, result: Result<Document, String>, refresh: Refresh },
-    /// Documents exported or imported so far.
-    TransferProgress(u64, u64),
+    /// Documents exported, imported, or read before an import, so far.
+    TransferProgress(u64, Progress),
     /// End of an export or import: what it did, or why it stopped.
-    TransferDone { id: u64, server: u64, result: Result<String, String>, refresh: Refresh },
+    /// `warning`: done, but not completely (documents or collections refused).
+    TransferDone { id: u64, server: u64, result: Result<String, String>, warning: bool, refresh: Refresh },
     Test(u64, StepReport),
     TestDone(u64, Result<String, String>),
     Fonts(FontChoice, FontDefinitions),
@@ -217,7 +218,7 @@ pub struct ScriptToOpen {
 pub struct Transfer {
     pub id: u64,
     pub label: String,
-    pub done: u64,
+    pub done: Progress,
     pub cancel: Arc<AtomicBool>,
 }
 
@@ -639,14 +640,17 @@ impl App {
                     t.done = n;
                 }
             }
-            AppEvent::TransferDone { id, server, result, refresh } => {
+            AppEvent::TransferDone { id, server, result, warning, refresh } => {
                 let label = match self.transfers.iter().position(|t| t.id == id) {
                     Some(i) => self.transfers.remove(i).label,
                     None => return,
                 };
                 match result {
-                    // A warning: shown in the status bar too.
-                    Ok(msg) if msg.contains(" failed.") => self.log(LogLevel::Warn, format!("{label}: {msg}")),
+                    // Not all of it: shown until read.
+                    Ok(msg) if warning => {
+                        self.log(LogLevel::Warn, format!("{label}: {msg}"));
+                        self.dialog = Some(Dialog::message(&label, format!("Done, but not completely:\n\n{msg}")));
+                    }
                     Ok(msg) => {
                         self.log(LogLevel::Info, format!("{label}: {msg}"));
                         self.toast = Some((format!("{label}: {msg}"), Instant::now(), LogLevel::Info));
@@ -1031,10 +1035,10 @@ impl App {
         }
     }
 
-    fn start_transfer(&mut self, label: String) -> (u64, Arc<AtomicBool>, impl Fn(u64) + Send + 'static) {
+    fn start_transfer(&mut self, label: String) -> (u64, Arc<AtomicBool>, impl Fn(Progress) + Send + 'static) {
         let id = self.next_id();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.transfers.push(Transfer { id, label, done: 0, cancel: Arc::clone(&cancel) });
+        self.transfers.push(Transfer { id, label, done: Progress::Written(0), cancel: Arc::clone(&cancel) });
         let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
         let progress = move |n| {
             let _ = tx.send(AppEvent::TransferProgress(id, n));
@@ -1060,11 +1064,11 @@ impl App {
         self.log(LogLevel::Info, format!("{label} to {}…", opts.path.display()));
         let (id, cancel, progress) = self.start_transfer(label);
         self.spawn(async move {
-            let result = crate::transfer::export(&conn, &opts, &cancel, progress)
+            let result = crate::transfer::export(&conn, &opts, &cancel, |n| progress(Progress::Written(n)))
                 .await
                 .map(|n| format!("{n} document{} exported to {}", if n == 1 { "" } else { "s" }, opts.path.display()))
                 .map_err(|e| mongo::error_message(&e));
-            AppEvent::TransferDone { id, server, result, refresh: Refresh::None }
+            AppEvent::TransferDone { id, server, result, warning: false, refresh: Refresh::None }
         });
     }
 
@@ -1075,8 +1079,10 @@ impl App {
         let (id, cancel, progress) = self.start_transfer(label);
         let refresh = Refresh::Collections(opts.db.clone());
         self.spawn(async move {
-            let result = crate::transfer::import(&conn, &opts, cancel, progress).await.map(|i| i.summary()).map_err(|e| mongo::error_message(&e));
-            AppEvent::TransferDone { id, server, result, refresh }
+            let result = crate::transfer::import(&conn, &opts, cancel, progress).await;
+            let warning = result.as_ref().is_ok_and(|i| i.failed > 0);
+            let result = result.map(|i| i.summary()).map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, warning, refresh }
         });
     }
 
@@ -1096,8 +1102,11 @@ impl App {
         self.log(LogLevel::Info, format!("{label} to {}…", opts.target().display()));
         let (id, cancel, progress) = self.start_transfer(label);
         self.spawn(async move {
-            let result = crate::dump::dump(&conn, &opts, &cancel, progress).await.map(|d| d.summary(&opts.target())).map_err(|e| mongo::error_message(&e));
-            AppEvent::TransferDone { id, server, result, refresh: Refresh::None }
+            let result = crate::dump::dump(&conn, &opts, &cancel, |n| progress(Progress::Written(n)))
+                .await
+                .map(|d| d.summary(&opts.target()))
+                .map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, warning: false, refresh: Refresh::None }
         });
     }
 
@@ -1109,8 +1118,10 @@ impl App {
         let (id, cancel, progress) = self.start_transfer(label);
         let refresh = Refresh::Collections(opts.db.clone());
         self.spawn(async move {
-            let result = crate::dump::restore(&conn, &opts, cancel, progress).await.map(|r| r.summary()).map_err(|e| mongo::error_message(&e));
-            AppEvent::TransferDone { id, server, result, refresh }
+            let result = crate::dump::restore(&conn, &opts, cancel, progress).await;
+            let warning = result.as_ref().is_ok_and(|r| r.incomplete());
+            let result = result.map(|r| r.summary()).map_err(|e| mongo::error_message(&e));
+            AppEvent::TransferDone { id, server, result, warning, refresh }
         });
     }
 

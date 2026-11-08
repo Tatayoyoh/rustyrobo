@@ -1047,7 +1047,7 @@ fn dump_and_restore_dialogs() {
     retype(&mut h, "shop", "shop copy");
     h.get_by_label("Drop each collection first").click();
     h.run_steps(2);
-    assert!(has_label(&h, "will be deleted first"));
+    assert!(has_label(&h, "will be replaced by its copy once complete"));
     h.get_by_label("Restore").click();
     h.run_steps(3);
     assert!(has_label(&h, "Invalid database name: shop copy"));
@@ -1107,6 +1107,29 @@ fn dump_and_restore_dialogs() {
     h.run_steps(3);
     assert!(has_input(&h, &archive.display().to_string()));
     assert!(has_label(&h, "Collections (2 of 2)") && has_label(&h, "recent (view)"));
+}
+
+#[test]
+fn transfers_tell_when_they_read_and_when_they_write() {
+    use rustyrobo::transfer::Progress;
+    let _env = env("transfer-progress", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    h.state_mut().transfers.push(rustyrobo::app::Transfer { id: 99, label: "Import into shop.orders".into(), done: Progress::Checked(1500), cancel: cancel.clone() });
+    h.run_steps(2);
+    assert!(has_label(&h, "Import into shop.orders: reading the file, 1500 documents"), "nothing is written while the file is read");
+    h.state_mut().transfers[0].done = Progress::Written(1000);
+    h.run_steps(2);
+    assert!(has_label(&h, "Import into shop.orders: 1000 documents"));
+    // The cancel button next to it.
+    let row = h.get_by_label("Import into shop.orders: 1000 documents").rect().center().y;
+    let distance = |n: &egui_kittest::Node<'_>| (n.rect().center().y - row).abs();
+    h.query_all_by_label(icon::X).min_by(|a, b| distance(a).total_cmp(&distance(b))).unwrap().click();
+    h.run_steps(2);
+    assert!(cancel.load(std::sync::atomic::Ordering::Relaxed), "cancelled from the status bar");
 }
 
 // -------------------------------------------------------- fonts and RTL
@@ -2203,6 +2226,38 @@ fn live_history_and_export_of_the_results() {
     assert_eq!(h.state().tabs.len(), 2);
     assert_eq!((h.state().tabs[1].server, h.state().tabs[1].db.as_str()), (sid, "rrui"));
     assert!(h.state().tabs[1].script.starts_with("db.exp.drop();"));
+}
+
+#[test]
+fn live_restore_that_is_not_complete_says_so() {
+    if !live() {
+        return;
+    }
+    use rustyrobo::ui::dialogs::Dialog;
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let env = env("live-restore-warning", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    // A dump with a collection whose options the server refuses.
+    let dump = env.dir.join("dump");
+    std::fs::create_dir_all(&dump).unwrap();
+    for (name, options) in [("good", "{}"), ("bad", r#"{"capped":true}"#)] {
+        std::fs::write(dump.join(format!("{name}.metadata.json")), format!(r#"{{"options":{options},"indexes":[]}}"#)).unwrap();
+        let mut file = Vec::new();
+        doc! { "_id": 1 }.to_writer(&mut file).unwrap();
+        std::fs::write(dump.join(format!("{name}.bson")), file).unwrap();
+    }
+    let opts = rustyrobo::dump::RestoreOptions { db: "rrui_restore".into(), from: dump, collections: Vec::new(), drop_first: true, indexes: true };
+    h.state_mut().actions.push(rustyrobo::app::Action::Restore { server: sid, opts: Box::new(opts) });
+    wait_until(&mut h, "restore", Duration::from_secs(20), |h| h.state().transfers.is_empty());
+    h.run_steps(3);
+    let message = match &h.state().dialog {
+        Some(Dialog::Message { message, .. }) => message.clone(),
+        _ => panic!("no dialog"),
+    };
+    assert!(message.starts_with("Done, but not completely:") && message.contains("1 collection restored") && message.contains("bad: ") && message.ends_with("left as it was"), "{message}");
+    assert!(has_label(&h, "Done, but not completely"));
 }
 
 #[test]

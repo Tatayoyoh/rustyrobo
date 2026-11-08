@@ -1,0 +1,1 @@
+{"options":{"timeseries":{"timeField":"t","metaField":"m","granularity":"seconds","bucketMaxSpanSeconds":{"$numberInt":"3600"}}},"indexes":[{"v":{"$numberInt":"2"},"key":{"m":{"$numberInt":"1"},"t":{"$numberInt":"1"}},"name":"m_1_t_1"}],"collectionName":"ts","type":"timeseries"}

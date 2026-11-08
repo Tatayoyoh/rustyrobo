@@ -1,0 +1,1 @@
+{"options":{"capped":true,"size":{"$numberInt":"4096"}},"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"91b301ca511846feb2a522f42989df5c","collectionName":"capped","type":"collection"}
