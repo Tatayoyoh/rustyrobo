@@ -95,9 +95,12 @@ Key design rules:
   is 20 MB. Never load a font file in memory, map it.
 - egui has no bidi (emilk/egui#1016): it shapes each font run in the direction of its script, then
   lays out the runs from left to right. `bidi.rs` works around it in read-only views by giving it the
-  pieces in visual order, each in its own section (`LayoutJob::append` would merge them). Editors keep
-  the logical order: right-to-left sentences read in reverse there, and cursors are off on these rows
-  (emilk/egui#8576). Check both when upgrading egui: native bidi would make `bidi.rs` double-reverse.
+  pieces in visual order, each in its own section (`LayoutJob::append` would merge them); Ctrl+C there
+  copies what the selection covers on screen (`bidi::drawn_text`). Editors keep the logical order:
+  right-to-left sentences read in reverse there. egui also pads each right-to-left run with surplus
+  glyphs (emilk/egui#8576), which shift every offset after it: the layouters of `editor.rs` remove them
+  (`bidi::fix_glyphs`), plain `TextEdit`s still have them. Check both when upgrading egui: native bidi
+  would make `bidi.rs` double-reverse.
 - Keep the reduced debug info of `[profile.dev]` in `Cargo.toml`: full debug info made each test binary weigh 870 MB, and Cargo never removes old binaries (`target` reached 77 GB). `cargo clean` from time to time; for a one-off measurement or build, use another `CARGO_TARGET_DIR`.
 - The update check starts in `main.rs`, not in `App::new`: tests and the autotest must not reach the network.
 - Ctrl+C and Ctrl+Shift+C reach egui as `Event::Copy`, not as keys (look at `modifiers.shift`). In the results, Ctrl+C and Ctrl+F follow the pointer, unless keys went to

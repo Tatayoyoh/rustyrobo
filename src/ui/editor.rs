@@ -176,20 +176,86 @@ pub fn highlight_cached(ctx: &egui::Context, code: &str, theme: &Theme, font: &F
     ctx.memory_mut(|m| m.caches.cache::<Cache>().get((font, theme.name, code)).clone())
 }
 
+/// A read-only job, and where its characters come from
+/// ([`crate::bidi::reorder_sections`]).
+struct ReadOnlyJob {
+    job: LayoutJob,
+    order: Arc<[u32]>,
+}
+
 #[derive(Default)]
 struct ReadOnlyHighlighter;
 
-impl egui::cache::ComputerMut<(&FontId, &str, &str), LayoutJob> for ReadOnlyHighlighter {
-    fn compute(&mut self, key: (&FontId, &str, &str)) -> LayoutJob {
-        crate::bidi::reorder_sections(Highlighter.compute(key))
+impl egui::cache::ComputerMut<(&FontId, &str, &str), ReadOnlyJob> for ReadOnlyHighlighter {
+    fn compute(&mut self, key: (&FontId, &str, &str)) -> ReadOnlyJob {
+        let (job, order) = crate::bidi::reorder_sections(Highlighter.compute(key));
+        ReadOnlyJob { job, order: order.into() }
     }
+}
+
+fn read_only_cached<T>(ctx: &egui::Context, code: &str, theme: &Theme, font: &FontId, get: impl FnOnce(&ReadOnlyJob) -> T) -> T {
+    type Cache = egui::cache::FrameCache<ReadOnlyJob, ReadOnlyHighlighter>;
+    ctx.memory_mut(|m| get(m.caches.cache::<Cache>().get((font, theme.name, code))))
 }
 
 /// [`highlight_cached`] with right-to-left text in visual order: only for
 /// read-only text, since the offsets of an editor must follow its logical order.
 fn read_only_highlight_cached(ctx: &egui::Context, code: &str, theme: &Theme, font: &FontId) -> LayoutJob {
-    type Cache = egui::cache::FrameCache<LayoutJob, ReadOnlyHighlighter>;
-    ctx.memory_mut(|m| m.caches.cache::<Cache>().get((font, theme.name, code)).clone())
+    read_only_cached(ctx, code, theme, font, |r| r.job.clone())
+}
+
+/// A galley as a cache key: egui's cache gives the same one for the same job.
+#[derive(Clone, Copy)]
+struct GalleyKey<'a>(&'a Arc<Galley>);
+
+impl Hash for GalleyKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(self.0).hash(state);
+    }
+}
+
+#[derive(Default)]
+struct GlyphFixer;
+
+impl<'a> egui::cache::ComputerMut<GalleyKey<'a>, [Arc<Galley>; 2]> for GlyphFixer {
+    /// Keeps the galley it fixed: no other can take its address meanwhile.
+    fn compute(&mut self, key: GalleyKey<'a>) -> [Arc<Galley>; 2] {
+        [key.0.clone(), crate::bidi::fix_glyphs(key.0.clone())]
+    }
+}
+
+/// Lays the job out with one glyph per character ([`crate::bidi::fix_glyphs`]).
+fn layout(ui: &Ui, job: LayoutJob) -> Arc<Galley> {
+    type Cache = egui::cache::FrameCache<[Arc<Galley>; 2], GlyphFixer>;
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    ui.ctx().memory_mut(|m| m.caches.cache::<Cache>().get(GalleyKey(&galley))[1].clone())
+}
+
+/// Read-only text draws right-to-left words in visual order: a selection there
+/// covers other characters than those at its offsets in the text. Takes Ctrl+C
+/// (and Ctrl+X) from the TextEdit when the text has such words, and returns where
+/// the drawn characters come from, for [`copy_drawn`].
+fn take_reordered_copy(ui: &Ui, edit_id: Id, text: &str, theme: &Theme, font: &FontId) -> Option<Arc<[u32]>> {
+    let is_copy = |e: &egui::Event| matches!(e, egui::Event::Copy | egui::Event::Cut);
+    if !ui.memory(|m| m.has_focus(edit_id)) || !ui.input(|i| i.events.iter().any(is_copy)) {
+        return None;
+    }
+    let order = read_only_cached(ui.ctx(), text, theme, font, |r| r.order.clone());
+    if order.is_empty() {
+        return None;
+    }
+    ui.input_mut(|i| i.events.retain(|e| !is_copy(e)));
+    Some(order)
+}
+
+/// Copies the selection of `output` as drawn: the characters it covers on screen.
+fn copy_drawn(ui: &Ui, output: &egui::text_edit::TextEditOutput, text: &str, order: &[u32]) {
+    if let Some(r) = output.cursor_range {
+        let (a, b) = (r.primary.index.0, r.secondary.index.0);
+        if a != b {
+            ui.ctx().copy_text(crate::bidi::drawn_text(text, order, a.min(b)..a.max(b)));
+        }
+    }
 }
 
 fn editor_job(ctx: &egui::Context, code: &str, theme: &Theme, font: &FontId, read_only: bool) -> LayoutJob {
@@ -810,7 +876,7 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
     let read_only = opts.read_only;
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
         let job = editor_job(ui.ctx(), buf.as_str(), &theme_copy, &font, read_only);
-        ui.fonts_mut(|f| f.layout_job(job))
+        layout(ui, job)
     };
 
     let row_height = ui.fonts_mut(|f| f.row_height(&opts.font));
@@ -865,6 +931,7 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                 });
                 let highlights = ui.painter().add(egui::Shape::Noop);
                 let available = ui.available_size();
+                let copy = if opts.read_only { take_reordered_copy(ui, edit_id, buf.as_str(), theme, &opts.font) } else { None };
                 let output = egui::TextEdit::multiline(buf)
                     .id(edit_id)
                     .font(opts.font.clone())
@@ -875,6 +942,9 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                     .frame(egui::Frame::NONE)
                     .layouter(&mut layouter)
                     .show(ui);
+                if let Some(order) = &copy {
+                    copy_drawn(ui, &output, buf.as_str(), order);
+                }
                 if opts.focus {
                     output.response.request_focus();
                 }
@@ -1102,9 +1172,10 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
     // `&str` is a read-only TextBuffer: no copy of the (possibly large) text.
     let mut view: &str = text;
     let theme_copy = *theme;
+    let copy = take_reordered_copy(ui, id.with("t"), text, theme, &font);
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
         let job = read_only_highlight_cached(ui.ctx(), buf.as_str(), &theme_copy, &font);
-        ui.fonts_mut(|f| f.layout_job(job))
+        layout(ui, job)
     };
     let highlights = ui.painter().add(egui::Shape::Noop);
     let output = egui::TextEdit::multiline(&mut view)
@@ -1114,6 +1185,9 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
         .frame(egui::Frame::NONE)
         .layouter(&mut layouter)
         .show(ui);
+    if let Some(order) = &copy {
+        copy_drawn(ui, &output, text, order);
+    }
     if let Some(find) = find {
         ui.painter().set(highlights, egui::Shape::Vec(match_shapes(ui, &output, find.matches, find.current, theme)));
         if find.scroll

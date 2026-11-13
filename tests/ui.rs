@@ -1798,11 +1798,87 @@ fn rtl_text_view_reads_from_right_to_left_and_copies_the_real_text() {
     h.run_steps(2);
     h.event(egui::Event::Copy);
     h.step();
-    let copied = h.output().platform_output.commands.iter().find_map(|c| match c {
-        egui::OutputCommand::CopyText(t) => Some(t.clone()),
-        _ => None,
-    });
-    assert_eq!(copied.as_deref(), Some(text));
+    assert_eq!(copied(&h).as_deref(), Some(text));
+}
+
+#[test]
+fn rtl_text_view_copies_what_is_selected() {
+    // egui padded right-to-left runs with glyphs (emilk/egui#8576): the next
+    // lines were selected by offsets past them.
+    let text = "\"name\" : \"שלום world\",\n\"author\" : \"John Smith\"\n";
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).build_ui_state(
+        |ui, text: &mut String| {
+            code_view(ui, egui::Id::new("view"), text, theme::resolve(theme::DEFAULT_THEME, true), egui::FontId::monospace(13.0));
+        },
+        text.to_string(),
+    );
+    h.ctx.set_fonts(fonts::definitions(&Default::default()));
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+    h.run_steps(2);
+    let select = |h: &mut Harness<'_, String>, keys: &[Key]| {
+        h.key_press_modifiers(Modifiers::CTRL, Key::Home);
+        for &key in keys {
+            h.key_press(key);
+        }
+        h.run_steps(1);
+    };
+    select(&mut h, &[Key::ArrowDown]);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::End);
+    h.run_steps(1);
+    h.event(egui::Event::Copy);
+    h.step();
+    assert_eq!(copied(&h).as_deref(), Some("\"author\" : \"John Smith\""));
+
+    // The string reads from right to left: `"name" : "world שלום",` on screen.
+    select(&mut h, &[Key::ArrowRight; 10]);
+    for _ in 0..5 {
+        h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowRight);
+    }
+    h.run_steps(1);
+    h.event(egui::Event::Copy);
+    h.step();
+    assert_eq!(copied(&h).as_deref(), Some("world"));
+}
+
+#[test]
+fn rtl_text_in_the_code_editor_keeps_the_cursor_in_place() {
+    use rustyrobo::ui::editor::{CompletionMode, EditorOptions, code_editor};
+    let text = "{ \"name\" : \"שלום עולם\" }\nabc";
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).build_ui_state(
+        |ui, text: &mut String| {
+            let fields = Default::default();
+            let opts = EditorOptions {
+                line_numbers: false,
+                font: egui::FontId::monospace(13.0),
+                collections: &[],
+                fields: &fields,
+                completion: CompletionMode::Off,
+                focus: false,
+                read_only: false,
+                search: false,
+                multi_cursor: false,
+                folding: false,
+            };
+            code_editor(ui, egui::Id::new("editor"), text, theme::resolve(theme::DEFAULT_THEME, true), opts);
+        },
+        text.to_string(),
+    );
+    h.ctx.set_fonts(fonts::definitions(&Default::default()));
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::CTRL, Key::Home);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(1);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(1);
+    assert_eq!(h.state(), "{ \"name\" : \"שלום עולם\" }\nxabc");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::End);
+    h.run_steps(1);
+    h.event(egui::Event::Copy);
+    h.step();
+    assert_eq!(copied(&h).as_deref(), Some("abc"));
 }
 
 #[test]
@@ -2039,7 +2115,7 @@ fn live_connection_test_in_editor() {
 }
 
 /// What the last frame put in the clipboard.
-fn copied(h: &Harness<'_, App>) -> Option<String> {
+fn copied<State>(h: &Harness<'_, State>) -> Option<String> {
     h.output().platform_output.commands.iter().find_map(|c| match c {
         egui::OutputCommand::CopyText(t) => Some(t.clone()),
         _ => None,

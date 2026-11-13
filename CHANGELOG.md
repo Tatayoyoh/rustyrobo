@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- View Document and Edit Document: selecting text after right-to-left text copies the right text (#1)
+
+
 ## 1.4.0
 
 ### Added
