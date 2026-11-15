@@ -1312,6 +1312,17 @@ fn document_dialog_maximizes_and_closes_like_a_window() {
     h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "shop", "orders", text.into(), Some(Bson::Int32(1)), Some(1)));
     h.run_steps(4);
     let normal = editor_rect(&h);
+    // The title as in the menus: the eye of View, the key word of Edit in the colour of its kind.
+    let title_parts = |h: &Harness<'_, App>, start: &str| {
+        h.output().shapes.iter().find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.text().starts_with(start) => {
+                Some(t.galley.job.sections.iter().map(|s| (t.galley.text()[s.byte_range.start.0..s.byte_range.end.0].to_string(), s.format.color)).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+    };
+    assert!(title_parts(&h, &format!("{} View Document", icon::EYE)).is_some());
+    assert!(has_label(&h, "View Document"), "read without the icon");
 
     h.get_by_label(icon::CORNERS_OUT).click();
     h.run_steps(4);
@@ -1329,6 +1340,9 @@ fn document_dialog_maximizes_and_closes_like_a_window() {
     h.run_steps(4);
     assert!(matches!(&h.state().dialog, Some(Dialog::Document { mode: DocMode::Edit, original_id: Some(Bson::Int32(1)), tab: Some(1), text: t, .. }) if t == text));
     assert!(has_label(&h, "Edit Document — shop.orders"));
+    let edit = title_parts(&h, "Edit Document").expect("title");
+    assert_eq!(edit[0], ("Edit".to_string(), h.state().theme.secondary));
+    assert_eq!(edit[1].0, " Document — shop.orders");
     assert!(editor_rect(&h).width() > 1300.0, "maximized for the next documents too");
     // A double-click on the title bar restores it, and maximizes it again.
     let title = h.get_by_label("Edit Document — shop.orders").rect().center();

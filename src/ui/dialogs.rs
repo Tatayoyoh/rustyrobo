@@ -1043,10 +1043,20 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     DocMode::Edit => format!("Edit Document — {db}.{coll}"),
                     DocMode::View => "View Document".to_string(),
                 };
+                // As in the menus: the eye of View, the key word of the others in the colour of its kind.
+                let mut heading = egui::text::LayoutJob::default();
+                let style = ui.style().clone();
+                let (key, rest) = crate::ui::menu::split(&t);
+                let rest = if *mode == DocMode::View { format!("{} {rest}", icon::EYE) } else { rest.to_string() };
+                if let Some((word, kind)) = key {
+                    RichText::new(word).heading().color(crate::ui::menu::color(&theme, kind)).append_to(&mut heading, &style, egui::FontSelection::Default, egui::Align::Center);
+                }
+                RichText::new(rest).heading().append_to(&mut heading, &style, egui::FontSelection::Default, egui::Align::Center);
                 let mut out = Outcome::Keep;
                 ui.horizontal(|ui| {
                     // Like the title bar of a window: a double-click maximizes or restores.
-                    let mut bar = ui.add(egui::Label::new(RichText::new(&t).heading()).selectable(false).sense(egui::Sense::click()));
+                    let mut bar = ui.add(egui::Label::new(heading).selectable(false).sense(egui::Sense::click()));
+                    bar.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &t));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add(egui::Button::new(icon::X).frame(false)).on_hover_text("Close").clicked() {
                             out = Outcome::Close;

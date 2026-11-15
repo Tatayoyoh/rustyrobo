@@ -18,6 +18,7 @@
 - Results: double-click an `_id` to view the document, R and E view or edit the selected document
 - Document modal: maximize (button, double-click on its title, Ctrl+M) and close button
 - Document modal: Alt+F4 closes it, not the app
+- Document modal: the eye of View in its title, Edit and Insert in the colours of the menus
 - Explorer: Up/Down go through the rows, Right/Left open and close them, Enter opens a collection
 - Explorer and tree view: Space opens and closes a node
 - Connecting (connection manager, welcome page) puts the keyboard in the explorer, on the server opened

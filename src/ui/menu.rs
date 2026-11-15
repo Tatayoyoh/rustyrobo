@@ -61,7 +61,7 @@ pub fn split(label: &str) -> (Option<(&str, Kind)>, &str) {
     }
 }
 
-fn color(t: &Theme, k: Kind) -> Color32 {
+pub fn color(t: &Theme, k: Kind) -> Color32 {
     match k {
         Kind::Create => t.accent,
         Kind::Edit => t.secondary,
