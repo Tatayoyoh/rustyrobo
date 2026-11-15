@@ -4,6 +4,7 @@
 
 ### Added
 
+- Ctrl+K: next view (tree, table, text)
 - View Document: Ctrl+E to edit
 - Edit Document: Ctrl+S to save
 - Results: double-click an `_id` to view the document, R and E view or edit the selected document

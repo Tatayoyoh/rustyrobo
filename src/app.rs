@@ -1400,6 +1400,20 @@ impl App {
             && !self.tabs.is_empty() {
                 self.active_tab = (self.active_tab + self.tabs.len() - 1) % self.tabs.len();
             }
+        // Ctrl+K: the next view of the last clicked results, for all of the tab.
+        if pressed(cmd, Key::K)
+            && let Some(t) = self.tabs.get_mut(self.active_tab)
+            && let Some(current) = t.outputs.iter().max_by_key(|o| o.selected.touched).map(|o| o.mode)
+        {
+            let next = match current {
+                ViewMode::Tree => ViewMode::Table,
+                ViewMode::Table => ViewMode::Text,
+                ViewMode::Text => ViewMode::Tree,
+            };
+            for o in &mut t.outputs {
+                o.mode = next;
+            }
+        }
         for (k, mode) in [(Key::F2, ViewMode::Tree), (Key::F3, ViewMode::Table), (Key::F4, ViewMode::Text)] {
             if pressed(Modifiers::NONE, k)
                 && let Some(t) = self.tabs.get_mut(self.active_tab)
