@@ -40,6 +40,22 @@ pub struct DocCheck {
 /// Hash of the text checked, and the result.
 type CheckResult = (u64, Result<(), String>);
 
+/// The value an Edit dialog opens on (Enter on an object or an array): the
+/// cursor goes to it, its block is shown behind the text.
+#[derive(Clone)]
+pub struct DocFocus {
+    keys: Vec<String>,
+    /// Its block in the text of the hash.
+    span: Option<(u64, Option<std::ops::Range<usize>>)>,
+    placed: bool,
+}
+
+fn text_hash(text: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
 const CHECK_DELAY: Duration = Duration::from_millis(300);
 
 /// Memory key: the document dialog fills the window but `DOC_MARGIN` (Ctrl+M),
@@ -133,7 +149,7 @@ pub enum Dialog {
     RenameCollection { server: u64, db: String, coll: String, name: String },
     DuplicateCollection { server: u64, db: String, coll: String, name: String },
     CopyCollection { server: u64, db: String, coll: String, target_db: String, target_name: String },
-    Document { mode: DocMode, server: u64, db: String, coll: String, text: String, original_id: Option<Bson>, tab: Option<u64>, check: DocCheck },
+    Document { mode: DocMode, server: u64, db: String, coll: String, text: String, original_id: Option<Bson>, tab: Option<u64>, check: DocCheck, focus: Option<DocFocus> },
     User { server: u64, db: String, edit: bool, name: String, password: String, roles: Vec<(String, bool)>, extra_roles: String, error: Option<String> },
     Index(Box<IndexForm>),
     Export(Box<ExportForm>),
@@ -643,7 +659,17 @@ impl Dialog {
     }
 
     pub fn document(mode: DocMode, server: u64, db: &str, coll: &str, text: String, original_id: Option<Bson>, tab: Option<u64>) -> Self {
-        Dialog::Document { mode, server, db: db.to_string(), coll: coll.to_string(), text, original_id, tab, check: DocCheck::default() }
+        Dialog::Document { mode, server, db: db.to_string(), coll: coll.to_string(), text, original_id, tab, check: DocCheck::default(), focus: None }
+    }
+
+    /// The document dialog on the value at `keys` (tree keys) of the document.
+    pub fn focus_on(mut self, keys: Vec<String>) -> Self {
+        if let Dialog::Document { focus, .. } = &mut self
+            && !keys.is_empty()
+        {
+            *focus = Some(DocFocus { keys, span: None, placed: false });
+        }
+        self
     }
 }
 
@@ -749,6 +775,7 @@ fn code_box(ui: &mut Ui, id: Id, text: &mut String, theme: &crate::theme::Theme,
                     search: true,
                     multi_cursor: true,
                     folding: false,
+                    highlight: None,
                 },
             );
         });
@@ -995,7 +1022,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Outcome::Keep
                 }
             }
-            Dialog::Document { mode, server, db, coll, text, original_id, tab, check } => {
+            Dialog::Document { mode, server, db, coll, text, original_id, tab, check, focus } => {
                 let screen = ui.ctx().content_rect();
                 let mut maximized = ui.data(|d| d.get_temp::<bool>(Id::new(DOC_MAXIMIZED))).unwrap_or(false);
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::M)) {
@@ -1038,11 +1065,28 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.data_mut(|d| d.insert_temp(Id::new(DOC_MAXIMIZED), maximized));
                 let save_key = *mode != DocMode::View && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S)));
                 let edit_key = *mode == DocMode::View && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::E)));
+                let editor_id = Id::new("doc-editor");
+                let highlight = focus.as_mut().and_then(|f| {
+                    let hash = text_hash(text);
+                    if f.span.as_ref().map(|s| s.0) != Some(hash) {
+                        f.span = Some((hash, crate::ui::editing::block_span(text, &f.keys)));
+                    }
+                    f.span.as_ref()?.1.clone()
+                });
+                // Once: the cursor at the start of the block, and the block in view.
+                // Not in the first, invisible pass of the dialog: it has no place yet.
+                let reveal = highlight.is_some() && !ui.is_sizing_pass() && focus.as_mut().is_some_and(|f| !std::mem::replace(&mut f.placed, true));
+                if let Some(r) = highlight.as_ref().filter(|_| reveal) {
+                    let id = editor_id.with("text");
+                    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(r.start))));
+                    state.store(ui.ctx(), id);
+                }
                 egui::Frame::new().fill(theme.base).stroke(egui::Stroke::new(1.0, theme.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
                     ui.set_height(h);
                     crate::ui::editor::code_editor(
                         ui,
-                        Id::new("doc-editor"),
+                        editor_id,
                         text,
                         &theme,
                         crate::ui::editor::EditorOptions {
@@ -1051,11 +1095,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             collections: &[],
                             fields: &std::collections::HashMap::new(),
                             completion: crate::ui::editor::CompletionMode::Off,
-                            focus: false,
+                            focus: reveal,
                             read_only: *mode == DocMode::View,
                             search: true,
                             multi_cursor: true,
                             folding: true,
+                            highlight: highlight.map(|r| (r, reveal)),
                         },
                     );
                 });

@@ -1,5 +1,6 @@
 //! Editing helpers behind the code editors: block folding (including edits
-//! made on the folded text), text search and multiple selections (Ctrl+D).
+//! made on the folded text), text search, multiple selections (Ctrl+D) and
+//! the place of a value in a document.
 //! Positions are char indices unless stated otherwise.
 
 use std::collections::HashSet;
@@ -260,11 +261,130 @@ pub fn selected_text(text: &str, sels: &[Sel]) -> String {
     ranges.iter().map(|&(lo, hi)| text.chars().skip(lo).take(hi - lo).collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
+// ---------------------------------------------------------------- structure
+
+/// The object or array at `keys` (tree keys: `[2]` for an array element) in a
+/// document in shell syntax, from its key (its opening bracket in an array)
+/// to its closing bracket. Keys may be quoted or not; strings and comments
+/// are skipped. Follows the edits of the text.
+pub fn block_span(text: &str, keys: &[String]) -> Option<Range<usize>> {
+    enum Frame {
+        /// The key of the current value, and where it starts.
+        Object(Option<(String, usize)>),
+        Array(usize),
+    }
+    let at = |stack: &[Frame]| {
+        stack.len() == keys.len()
+            && stack.iter().zip(keys).all(|(f, k)| match f {
+                Frame::Object(key) => key.as_ref().is_some_and(|(key, _)| key == k),
+                Frame::Array(n) => *k == format!("[{n}]"),
+            })
+    };
+    // A string or a name followed by `:` names the next value of an object.
+    let key_ends = |b: &[u8], mut end: usize| {
+        while end < b.len() && b[end].is_ascii_whitespace() {
+            end += 1;
+        }
+        b.get(end) == Some(&b':')
+    };
+    let b = text.as_bytes();
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut start: Option<(usize, usize)> = None;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        let end = match c {
+            b'"' | b'\'' => {
+                let mut j = i + 1;
+                while j < b.len() && b[j] != c {
+                    j += if b[j] == b'\\' { 2 } else { 1 };
+                }
+                let end = (j + 1).min(b.len());
+                if let Some(Frame::Object(key)) = stack.last_mut()
+                    && key_ends(b, end)
+                {
+                    let quoted = &text[i..end];
+                    let raw = quoted.get(1..quoted.len().saturating_sub(1)).unwrap_or_default();
+                    let name = if c == b'"' { serde_json::from_str(quoted).unwrap_or_else(|_| raw.to_string()) } else { raw.to_string() };
+                    *key = Some((name, i));
+                }
+                end
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => text[i..].find('\n').map_or(b.len(), |n| i + n),
+            b'/' if b.get(i + 1) == Some(&b'*') => text[i + 2..].find("*/").map_or(b.len(), |n| i + n + 4),
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' => {
+                let mut end = i;
+                while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_' || b[end] == b'$') {
+                    end += 1;
+                }
+                if let Some(Frame::Object(key)) = stack.last_mut()
+                    && key_ends(b, end)
+                {
+                    *key = Some((text[i..end].to_string(), i));
+                }
+                end
+            }
+            b'{' | b'[' => {
+                if start.is_none() && at(&stack) {
+                    let from = match stack.last() {
+                        Some(Frame::Object(Some((_, key)))) => *key,
+                        _ => i,
+                    };
+                    start = Some((from, stack.len()));
+                }
+                stack.push(if c == b'{' { Frame::Object(None) } else { Frame::Array(0) });
+                i + 1
+            }
+            b'}' | b']' => {
+                stack.pop();
+                if let Some((from, depth)) = start
+                    && depth == stack.len()
+                {
+                    let chars = |byte: usize| text[..byte].chars().count();
+                    return Some(chars(from)..chars(i + 1));
+                }
+                i + 1
+            }
+            b',' => {
+                match stack.last_mut() {
+                    Some(Frame::Array(n)) => *n += 1,
+                    Some(Frame::Object(key)) => *key = None,
+                    None => {}
+                }
+                i + 1
+            }
+            _ => i + 1,
+        };
+        i = end;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const DOC: &str = "{\n    \"a\" : {\n        \"b\" : [\n            1\n        ]\n    },\n    \"s\" : \"x\"\n}";
+
+    #[test]
+    fn finds_the_block_of_a_value_from_its_key() {
+        let keys = |k: &[&str]| k.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        let span = |text: &str, k: &[&str]| block_span(text, &keys(k)).map(|r| text.chars().skip(r.start).take(r.len()).collect::<String>());
+        assert_eq!(span(DOC, &["a"]).as_deref(), Some("\"a\" : {\n        \"b\" : [\n            1\n        ]\n    }"));
+        assert_eq!(span(DOC, &["a", "b"]).as_deref(), Some("\"b\" : [\n            1\n        ]"));
+        assert_eq!(span(DOC, &[]).as_deref(), Some(DOC), "the document");
+        assert_eq!(span(DOC, &["s"]), None, "not a block");
+        assert_eq!(span(DOC, &["z"]), None);
+        // Array elements, from their bracket.
+        let text = "{\n    \"t\" : [\n        1,\n        {\n            \"x\" : [ 2 ]\n        }\n    ]\n}";
+        assert_eq!(span(text, &["t", "[1]"]).as_deref(), Some("{\n            \"x\" : [ 2 ]\n        }"));
+        assert_eq!(span(text, &["t", "[1]", "x"]).as_deref(), Some("\"x\" : [ 2 ]"));
+        // As typed: names without quotes, brackets in strings and comments, other characters.
+        let text = "{ s: \"{[\", 'q': 1, // b: {\n  é: 1, /* b: [ */ b: { c: 'x' } }";
+        assert_eq!(span(text, &["b"]).as_deref(), Some("b: { c: 'x' }"));
+        let text = "{ \"a\\\"b\" : [ 1 ] }";
+        assert_eq!(span(text, &["a\"b"]).as_deref(), Some("\"a\\\"b\" : [ 1 ]"), "escaped quote in the key");
+    }
 
     #[test]
     fn folds_and_unfolds() {

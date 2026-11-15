@@ -176,6 +176,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         search: true,
                         multi_cursor: true,
                         folding: false,
+                        highlight: None,
                     },
                 );
             });

@@ -289,6 +289,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                     search: true,
                     multi_cursor: true,
                     folding: false,
+                    highlight: None,
                 },
             );
             if r.changed {

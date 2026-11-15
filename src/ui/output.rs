@@ -1216,10 +1216,13 @@ pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fm
             if keys == ["_id"] {
                 return view;
             }
-            // An object or an array: its document.
+            // An object or an array: the document, on it.
             return match pane.edit_cell(doc, &keys) {
                 Ok(()) => None,
-                Err(_) => document_dialog(pane, server, tab, doc, DocMode::Edit, fmt).or(view),
+                Err(_) => match document_dialog(pane, server, tab, doc, DocMode::Edit, fmt) {
+                    Some(Action::Dialog(d)) => Some(Action::Dialog(d.focus_on(keys))),
+                    edit => edit.or(view),
+                },
             };
         }
         _ => {}
@@ -1745,6 +1748,7 @@ mod tests {
         p.cell_edit = None;
         press(&mut p, Key::ArrowUp);
         let edit = press(&mut p, Key::Enter);
+        assert!(matches!(&edit, Some(Action::Dialog(Dialog::Document { focus: Some(_), .. }))), "on the object");
         assert_eq!(dialog(edit), Some(DocMode::Edit));
         press(&mut p, Key::ArrowUp);
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::View));

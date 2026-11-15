@@ -618,6 +618,8 @@ pub struct EditorOptions<'a> {
     pub multi_cursor: bool,
     /// Fold gutter for `{` / `[` blocks.
     pub folding: bool,
+    /// Chars of a block to show behind the text, brought into view when `true`.
+    pub highlight: Option<(Range<usize>, bool)>,
 }
 
 pub struct EditorResponse {
@@ -974,6 +976,19 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                         ui.painter().rect_filled(egui::Rect::from_x_y_ranges(x - 1.0..=x, rect.y_range()), 0, theme.text);
                     }
                 }
+                // Not on the folded text: its positions are not those of the source.
+                if let (Some((r, reveal)), None) = (&opts.highlight, &shown_view) {
+                    let rect = block_rect(ui, &output, r);
+                    shapes.insert(0, egui::Shape::rect_filled(rect, 2, theme.accent.gamma_multiply(0.15)));
+                    if *reveal {
+                        // In the middle, or from the top when taller than the view.
+                        // Not across: the block reaches the right of the view.
+                        let clip = ui.clip_rect();
+                        let delta = if rect.height() < clip.height() { clip.center().y - rect.center().y } else { clip.top() + row_height - rect.top() };
+                        ui.scroll_with_delta(egui::vec2(0.0, delta));
+                        ui.ctx().request_repaint();
+                    }
+                }
                 ui.painter().set(highlights, egui::Shape::Vec(shapes));
 
                 let cursor_range = output.cursor_range;
@@ -1123,6 +1138,14 @@ pub fn find_bar(ui: &mut Ui, id: Id, query: &mut String, focus: &mut bool, match
         bar.close = ui.add(egui::Button::new(icon::X).frame(false)).on_hover_text("Close (Escape)").clicked();
     });
     bar
+}
+
+/// Rectangle of a range of chars over its lines: from its first char to the
+/// right of the view.
+fn block_rect(ui: &Ui, output: &egui::text_edit::TextEditOutput, r: &Range<usize>) -> egui::Rect {
+    let (a, b) = (output.galley.pos_from_cursor(CCursor::new(r.start)), output.galley.pos_from_cursor(CCursor::new(r.end)));
+    let right = (output.galley_pos.x + output.galley.size().x).max(ui.clip_rect().right());
+    egui::Rect::from_min_max(output.galley_pos + a.min.to_vec2(), egui::pos2(right, output.galley_pos.y + b.max.y))
 }
 
 /// Rectangle of a range of chars on one line.

@@ -110,6 +110,8 @@ Key design rules:
   frame (`App::zones`); a click starts from its area, unless it lands in a dialog or a menu on top.
 - egui's `consume_key`/`consume_shortcut` also match with Shift or Alt down: plain arrows would take
   Alt+arrows. Use `ui::consume_plain_key` for keys without modifiers.
+- The first frame of a dialog is an invisible sizing pass (`ui.is_sizing_pass()`), run again at once in the
+  same frame: a one-off action (scroll, focus) done in it uses a wrong layout and is not seen.
 - A `ScrollArea` takes the scroll requests of both axes: `scroll_to_rect` in a table cell never reaches the horizontal scroll
   area around the table. Ask once the table is finished.
 - egui's "strong" text colour is `widgets.active.fg_stroke`: keep it equal to the theme text colour.

@@ -1343,6 +1343,60 @@ fn document_dialog_maximizes_and_closes_like_a_window() {
 }
 
 #[test]
+fn document_dialog_opens_on_a_value_and_has_its_keys() {
+    let _env = env("doc-dialog-keys", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    // On an object far down: the cursor at its key, in the editor, in view.
+    let mut text = String::from("{\n    \"_id\" : 1,\n");
+    for i in 0..80 {
+        text.push_str(&format!("    \"f{i}\" : {i},\n"));
+    }
+    text.push_str("    \"a\" : {\n        \"b\" : 2\n    }\n}");
+    let dialog = Dialog::document(DocMode::Edit, 1, "shop", "orders", text.clone(), Some(Bson::Int32(1)), Some(1)).focus_on(vec!["a".into()]);
+    h.state_mut().dialog = Some(dialog);
+    h.run_steps(4);
+    let cursor = egui::TextEdit::load_state(&h.ctx, egui::Id::new("doc-editor").with("text")).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
+    assert_eq!(cursor, text.find("\"a\""));
+    assert!(h.ctx.text_edit_focused());
+    let line = text[..text.find("\"a\"").unwrap()].matches('\n').count();
+    let shown = h.output().shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.job.text.contains("\"f79\"") => Some((t.pos.y + t.galley.rows[line].pos.y, c.clip_rect)),
+        _ => None,
+    });
+    let (y, clip) = shown.expect("the text is painted");
+    assert!(clip.y_range().contains(y), "the block is in view: {y} in {clip:?}");
+
+    // Ctrl+S saves, not with a mistake.
+    if let Some(Dialog::Document { text, .. }) = &mut h.state_mut().dialog {
+        text.push_str(" oops");
+    }
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "an invalid document stays");
+    if let Some(Dialog::Document { text, .. }) = &mut h.state_mut().dialog {
+        text.truncate(text.len() - " oops".len());
+    }
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "saved");
+
+    // Ctrl+E: from the view to the editor, when the document can be edited.
+    h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "shop", "orders", "{ \"_id\" : 1 }".into(), Some(Bson::Int32(1)), Some(1)));
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::E);
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Document { mode: DocMode::Edit, .. })));
+    h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "", "", "[ 1 ]".into(), None, Some(1)));
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::E);
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Document { mode: DocMode::View, .. })), "nothing to edit");
+}
+
+#[test]
 fn alt_f4_closes_a_document_not_the_app() {
     let _env = env("alt-f4", &AppSettings::default());
     let mut h = closed_manager_harness();
@@ -1993,6 +2047,7 @@ fn rtl_text_in_the_code_editor_keeps_the_cursor_in_place() {
                 search: false,
                 multi_cursor: false,
                 folding: false,
+                highlight: None,
             };
             code_editor(ui, egui::Id::new("editor"), text, theme::resolve(theme::DEFAULT_THEME, true), opts);
         },
