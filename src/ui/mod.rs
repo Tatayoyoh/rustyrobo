@@ -10,6 +10,7 @@ pub mod history;
 pub mod menu;
 pub mod output;
 pub mod query;
+pub mod quick_open;
 
 use std::sync::Arc;
 
@@ -138,6 +139,9 @@ fn menus(app: &mut App, ui: &mut Ui) {
             }
             if menu_item(ui, &format!("{ICON_HISTORY} Query History…"), "Ctrl+H") {
                 app.actions.push(Action::ShowHistory);
+            }
+            if menu_item(ui, &format!("{ICON_COLLECTION} Open Collection…"), "Ctrl+P") {
+                quick_open::toggle(app);
             }
             ui.separator();
             if menu_item(ui, "Exit", "Ctrl+Q") {

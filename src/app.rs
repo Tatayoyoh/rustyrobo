@@ -259,6 +259,8 @@ pub struct App {
     pending_script: Option<ScriptToOpen>,
     pub conn_editor: Option<ConnectionEditor>,
     pub dialog: Option<Dialog>,
+    /// Ctrl+P bar.
+    pub quick_open: Option<crate::ui::quick_open::QuickOpen>,
     /// Where the areas of the window were drawn in the last frame.
     pub zones: Vec<(Zone, egui::Rect)>,
     /// The area last clicked or gone to with Alt+arrows.
@@ -330,6 +332,7 @@ impl App {
             pending_script: None,
             conn_editor: None,
             dialog: None,
+            quick_open: None,
             zones: Vec::new(),
             zone: None,
             zone_flash: None,
@@ -1381,6 +1384,9 @@ impl App {
                 }
             }
         }
+        if pressed(cmd, Key::P) {
+            crate::ui::quick_open::toggle(self);
+        }
         if pressed(cmd, Key::O) {
             self.actions.push(Action::OpenFile);
         }
@@ -1628,6 +1634,7 @@ impl eframe::App for App {
         self.sync_system_theme(&ctx);
         self.shortcuts(&ctx);
         crate::ui::main_window(self, ui);
+        crate::ui::quick_open::show(self, &ctx);
         crate::ui::connections::show(self, &ctx);
         crate::ui::favorites::show(self, &ctx);
         crate::ui::history::show(self, &ctx);

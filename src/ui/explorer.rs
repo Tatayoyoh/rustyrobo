@@ -99,6 +99,12 @@ pub fn coll_ref(name: &str) -> String {
     format!("db.getCollection('{}')", name.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// "View Documents" of a collection: `find({})` in a new tab, the cursor in the filter.
+pub fn view_documents(server: u64, db: &str, name: &str) -> Action {
+    let cref = coll_ref(name);
+    Action::OpenShell { server, db: db.to_string(), script: format!("{cref}.find({{}})"), execute: true, title: name.to_string(), cursor: Some(cref.len() + 7) }
+}
+
 fn selected_id(ui: &Ui) -> Option<Id> {
     ui.data(|d| d.get_temp::<Id>(Id::new("explorer_selected")))
 }
@@ -587,7 +593,7 @@ fn coll_node(app: &App, sid: u64, db: &str, c: &crate::app::CollNode, ui: &mut U
     };
     let is_view = c.kind == "view";
     let icon = if is_view { ICON_VIEW } else { ICON_COLLECTION };
-    let view_docs = shell("find({})", true, Some(cref.len() + 7));
+    let view_docs = view_documents(sid, db, &name);
     node(
         ui,
         id,

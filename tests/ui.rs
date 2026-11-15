@@ -454,6 +454,7 @@ fn shortcuts_dialog_lists_the_copy_shortcuts() {
     assert!(has_label(&h, "Keyboard Shortcuts"));
     assert!(has_label(&h, "Ctrl+C"));
     assert!(has_label(&h, "Ctrl+Shift+C"));
+    assert!(has_label(&h, "Open a collection"));
     assert!(has_label(&h, "View / edit the selected document"));
 }
 
@@ -1447,6 +1448,55 @@ fn a_double_click_on_the_id_views_the_document() {
         double_click_at(&mut h, at);
         assert_eq!(viewed(&h), 1, "{mode:?}");
     }
+}
+
+#[test]
+fn ctrl_p_lists_the_collections_matching_what_is_typed() {
+    let _env = env("quick-open", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    let coll = |name: &str, kind: &str| CollNode { name: name.into(), kind: kind.into(), indexes: Load::Idle };
+    let db = |name: &str, colls: Vec<CollNode>| DbNode { name: name.into(), collections: Load::Ready(colls), functions: Load::Idle, users: Load::Idle, coll_names: Vec::new() };
+    h.state_mut().servers.push(Server {
+        id: 7,
+        settings: ConnectionSettings { name: "Prod".into(), ..Default::default() },
+        secrets: Default::default(),
+        status: ServerStatus::Connecting,
+        dbs: vec![db("shop", vec![coll("orders", "collection"), coll("customers", "view"), coll("order_lines", "collection")]), db("blog", vec![coll("posts", "collection")])],
+        dbs_loading: false,
+    });
+    h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+    h.run_steps(3);
+    let listed = |h: &Harness<'_, App>, name: &str| h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains(name))).next().is_some();
+    for name in ["orders", "customers", "order_lines", "posts"] {
+        assert!(listed(&h, name), "{name}");
+    }
+    // Rows as wide as the bar.
+    let field = h.get_by_role(egui::accesskit::Role::TextInput).rect();
+    let row = h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains("posts"))).next().unwrap().rect();
+    assert!((row.width() - field.width()).abs() < 20.0, "{row:?} {field:?}");
+    h.event(egui::Event::Text("ord".into()));
+    h.run_steps(3);
+    assert!(listed(&h, "orders") && listed(&h, "order_lines"));
+    assert!(!listed(&h, "customers") && !listed(&h, "posts"));
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(3);
+    assert!(has_label(&h, "No collection matches"));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().quick_open.is_none());
+
+    // From the File menu too; Ctrl+P closes it.
+    h.get_by_label("File").click();
+    h.run_steps(2);
+    h.get_by_label_contains("Open Collection…").click();
+    h.run_steps(3);
+    assert!(h.state().quick_open.is_some() && listed(&h, "posts"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+    h.run_steps(3);
+    assert!(h.state().quick_open.is_none());
 }
 
 #[test]
@@ -2932,4 +2982,132 @@ fn live_table_cells_are_edited_in_place() {
     assert!(has_label(&h, "Remove the field \"tags\" from this document?"));
     h.get_by_label("Yes").click();
     wait_until(&mut h, "field removed", Duration::from_secs(15), |h| h.state().tabs[0].outputs[0].docs().len() == 2 && value(h, 0, "tags").is_none());
+}
+
+#[test]
+fn live_documents_open_from_ctrl_p_and_the_keys() {
+    if !live() {
+        return;
+    }
+    let s = AppSettings { connections: vec![local_mongo8()], ..Default::default() };
+    let _env = env("live-open-docs", &s);
+    let mut h = harness();
+    connect_main(&mut h);
+    let sid = h.state().servers[0].id;
+    // Connected: the keyboard is in the explorer, the databases shown.
+    assert_eq!(h.state().zone, Some(Zone::Explorer));
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    let selected = h.ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("explorer_selected")));
+    assert_eq!(selected, Some(egui::Id::new(("srv", sid)).with("system")), "the first row under the server");
+    h.state_mut().actions.push(Action::OpenShell {
+        server: sid,
+        db: "rrui".into(),
+        script: "db.quickdocs.drop(); db.quickdocs.insertMany([{ _id: 'ada-id', name: 'Ada' }, { _id: 'linus-id', name: 'Linus' }])".into(),
+        execute: true,
+        title: "seed".into(),
+        cursor: None,
+    });
+    wait_until(&mut h, "seed", Duration::from_secs(15), |h| h.state().tabs.first().is_some_and(|t| !t.running && t.elapsed.is_some()));
+    h.state_mut().actions.push(Action::RefreshServer(sid));
+    wait_until(&mut h, "databases", Duration::from_secs(15), |h| h.state().servers[0].dbs.iter().any(|d| d.name == "rrui"));
+
+    // Ctrl+P loads the collections of the server, and opens the one typed.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+    h.run_steps(2);
+    h.event(egui::Event::Text("quickdocs".into()));
+    let listed = |h: &Harness<'_, App>| h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains("quickdocs"))).next().is_some();
+    wait_until(&mut h, "collections", Duration::from_secs(15), listed);
+    h.key_press(Key::Enter);
+    wait_until(&mut h, "results", Duration::from_secs(15), |h| h.state().tabs.iter().any(|t| t.title == "quickdocs" && t.outputs.first().is_some_and(|o| o.docs().len() == 2)));
+    assert!(h.state().quick_open.is_none());
+    let tab = h.state().active_tab;
+    assert_eq!(h.state().tabs[tab].title, "quickdocs", "in the new tab");
+    let shown = |h: &Harness<'_, App>, mode: DocMode, id: &str| matches!(&h.state().dialog, Some(Dialog::Document { mode: m, original_id: Some(Bson::String(i)), .. }) if *m == mode && i == id);
+
+    // Table view: a click selects the row, R views it, E edits it.
+    h.key_press(Key::F3);
+    h.run_steps(3);
+    let at = h.get_by_label("Linus").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Primary);
+    h.key_press(Key::R);
+    h.run_steps(3);
+    assert!(shown(&h, DocMode::View, "linus-id"));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    h.key_press(Key::E);
+    h.run_steps(3);
+    assert!(shown(&h, DocMode::Edit, "linus-id"));
+    close_document_dialog(&mut h);
+
+    // Ctrl+K: the next view, for all the results of the tab.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[tab].outputs[0].mode, ViewMode::Text);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[tab].outputs[0].mode, ViewMode::Tree);
+
+    // Alt+arrows: the editor takes the keyboard, and gives it back to the
+    // results, whose script stays as it is; then the explorer.
+    let script = h.state().tabs[tab].script.clone();
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().zone, Some(Zone::Editor));
+    assert!(h.ctx.text_edit_focused(), "the editor has the focus");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().zone, Some(Zone::Results));
+    assert!(!h.ctx.text_edit_focused());
+    assert_eq!(h.state().tabs[tab].script, script);
+    assert!(!h.state().tabs[tab].outputs[0].selected.is_empty(), "a document to view or edit");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().zone, Some(Zone::Explorer));
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().zone, Some(Zone::Results));
+
+    // Tree view: a double-click on the _id views the document, Edit goes on with it.
+    h.key_press(Key::F2);
+    h.run_steps(3);
+    let at = h.get_by_label("ada-id").rect().center();
+    double_click_at(&mut h, at);
+    assert!(shown(&h, DocMode::View, "ada-id"));
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert!(shown(&h, DocMode::Edit, "ada-id"));
+    close_document_dialog(&mut h);
+
+    // Keyboard in the tree: Down goes to the next row, Enter edits it in place.
+    let current = |h: &Harness<'_, App>| h.state().tabs[tab].outputs[0].selected.current().map(str::to_string);
+    let at = h.get_by_label("ada-id").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Primary);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(current(&h).as_deref(), Some("0/name"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(has_input(&h, "\"Ada\""), "edited in place");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // In the table: Left and Right go through the columns, Enter edits the cell.
+    h.key_press(Key::F3);
+    h.run_steps(3);
+    let at = h.get_by_label("Ada").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Primary);
+    assert_eq!(h.state().tabs[tab].outputs[0].column.as_deref(), Some("name"), "the clicked cell");
+    for key in [Key::ArrowLeft, Key::ArrowDown, Key::ArrowRight] {
+        h.key_press(key);
+        h.run_steps(2);
+    }
+    assert_eq!((current(&h).as_deref(), h.state().tabs[tab].outputs[0].column.as_deref()), (Some("1"), Some("name")));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(has_input(&h, "\"Linus\""), "edited in place");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().tabs[tab].outputs[0].cell_edit.is_none());
 }

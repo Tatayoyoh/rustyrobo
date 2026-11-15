@@ -52,6 +52,7 @@ src/
   ui/
     mod.rs         menus, toolbar, docks
     explorer.rs    database tree + context menus
+    quick_open.rs  Ctrl+P bar: opens a collection by its name
     query.rs       query tabs (editor + results)
     output.rs      tree/table/text result panes, paging, document menu
     editor.rs      JS highlighting (memoised), line numbers, autocompletion

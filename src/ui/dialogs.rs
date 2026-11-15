@@ -1442,6 +1442,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+O / Ctrl+S", "Open / save script"),
                         ("Ctrl+H", "Query history"),
                         ("Ctrl+J", "Favorite scripts"),
+                        ("Ctrl+P", "Open a collection"),
                         ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
                         ("Ctrl+Space", "Autocompletion"),
                         ("Ctrl+F", "Find in the editor or the results"),
