@@ -133,7 +133,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
             if menu_item(ui, "Save As…", "Ctrl+Shift+S") {
                 app.actions.push(Action::SaveFile { save_as: true });
             }
-            if menu_item(ui, &format!("{ICON_FAVORITE} Favorite Scripts…"), "") {
+            if menu_item(ui, &format!("{ICON_FAVORITE} Favorite Scripts…"), "Ctrl+J") {
                 app.actions.push(Action::ShowFavorites);
             }
             if menu_item(ui, &format!("{ICON_HISTORY} Query History…"), "Ctrl+H") {
@@ -323,7 +323,7 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         if ui.button(ICON_SAVE).on_hover_text("Save script (Ctrl+S)").clicked() {
             app.actions.push(Action::SaveFile { save_as: false });
         }
-        if ui.button(format!("{ICON_FAVORITE} Favorite Scripts")).on_hover_text("Manage and load favorite scripts").clicked() {
+        if ui.button(format!("{ICON_FAVORITE} Favorite Scripts")).on_hover_text("Manage and load favorite scripts (Ctrl+J)").clicked() {
             app.actions.push(Action::ShowFavorites);
         }
         if ui.button(format!("{ICON_HISTORY} History")).on_hover_text("Query history (Ctrl+H)").clicked() {

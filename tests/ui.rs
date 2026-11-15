@@ -436,6 +436,9 @@ fn keyboard_shortcuts_open_dialogs() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(2);
     assert!(h.state().settings.show_logs, "Ctrl+L shows the logs");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::J);
+    h.run_steps(3);
+    assert!(h.state().favorites.is_some(), "Ctrl+J opens the favorite scripts");
     assert!(has_label(&h, "started"), "startup line in the logs");
 }
 

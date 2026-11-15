@@ -50,7 +50,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - All languages: uses the fonts of your system, with right-to-left text in the results
 - Native single binary, light on resources
 - Multi document selection
-- A favorite script manager
+- A favorite script manager (Ctrl+J)
 - Import / export of collections and query results in JSON and CSV
 - Dump / restore of databases in the formats of mongodump (folder or archive), no tools to install
 - Query history: search the scripts you ran and open them again (Ctrl+H)

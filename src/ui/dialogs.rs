@@ -1441,6 +1441,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous shell"),
                         ("Ctrl+O / Ctrl+S", "Open / save script"),
                         ("Ctrl+H", "Query history"),
+                        ("Ctrl+J", "Favorite scripts"),
                         ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
                         ("Ctrl+Space", "Autocompletion"),
                         ("Ctrl+F", "Find in the editor or the results"),

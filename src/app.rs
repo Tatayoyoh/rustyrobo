@@ -1370,6 +1370,9 @@ impl App {
         if pressed(cmd, Key::H) {
             self.actions.push(Action::ShowHistory);
         }
+        if pressed(cmd, Key::J) {
+            self.actions.push(Action::ShowFavorites);
+        }
         // The explorer, when it was the last clicked: arrows and Enter.
         if self.zone == Some(Zone::Explorer) && !ctx.text_edit_focused() {
             for k in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Enter] {

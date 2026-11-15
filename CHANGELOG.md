@@ -9,6 +9,7 @@
   - Up/Down go through the rows, Right/Left open and close the nodes of the tree or go through the columns of the table, Enter edits
 - Alt+arrows: go between the explorer, the editor, the results and the logs
 - Ctrl+K: next view (tree, table, text)
+- Ctrl+J: favorite scripts
 - View Document: Ctrl+E to edit
 - Edit Document: Ctrl+S to save
 - Results: double-click an `_id` to view the document, R and E view or edit the selected document
