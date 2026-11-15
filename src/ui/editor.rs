@@ -466,6 +466,8 @@ pub struct CompletionCtx<'a> {
 #[derive(Default, Debug)]
 pub struct Completion {
     pub result: Option<(usize, Vec<String>)>,
+    /// Keys of an object: `: ` follows them once completed.
+    pub key: bool,
     /// Field names of this collection are needed but not loaded yet.
     pub want_fields: Option<String>,
 }
@@ -515,6 +517,7 @@ pub fn complete(text: &str, cursor: usize, cx: &CompletionCtx<'_>) -> Completion
             items.retain(|i| seen.insert(i.clone()));
             if !items.is_empty() {
                 out.result = Some((start, items));
+                out.key = true;
             }
             return out;
         }
@@ -599,6 +602,8 @@ struct CompletionState {
     open: bool,
     start: usize,
     items: Vec<String>,
+    /// Keys of an object (see [`after_key`]).
+    key: bool,
     selected: usize,
     /// Set when an item is clicked; applied on the next frame.
     pending_accept: bool,
@@ -682,6 +687,100 @@ fn set_selection(ctx: &egui::Context, edit_id: Id, (anchor, head): Sel) {
 fn current_selection(ctx: &egui::Context, edit_id: Id) -> Option<Sel> {
     let r = egui::TextEdit::load_state(ctx, edit_id)?.cursor.char_range()?;
     Some((r.secondary.index.0, r.primary.index.0))
+}
+
+/// Next stop of Ctrl+arrow from `at` (char index): egui's next word boundary,
+/// or a `:` on the way, between a key and its value (egui goes over it in
+/// `name:value`, one word for Unicode). Backwards from a value, its key with
+/// the colon (`name: `) at once, to edit it.
+fn word_stop(text: &str, at: usize, forward: bool) -> usize {
+    use egui::text_selection::text_cursor_state::{ccursor_next_word, ccursor_previous_word};
+    let chars: Vec<char> = text.chars().collect();
+    if forward {
+        // Before a colon, then after it.
+        if chars.get(at) == Some(&':') {
+            return at + 1;
+        }
+        let to = ccursor_next_word(text, CCursor::new(at)).index.0;
+        (at + 1..to).find(|&i| chars[i] == ':').unwrap_or(to)
+    } else {
+        if let Some(key) = key_before(&chars, at) {
+            return key;
+        }
+        let to = ccursor_previous_word(text, CCursor::new(at)).index.0;
+        (to..at.saturating_sub(1)).rev().find(|&i| chars[i] == ':').map_or(to, |i| i + 1)
+    }
+}
+
+/// Start of the key whose value starts at `at`: of `name`, `"name"` or `'name'`
+/// before `:` and spaces.
+fn key_before(chars: &[char], at: usize) -> Option<usize> {
+    let blank = |c: char| c == ' ' || c == '\t';
+    let mut i = at.min(chars.len());
+    while i > 0 && blank(chars[i - 1]) {
+        i -= 1;
+    }
+    if i == 0 || chars[i - 1] != ':' {
+        return None;
+    }
+    let mut end = i - 1;
+    while end > 0 && blank(chars[end - 1]) {
+        end -= 1;
+    }
+    match chars.get(end.checked_sub(1)?) {
+        Some(&q @ ('"' | '\'')) => (0..end - 1).rev().find(|&j| chars[j] == q),
+        _ => {
+            let start = (0..end).rev().find(|&j| !(chars[j].is_alphanumeric() || matches!(chars[j], '_' | '$' | '.'))).map_or(0, |j| j + 1);
+            (start < end).then_some(start)
+        }
+    }
+}
+
+/// Ctrl+Left and Ctrl+Right, with Shift to select, by [`word_stop`].
+fn word_jumps(ui: &Ui, edit_id: Id, text: &str) {
+    let jumps = ui.input_mut(|i| {
+        let mut jumps = Vec::new();
+        i.events.retain(|e| match e {
+            egui::Event::Key { key: key @ (Key::ArrowLeft | Key::ArrowRight), pressed, modifiers, .. } if modifiers.ctrl && !modifiers.alt => {
+                if *pressed {
+                    jumps.push((*key == Key::ArrowRight, modifiers.shift));
+                }
+                false
+            }
+            _ => true,
+        });
+        jumps
+    });
+    for (forward, extend) in jumps {
+        let Some((anchor, head)) = current_selection(ui.ctx(), edit_id) else { continue };
+        let head = word_stop(text, head, forward);
+        set_selection(ui.ctx(), edit_id, (if extend { anchor } else { head }, head));
+    }
+}
+
+/// What follows a completed key of an object, from `start` to `end` (chars):
+/// its closing quote if it has an opening one, and `: `, unless they are there
+/// already. Returns where to insert, what, and the cursor after it.
+fn after_key(text: &str, start: usize, end: usize) -> (usize, String, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut at = end;
+    let mut extra = String::new();
+    if let Some(&quote) = start.checked_sub(1).and_then(|i| chars.get(i)).filter(|c| matches!(c, '"' | '\'')) {
+        if chars.get(at) == Some(&quote) {
+            at += 1;
+        } else {
+            extra.push(quote);
+        }
+    }
+    let spaces = chars.get(at..).unwrap_or_default().iter().take_while(|c| **c == ' ').count();
+    if chars.get(at + spaces) == Some(&':') {
+        let after = at + spaces + 1;
+        let cursor = after + usize::from(chars.get(after) == Some(&' ')) + extra.chars().count();
+        return (at, extra, cursor);
+    }
+    extra.push_str(": ");
+    let cursor = at + extra.chars().count();
+    (at, extra, cursor)
 }
 
 pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: EditorOptions<'_>) -> EditorResponse {
@@ -934,6 +1033,9 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                 let highlights = ui.painter().add(egui::Shape::Noop);
                 let available = ui.available_size();
                 let copy = if opts.read_only { take_reordered_copy(ui, edit_id, buf.as_str(), theme, &opts.font) } else { None };
+                if focused && multi.len() < 2 {
+                    word_jumps(ui, edit_id, buf.as_str());
+                }
                 let output = egui::TextEdit::multiline(buf)
                     .id(edit_id)
                     .font(opts.font.clone())
@@ -1004,7 +1106,12 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                     if let (Some(cur), Some(item)) = (cursor, comp.items.get(comp.selected).cloned()) {
                         buf.delete_char_range(CharIndex(comp.start)..CharIndex(cur));
                         buf.insert_text(&item, CharIndex(comp.start));
-                        let new_cursor = comp.start + item.chars().count();
+                        let mut new_cursor = comp.start + item.chars().count();
+                        if comp.key {
+                            let (at, extra, cursor) = after_key(buf.as_str(), comp.start, new_cursor);
+                            buf.insert_text(&extra, CharIndex(at));
+                            new_cursor = cursor;
+                        }
                         let mut state = output.state.clone();
                         state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(new_cursor))));
                         state.store(ui.ctx(), edit_id);
@@ -1022,6 +1129,7 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
                             }
                             comp.open = true;
                             comp.start = start;
+                            comp.key = comp_res.key;
                             comp.selected = comp.selected.min(items.len() - 1);
                             comp.items = items;
                         }
@@ -1316,9 +1424,12 @@ mod tests {
         assert_eq!(c.want_fields.as_deref(), Some("items"));
         fields.insert("items".to_string(), vec!["tag".into(), "total".into(), "address.city".into()]);
         let cx = CompletionCtx { collections: &cols, fields: &fields, mode: CompletionMode::All };
-        let (start, items) = complete(src, src.chars().count(), &cx).result.unwrap();
+        let c = complete(src, src.chars().count(), &cx);
+        assert!(c.key, "a key: `: ` follows it");
+        let (start, items) = c.result.unwrap();
         assert_eq!(start, src.chars().count() - 2);
         assert_eq!(items, vec!["tag"]);
+        assert!(!complete("db.getCollection('items').fi", 28, &cx).key, "a method");
         let src = "db.items.find({ n: 1, \"addr";
         let (_, items) = complete(src, src.chars().count(), &cx).result.unwrap();
         assert_eq!(items, vec!["address.city"]);
@@ -1375,6 +1486,54 @@ mod tests {
         assert!(job.sections.len() > 3);
         let empty = highlight("", t, FontId::monospace(12.0));
         assert_eq!(empty.text, "");
+    }
+
+    #[test]
+    fn a_completed_key_is_followed_by_a_colon() {
+        // `|` is the cursor after the completed key, `^` the cursor wanted.
+        let check = |before: &str, after: &str| {
+            let start = before.find("na").unwrap();
+            let end = before.find('|').unwrap();
+            let text = before.replace('|', "");
+            let (at, extra, cursor) = after_key(&text, start, end);
+            let mut out = text.clone();
+            out.insert_str(at, &extra);
+            out.insert(cursor, '^');
+            assert_eq!(out, after, "{before}");
+        };
+        check("find({ name| })", "find({ name: ^ })");
+        check("find({ \"name| })", "find({ \"name\": ^ })");
+        check("find({ \"name|\" })", "find({ \"name\": ^ })");
+        check("find({ 'name|' : 1 })", "find({ 'name' : ^1 })");
+        check("find({ name|: 1 })", "find({ name: ^1 })");
+    }
+
+    #[test]
+    fn ctrl_arrows_stop_at_colons() {
+        let stops = |text: &str, forward: bool| {
+            let (mut at, mut out) = (if forward { 0 } else { text.chars().count() }, Vec::new());
+            loop {
+                let next = word_stop(text, at, forward);
+                if next == at {
+                    return out;
+                }
+                at = next;
+                out.push(at);
+            }
+        };
+        // egui sees one word in `status:active`.
+        assert_eq!(stops("{status:active}", true), [1, 7, 8, 14, 15]);
+        assert_eq!(stops("{status:active}", false), [14, 8, 1, 0]);
+        // Backwards from a value: its key at once, to edit it.
+        let text = "find({favorite: true})";
+        let (key, value) = (text.find("favorite").unwrap(), text.find("true").unwrap());
+        assert_eq!(word_stop(text, value + 4, false), value);
+        assert_eq!(word_stop(text, value, false), key);
+        let text = "{ \"a b\" : 1, $gt:2 }";
+        assert_eq!(word_stop(text, text.find('1').unwrap(), false), text.find('"').unwrap(), "a quoted key");
+        assert_eq!(word_stop(text, text.find('2').unwrap(), false), text.find('$').unwrap());
+        // Elsewhere, egui's stops.
+        assert_eq!(stops("{ a: 1 }", true), [1, 3, 4, 6, 7, 8]);
     }
 
     #[test]
