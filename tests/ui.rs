@@ -1966,6 +1966,32 @@ fn text_view_scrolls_and_its_cursor_goes_by_pages() {
 }
 
 #[test]
+fn keys_hide_the_highlight_of_the_row_under_the_pointer() {
+    let fmt = FormatOptions { tz: Default::default(), uuid: Default::default() };
+    for mode in [ViewMode::Tree, ViewMode::Table] {
+        let docs = (0..5).map(|i| Bson::Document(doc! { "_id": i, "name": format!("name {i}") })).collect();
+        let mut h = pane_harness(docs, mode);
+        // The row of the fourth document: its root in the tree, a cell in the table.
+        let label = if mode == ViewMode::Tree { "(4) 3" } else { "name 3" };
+        let row = h.get_by_label(label).rect().center();
+        let fill = h.ctx.global_style().visuals.widgets.hovered.bg_fill;
+        let highlighted = |h: &Harness<'_, OutputPane>| h.output().shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(row)));
+        h.hover_at(row);
+        h.run_steps(2);
+        assert!(highlighted(&h), "{mode:?}: under the pointer");
+        let _ = rustyrobo::ui::output::navigate(h.state_mut(), Key::ArrowDown, 1, 1, fmt);
+        h.run_steps(2);
+        assert!(!highlighted(&h), "{mode:?}: the keys went through the rows");
+        // A moment later: the keys are timed by the clock, the pointer by egui's,
+        // which the harness moves on by large steps.
+        std::thread::sleep(Duration::from_millis(600));
+        h.hover_at(row + egui::vec2(3.0, 0.0));
+        h.run_steps(2);
+        assert!(highlighted(&h), "{mode:?}: the pointer moved");
+    }
+}
+
+#[test]
 fn copy_value_menu_shows_its_shortcut() {
     let mut h = pane_harness(vec![Bson::Document(doc! { "_id": 1, "a": "x", "b": "y" })], ViewMode::Tree);
     let menu_has = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+C")));

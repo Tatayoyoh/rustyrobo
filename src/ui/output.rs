@@ -834,6 +834,12 @@ fn expand_all(set: &mut HashSet<String>, b: &Bson, path: String) {
     set.insert(path);
 }
 
+/// The selection changed since the pointer last moved (with the keyboard): the
+/// row under the pointer is not highlighted, not to be taken for it.
+fn moved_by_keys(ui: &Ui, pane: &OutputPane) -> bool {
+    pane.selected.touched.is_some_and(|t| t.elapsed().as_secs_f32() < ui.input(|i| i.pointer.time_since_last_movement()))
+}
+
 /// Single-line label of a result cell, cut at the width of the cell. Text that
 /// reads from right to left is cut on the left, to show its start.
 fn cell_label(ui: &mut Ui, text: &str, font: &FontId, color: egui::Color32) {
@@ -865,6 +871,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         _ => flatten(pane.docs(), &pane.expanded, cx.fmt, cx.theme),
     };
     let row_h = cx.font_size + 8.0;
+    let keys = moved_by_keys(ui, pane);
     let mut toggle: Option<String> = None;
     let mut menu_actions = Vec::new();
     let th = cx.theme;
@@ -911,6 +918,9 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 shown = (shown.0.min(row.index()), shown.1.max(row.index()));
                 let r = &rows[row.index()];
                 row.set_selected(pane.selected.contains(&r.path));
+                if keys {
+                    row.set_hovered(false);
+                }
                 let hit = pane.find.row(&r.path);
                 row.col(|ui| {
                     if let Some((i, _)) = hit.filter(|(_, h)| h.in_key) {
@@ -1441,6 +1451,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let current = pane.selected.current().map(str::to_string).zip(pane.column.clone());
     let mut current_shown = false;
     let mut shown = (usize::MAX, 0);
+    let keys = moved_by_keys(ui, pane);
 
     egui::ScrollArea::horizontal().id_salt(("table-h", cx.tab, cx.index)).show(ui, |ui| {
         let mut tb = TableBuilder::new(ui)
@@ -1481,6 +1492,9 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let d = &docs[i];
                 let path = i.to_string();
                 row.set_selected(pane.selected.contains(&path));
+                if keys {
+                    row.set_hovered(false);
+                }
                 let (_, number) = row.col(|ui| {
                     ui.label(RichText::new((pane.skip + i as u64 + 1).to_string()).color(th.text_weak));
                 });
