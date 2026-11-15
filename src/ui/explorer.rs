@@ -16,6 +16,84 @@ const SYSTEM_DBS: &[&str] = &["admin", "config", "local"];
 /// Memory key: Alt+arrows went to the explorer, its selected row takes the keyboard.
 pub const FOCUS: &str = "explorer-focus";
 
+/// Rows of the explorer in the order drawn: their id (that of their node), their
+/// depth and whether they open a node. What the keyboard goes through.
+#[derive(Clone, Default)]
+struct Rows {
+    list: Vec<(Id, usize, bool)>,
+    depth: usize,
+}
+
+/// Memory keys: the rows being drawn, those of the last frame, the row Enter
+/// went to (for this frame), and the selected row to bring into view.
+const ROWS: &str = "explorer-rows";
+const SHOWN: &str = "explorer-rows-shown";
+const ACTIVATE: &str = "explorer-activate";
+const SCROLL: &str = "explorer-scroll";
+
+/// Keys on the explorer: Up and Down go to the row above and below, Right
+/// opens a node then goes to its first child, Left closes it or goes to its
+/// parent, Enter does what a double-click does (opens a collection).
+pub fn key(ctx: &egui::Context, key: egui::Key) {
+    use egui::Key;
+    let Some(rows) = ctx.data(|d| d.get_temp::<Rows>(Id::new(SHOWN))).filter(|r| !r.list.is_empty()) else { return };
+    // A focused row would take the arrows too (egui moves its focus).
+    if let Some(focused) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(focused));
+    }
+    let list = &rows.list;
+    let at = ctx.data(|d| d.get_temp::<Id>(Id::new("explorer_selected"))).and_then(|s| list.iter().position(|r| r.0 == s));
+    let select = |i: usize| {
+        ctx.data_mut(|d| {
+            d.insert_temp(Id::new("explorer_selected"), list[i].0);
+            d.insert_temp(Id::new(SCROLL), true);
+        });
+    };
+    match (key, at) {
+        (Key::ArrowDown, _) => select(at.map_or(0, |i| (i + 1).min(list.len() - 1))),
+        (Key::ArrowUp, _) => select(at.map_or(0, |i| i.saturating_sub(1))),
+        (Key::ArrowRight, Some(i)) if list[i].2 => {
+            let mut state = CollapsingState::load_with_default_open(ctx, list[i].0, false);
+            if !state.is_open() {
+                state.set_open(true);
+                state.store(ctx);
+            } else if list.get(i + 1).is_some_and(|r| r.1 > list[i].1) {
+                select(i + 1);
+            }
+        }
+        (Key::ArrowLeft, Some(i)) => {
+            let mut state = CollapsingState::load_with_default_open(ctx, list[i].0, false);
+            if list[i].2 && state.is_open() {
+                state.set_open(false);
+                state.store(ctx);
+            } else if let Some(parent) = list[..i].iter().rposition(|r| r.1 < list[i].1) {
+                select(parent);
+            }
+        }
+        (Key::Enter, Some(i)) => ctx.data_mut(|d| {
+            d.insert_temp(Id::new(ACTIVATE), list[i].0);
+        }),
+        _ => {}
+    }
+}
+
+/// A server just connected: its row takes the keyboard, its databases shown.
+pub fn focus_server(ctx: &egui::Context, sid: u64) {
+    let id = Id::new(("srv", sid));
+    let mut state = CollapsingState::load_with_default_open(ctx, id, false);
+    state.set_open(true);
+    state.store(ctx);
+    ctx.data_mut(|d| {
+        d.insert_temp(Id::new("explorer_selected"), id);
+        d.insert_temp(Id::new(FOCUS), true);
+    });
+}
+
+/// A double-click on the row, or Enter on it.
+fn activated(ui: &Ui, r: &Response, id: Id) -> bool {
+    r.double_clicked() || ui.data(|d| d.get_temp::<Id>(Id::new(ACTIVATE))) == Some(id)
+}
+
 /// `db.getCollection('name')` with quotes and backslashes escaped.
 pub fn coll_ref(name: &str) -> String {
     format!("db.getCollection('{}')", name.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -28,7 +106,16 @@ fn selected_id(ui: &Ui) -> Option<Id> {
 /// Selectable row; double-click is reported, selection stored in memory.
 fn row(ui: &mut Ui, id: Id, text: RichText) -> Response {
     let sel = selected_id(ui) == Some(id);
-    let r = ui.add(egui::Button::selectable(sel, text).frame_when_inactive(false));
+    // Framed when selected only: with the keyboard, the pointer is elsewhere.
+    let r = ui.add(egui::Button::selectable(sel, text));
+    ui.data_mut(|d| {
+        let rows = d.get_temp_mut_or_default::<Rows>(Id::new(ROWS));
+        let depth = rows.depth;
+        rows.list.push((id, depth, false));
+    });
+    if sel && ui.data_mut(|d| d.remove_temp::<bool>(Id::new(SCROLL))).is_some() {
+        r.scroll_to_me(None);
+    }
     // The first row when none is selected.
     if (sel || selected_id(ui).is_none()) && ui.data_mut(|d| d.remove_temp::<bool>(Id::new(FOCUS))).is_some() {
         r.request_focus();
@@ -47,13 +134,23 @@ fn node(ui: &mut Ui, id: Id, header: impl FnOnce(&mut Ui) -> Response, body: imp
     let mut toggle = false;
     let mut hr = state.show_header(ui, |ui| {
         let r = header(ui);
-        toggle = r.double_clicked();
+        toggle = activated(ui, &r, id);
+        ui.data_mut(|d| {
+            if let Some(last) = d.get_temp_mut_or_default::<Rows>(Id::new(ROWS)).list.last_mut() {
+                last.2 = true;
+            }
+        });
     });
     if toggle {
         hr.toggle();
     }
     let open = hr.is_open();
-    hr.body(|ui| body(ui));
+    let rows = Id::new(ROWS);
+    hr.body(|ui| {
+        ui.data_mut(|d| d.get_temp_mut_or_default::<Rows>(rows).depth += 1);
+        body(ui);
+        ui.data_mut(|d| d.get_temp_mut_or_default::<Rows>(rows).depth -= 1);
+    });
     open
 }
 
@@ -98,6 +195,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         });
     });
     ui.separator();
+    ui.data_mut(|d| d.insert_temp(Id::new(ROWS), Rows::default()));
     let actions = RefCell::new(Vec::new());
     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
@@ -117,6 +215,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // Its selected row is hidden (folded): the keyboard goes nowhere.
     ui.data_mut(|d| {
         d.remove_temp::<bool>(Id::new(FOCUS));
+        d.remove_temp::<bool>(Id::new(SCROLL));
+        d.remove::<Id>(Id::new(ACTIVATE));
+        let rows = d.remove_temp::<Rows>(Id::new(ROWS)).unwrap_or_default();
+        d.insert_temp(Id::new(SHOWN), rows);
     });
     app.actions.extend(actions.into_inner());
 }
@@ -377,7 +479,7 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                             let lid = fid.with(&name);
                             let r = leaf(ui, lid, RichText::new(format!("{ICON_FUNCTION} {name}")));
                             let edit = Action::Dialog(Dialog::Function { server: sid, db: db.clone(), original: Some(name.clone()), name: name.clone(), code, error: None });
-                            if r.double_clicked() {
+                            if activated(ui, &r, lid) {
                                 actions.borrow_mut().push(edit.clone());
                             }
                             r.context_menu(|ui| {
@@ -441,7 +543,7 @@ fn db_node(app: &App, sid: u64, d: &crate::app::DbNode, ui: &mut Ui, actions: &R
                             let lid = uid.with(&name);
                             let r = leaf(ui, lid, RichText::new(format!("{ICON_USER} {name}")));
                             let view = shell(&format!("db.getUser({})", serde_json::to_string(&name).unwrap_or_default()), true, None);
-                            if r.double_clicked() {
+                            if activated(ui, &r, lid) {
                                 actions.borrow_mut().push(view.clone());
                             }
                             r.context_menu(|ui| {
@@ -492,7 +594,9 @@ fn coll_node(app: &App, sid: u64, db: &str, c: &crate::app::CollNode, ui: &mut U
         |ui| {
             let r = row(ui, id, RichText::new(format!("{icon} {name}")));
             let r = if c.kind != "collection" { r.on_hover_text(&c.kind) } else { r };
-            if r.double_clicked() {
+            if activated(ui, &r, id) {
+                // Enter only opens it: its node stays as it is.
+                ui.data_mut(|d| d.remove::<Id>(Id::new(ACTIVATE)));
                 actions.borrow_mut().push(view_docs.clone());
             }
             r.context_menu(|ui| {
@@ -612,10 +716,11 @@ fn index_leaf(sid: u64, db: &str, coll: &str, ix: &Document, parent: Id, ui: &mu
     let iname = ix.get_str("name").unwrap_or_default().to_string();
     let keys = ix.get_document("key").map(|k| crate::bsonfmt::scalar_shell(&Bson::Document(k.clone()), Default::default())).unwrap_or_default();
     let keys_one_line: String = keys.split_whitespace().collect::<Vec<_>>().join(" ");
-    let r = leaf(ui, parent.with(&iname), RichText::new(format!("{ICON_INDEX} {iname}")));
+    let lid = parent.with(&iname);
+    let r = leaf(ui, lid, RichText::new(format!("{ICON_INDEX} {iname}")));
     let r = r.on_hover_text(keys_one_line);
     let edit = Action::Dialog(Dialog::edit_index(sid, db, coll, ix));
-    if r.double_clicked() && iname != "_id_" {
+    if activated(ui, &r, lid) && iname != "_id_" {
         actions.borrow_mut().push(edit.clone());
     }
     r.context_menu(|ui| {

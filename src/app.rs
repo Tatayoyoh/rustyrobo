@@ -1198,6 +1198,9 @@ impl App {
             dbs: Vec::new(),
             dbs_loading: false,
         });
+        // The keyboard goes to it, to its databases and collections.
+        crate::ui::explorer::focus_server(&self.ctx, id);
+        self.zone = Some(Zone::Explorer);
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
         self.spawn(async move {
@@ -1366,6 +1369,14 @@ impl App {
             }
         if pressed(cmd, Key::H) {
             self.actions.push(Action::ShowHistory);
+        }
+        // The explorer, when it was the last clicked: arrows and Enter.
+        if self.zone == Some(Zone::Explorer) && !ctx.text_edit_focused() {
+            for k in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Enter] {
+                if ctx.input_mut(|i| crate::ui::consume_plain_key(i, k)) {
+                    crate::ui::explorer::key(ctx, k);
+                }
+            }
         }
         if pressed(cmd, Key::O) {
             self.actions.push(Action::OpenFile);

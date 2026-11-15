@@ -1451,7 +1451,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("R / E", "View / edit the selected document"),
                         ("Up / Down", "Previous / next row of the results"),
                         ("Right / Left", "Open / close a node of the tree, next / previous column of the table"),
-                        ("Enter", "Edit the selected value, or its document"),
+                        ("Enter", "Edit the selected value, or its document; open the selected collection"),
                         ("Ctrl+M", "Maximize the document dialog"),
                         ("Ctrl+S / Ctrl+E", "Save the document / edit the viewed one"),
                         ("Alt+1…9", "Connect to the n-th connection"),

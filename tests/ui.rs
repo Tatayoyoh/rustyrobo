@@ -11,7 +11,7 @@ use bson::{Bson, doc};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use rustyrobo::app::{Action, App, Zone};
+use rustyrobo::app::{Action, App, CollNode, DbNode, Load, Server, ServerStatus, Zone};
 use rustyrobo::bsonfmt::FormatOptions;
 use rustyrobo::shell::{OutputKind, ShellOutput};
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort, ViewMode};
@@ -1444,6 +1444,83 @@ fn a_double_click_on_the_id_views_the_document() {
         double_click_at(&mut h, at);
         assert_eq!(viewed(&h), 1, "{mode:?}");
     }
+}
+
+#[test]
+fn the_explorer_goes_with_the_arrows_and_enter_opens_a_collection() {
+    let _env = env("explorer-keys", &AppSettings::default());
+    let mut h = closed_manager_harness();
+    let coll = |name: &str| CollNode { name: name.into(), kind: "collection".into(), indexes: Load::Idle };
+    let db = |name: &str, colls: Vec<CollNode>| DbNode { name: name.into(), collections: Load::Ready(colls), functions: Load::Idle, users: Load::Idle, coll_names: Vec::new() };
+    h.state_mut().servers.push(Server {
+        id: 7,
+        settings: ConnectionSettings { name: "Prod".into(), ..Default::default() },
+        secrets: Default::default(),
+        status: ServerStatus::Connecting,
+        dbs: vec![db("shop", vec![coll("orders"), coll("users")])],
+        dbs_loading: false,
+    });
+    h.run_steps(2);
+    let selected = |h: &Harness<'_, App>| h.ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("explorer_selected")));
+    let at = h.get_by_label_contains("Prod").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Primary);
+    assert_eq!(h.state().zone, Some(Zone::Explorer));
+    let press = |h: &mut Harness<'_, App>, key: Key| {
+        h.key_press(key);
+        h.run_steps(2);
+    };
+    // Right opens a node, then goes into it.
+    for key in [Key::ArrowRight, Key::ArrowRight] {
+        press(&mut h, key);
+    }
+    assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop"))));
+    for key in [Key::ArrowRight, Key::ArrowRight, Key::ArrowRight, Key::ArrowRight] {
+        press(&mut h, key);
+    }
+    assert_eq!(selected(&h), Some(egui::Id::new(("coll", 7u64, "shop", "orders"))));
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(selected(&h), Some(egui::Id::new(("coll", 7u64, "shop", "users"))));
+    // Shown, the pointer being on another row.
+    let row = h.get_by_label_contains("users").rect().center();
+    let fill = h.ctx.global_style().visuals.selection.bg_fill;
+    let shown = h.output().shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(row)));
+    assert!(shown, "the selected row has the colour of the selection");
+    // Enter opens it (here the server is not connected).
+    press(&mut h, Key::Enter);
+    assert!(h.state().logs.iter().any(|l| l.text.contains("Server is not connected")));
+    // Left goes to the parent, then closes it.
+    press(&mut h, Key::ArrowLeft);
+    assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop")).with("collections")));
+    press(&mut h, Key::ArrowLeft);
+    assert!(!has_label(&h, "orders"), "closed");
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop"))));
+}
+
+#[test]
+fn a_new_connection_takes_the_keyboard_to_the_explorer() {
+    // Nothing listens there: the connection fails, after the checks.
+    let nowhere = ConnectionSettings { name: "Nowhere".into(), hosts: vec![HostPort { host: "127.0.0.1".into(), port: 1 }], last_connected: Some(chrono::Utc::now()), ..Default::default() };
+    let s = AppSettings { connections: vec![nowhere], ..Default::default() };
+    let _env = env("connect-focus", &s);
+    let check = |h: &Harness<'_, App>| {
+        let sid = h.state().servers.last().expect("server").id;
+        assert_eq!(h.state().zone, Some(Zone::Explorer));
+        assert_eq!(h.ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("explorer_selected"))), Some(egui::Id::new(("srv", sid))));
+        assert!(h.ctx.memory(|m| m.focused()).is_some(), "its row has the keyboard");
+    };
+    // Enter in the connection manager, at startup.
+    let mut h = harness();
+    h.run_steps(3);
+    assert!(has_label(&h, "MongoDB Connections"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    check(&h);
+    // A recent connection of the welcome page.
+    let mut h = closed_manager_harness();
+    h.get_by_label("Nowhere").click();
+    h.run_steps(3);
+    check(&h);
 }
 
 #[test]
