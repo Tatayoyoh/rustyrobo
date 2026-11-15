@@ -8,7 +8,7 @@ use egui::{Align, FontId, Id, Layout, RichText, Ui};
 
 pub use crate::ui::output::OutputPane;
 
-use crate::app::{Action, App, ServerStatus};
+use crate::app::{Action, App, ServerStatus, Zone};
 use crate::settings::{AutocompletionMode, Orientation};
 use crate::shell::ShellHandle;
 use crate::ui::dialogs::{Dialog, DocMode};
@@ -44,7 +44,7 @@ pub struct QueryTab {
     pub keep_vars: bool,
     /// Variables declared by the scripts, as of the last execution.
     pub vars: Vec<TabVar>,
-    focus_editor: bool,
+    pub focus_editor: bool,
     /// Keys went to the editor since the pointer last moved: resting on the
     /// results, the pointer does not take Ctrl+C and Ctrl+F from the editor.
     pub typing: bool,
@@ -292,14 +292,16 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
     // One panel id per orientation: a shared one would make the new panel
     // reuse the other axis' size (the editor then fills the whole area).
     let panel_id = Id::new(("editor-panel", tab.id, orientation));
-    match orientation {
+    let editor_rect = match orientation {
         Orientation::Vertical => {
             egui::Panel::top(panel_id)
                 .resizable(true)
                 .default_size(170.0)
                 .min_size(60.0)
                 .frame(egui::Frame::NONE)
-                .show(ui, |ui| editor(ui, tab));
+                .show(ui, |ui| editor(ui, tab))
+                .response
+                .rect
         }
         Orientation::Horizontal => {
             egui::Panel::left(panel_id)
@@ -307,14 +309,20 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 .default_size(420.0)
                 .min_size(160.0)
                 .frame(egui::Frame::NONE)
-                .show(ui, |ui| editor(ui, tab));
+                .show(ui, |ui| editor(ui, tab))
+                .response
+                .rect
         }
+    };
+    app.zones.push((Zone::Editor, editor_rect));
+    if ui.memory(|m| m.has_focus(editor_id.with("text"))) {
+        app.zone = Some(Zone::Editor);
     }
 
     if let Some((server, db, coll)) = want_fields {
         actions.push(Action::LoadFields(server, db, coll));
     }
-    egui::CentralPanel::default()
+    let results = egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(4)))
         .show(ui, |ui| {
             if let Some(n) = &tab.notice {
@@ -363,6 +371,9 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
+    if !tab.outputs.is_empty() {
+        app.zones.push((Zone::Results, results.response.rect));
+    }
     // Ctrl+C and Ctrl+F away from the results: the last clicked result pane,
     // unless a text field or a dialog takes the keys.
     if !modal_open && !ui.ctx().egui_wants_keyboard_input() {
@@ -412,6 +423,16 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
         }
     }
     app.actions.extend(actions);
+}
+
+/// The results the keyboard goes to: the shown ones when they are in tabs,
+/// otherwise the last clicked.
+pub fn current_pane(tab: &mut QueryTab, tabbed: bool) -> Option<&mut OutputPane> {
+    if tabbed && tab.outputs.len() > 1 {
+        let i = tab.result_tab.min(tab.outputs.len() - 1);
+        return tab.outputs.get_mut(i);
+    }
+    tab.outputs.iter_mut().max_by_key(|o| o.selected.touched)
 }
 
 /// Ctrl+C reaches egui as a copy event, not as a key.

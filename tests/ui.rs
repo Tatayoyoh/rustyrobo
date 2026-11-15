@@ -11,7 +11,7 @@ use bson::{Bson, doc};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use rustyrobo::app::{Action, App};
+use rustyrobo::app::{Action, App, Zone};
 use rustyrobo::bsonfmt::FormatOptions;
 use rustyrobo::shell::{OutputKind, ShellOutput};
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort, ViewMode};
@@ -1390,6 +1390,30 @@ fn a_double_click_on_the_id_views_the_document() {
         double_click_at(&mut h, at);
         assert_eq!(viewed(&h), 1, "{mode:?}");
     }
+}
+
+#[test]
+fn alt_arrows_go_between_the_areas_of_the_window() {
+    let s = AppSettings { show_logs: true, ..Default::default() };
+    let _env = env("zones", &s);
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().zone, Some(Zone::Logs), "nowhere yet: the area at the bottom");
+    assert!(h.state().zone_flash.is_some(), "outlined");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().zone, Some(Zone::Explorer));
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().zone, Some(Zone::Explorer), "nothing on the left");
+    // A click elsewhere moves the start.
+    let logs = h.state().zones.iter().find(|(z, _)| *z == Zone::Logs).unwrap().1;
+    click_at(&mut h, logs.center(), egui::PointerButton::Primary);
+    assert_eq!(h.state().zone, Some(Zone::Logs));
 }
 
 // -------------------------------------------------------- fonts and RTL

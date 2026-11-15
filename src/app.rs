@@ -44,6 +44,15 @@ impl<T> Load<T> {
     }
 }
 
+/// Areas of the window that Alt+arrows go between.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Zone {
+    Explorer,
+    Editor,
+    Results,
+    Logs,
+}
+
 pub struct CollNode {
     pub name: String,
     /// "collection", "view" or "timeseries".
@@ -250,6 +259,12 @@ pub struct App {
     pending_script: Option<ScriptToOpen>,
     pub conn_editor: Option<ConnectionEditor>,
     pub dialog: Option<Dialog>,
+    /// Where the areas of the window were drawn in the last frame.
+    pub zones: Vec<(Zone, egui::Rect)>,
+    /// The area last clicked or gone to with Alt+arrows.
+    pub zone: Option<Zone>,
+    /// The area Alt+arrows went to, outlined for a moment.
+    pub zone_flash: Option<(Zone, Instant)>,
     /// Asked before quitting while transfers run, on top of any dialog.
     pub quit: Option<Quit>,
     /// An update waits for the transfers to stop: started when quitting.
@@ -315,6 +330,9 @@ impl App {
             pending_script: None,
             conn_editor: None,
             dialog: None,
+            zones: Vec::new(),
+            zone: None,
+            zone_flash: None,
             quit: None,
             restart_on_quit: false,
             toast: None,
@@ -1412,6 +1430,13 @@ impl App {
             };
             for o in &mut t.outputs {
                 o.mode = next;
+            }
+        }
+        // Alt+arrows: the area of the window that way, also from a text field
+        // (Ctrl+arrows stay its words, start and end).
+        for (k, dir) in [(Key::ArrowLeft, egui::vec2(-1.0, 0.0)), (Key::ArrowRight, egui::vec2(1.0, 0.0)), (Key::ArrowUp, egui::vec2(0.0, -1.0)), (Key::ArrowDown, egui::vec2(0.0, 1.0))] {
+            if pressed(Modifiers::ALT, k) {
+                crate::ui::move_zone(self, ctx, dir);
             }
         }
         for (k, mode) in [(Key::F2, ViewMode::Tree), (Key::F3, ViewMode::Table), (Key::F4, ViewMode::Text)] {

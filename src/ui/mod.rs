@@ -13,9 +13,9 @@ pub mod query;
 
 use std::sync::Arc;
 
-use egui::{Align, Color32, Layout, RichText, Ui};
+use egui::{Align, Color32, Id, Layout, RichText, Ui};
 
-use crate::app::{Action, App, LogLevel};
+use crate::app::{Action, App, LogLevel, Zone};
 use crate::settings::{AutocompletionMode, Orientation, TimeZoneMode, UuidEncoding, ViewMode};
 use crate::transfer::Progress;
 use crate::ui::dialogs::Dialog;
@@ -424,25 +424,147 @@ fn logs_panel(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn main_window(app: &mut App, ui: &mut Ui) {
+    app.zones.clear();
     egui::Panel::top("menubar").show(ui, |ui| menus(app, ui));
     egui::Panel::top("toolbar")
         .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)))
         .show(ui, |ui| toolbar(app, ui));
     if app.settings.show_logs {
-        egui::Panel::bottom("logs")
+        let r = egui::Panel::bottom("logs")
             .resizable(true)
             .default_size(160.0)
             .min_size(60.0)
             .show(ui, |ui| logs_panel(app, ui));
+        app.zones.push((Zone::Logs, r.response.rect));
     }
     if app.settings.show_explorer {
-        egui::Panel::left("explorer")
+        let r = egui::Panel::left("explorer")
             .resizable(true)
             .default_size(260.0)
             .min_size(160.0)
             .show(ui, |ui| explorer::show(app, ui));
+        app.zones.push((Zone::Explorer, r.response.rect));
     }
     egui::CentralPanel::default()
         .frame(egui::Frame::central_panel(ui.style()).inner_margin(0))
         .show(ui, |ui| query::work_area(app, ui));
+    // Not a click in a dialog or a menu on top of it.
+    if ui.input(|i| i.pointer.any_pressed())
+        && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+        && let Some(&(zone, _)) = app.zones.iter().find(|(_, r)| r.contains(pos))
+    {
+        app.zone = Some(zone);
+    }
+    if let Some((zone, at)) = app.zone_flash {
+        let t = at.elapsed().as_secs_f32() / ZONE_FLASH;
+        match app.zones.iter().find(|(z, _)| *z == zone).filter(|_| t < 1.0) {
+            Some((_, rect)) => {
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("zone-flash")));
+                painter.rect_stroke(rect.shrink(1.0), 2, egui::Stroke::new(2.0, app.theme.accent.gamma_multiply(1.0 - t)), egui::StrokeKind::Inside);
+                ui.ctx().request_repaint();
+            }
+            None => app.zone_flash = None,
+        }
+    }
+}
+
+/// `key` pressed without modifiers. egui's `consume_key` takes it with Shift or
+/// Alt too: arrows would take Alt+arrows (the areas of the window).
+pub fn consume_plain_key(i: &mut egui::InputState, key: egui::Key) -> bool {
+    let mut found = false;
+    i.events.retain(|e| match e {
+        egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none() => {
+            found = true;
+            false
+        }
+        _ => true,
+    });
+    found
+}
+
+/// How long the area Alt+arrows went to is outlined, in seconds.
+const ZONE_FLASH: f32 = 0.6;
+
+/// The area next to `from` in the direction `dir` (a unit vector): of those
+/// that way, the closest edge to edge, then the one facing it the most.
+fn zone_towards(zones: &[(Zone, egui::Rect)], from: egui::Rect, dir: egui::Vec2) -> Option<Zone> {
+    let across = egui::vec2(dir.y.abs(), dir.x.abs());
+    let facing = |r: &egui::Rect| {
+        let (a, b) = if across.x > 0.0 { (r.x_range(), from.x_range()) } else { (r.y_range(), from.y_range()) };
+        a.max.min(b.max) - a.min.max(b.min)
+    };
+    let gap = |r: &egui::Rect| ((r.center() - from.center()).dot(dir) - (r.size() + from.size()).dot(dir.abs()) / 2.0).max(0.0);
+    let key = |r: &egui::Rect| (facing(r) <= 0.0, gap(r).round(), -facing(r));
+    zones
+        .iter()
+        .filter(|(_, r)| (r.center() - from.center()).dot(dir) > 1.0)
+        .min_by(|(_, a), (_, b)| {
+            let (a, b) = (key(a), key(b));
+            a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.total_cmp(&b.2))
+        })
+        .map(|(z, _)| *z)
+}
+
+/// Alt+arrow: goes to the area of the window in the direction `dir`. The
+/// keyboard goes with it: to the editor, the selected row of the explorer, or
+/// the results (for R, E, Del, Ctrl+C), whose first document is selected if
+/// none is.
+pub fn move_zone(app: &mut App, ctx: &egui::Context, dir: egui::Vec2) {
+    let from = app.zone.and_then(|z| app.zones.iter().find(|(zz, _)| *zz == z)).map(|(_, r)| *r);
+    let target = match from {
+        Some(from) => zone_towards(&app.zones, from, dir),
+        // Nowhere yet: the area on that side of the window.
+        None => app.zones.iter().max_by(|(_, a), (_, b)| a.center().to_vec2().dot(dir).total_cmp(&b.center().to_vec2().dot(dir))).map(|(z, _)| *z),
+    };
+    let Some(target) = target else { return };
+    if let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+    let tab = app.tabs.get_mut(app.active_tab);
+    match (target, tab) {
+        (Zone::Editor, Some(t)) => t.focus_editor = true,
+        (Zone::Results, Some(t)) => {
+            if let Some(pane) = query::current_pane(t, app.settings.tabbed_results) {
+                if pane.selected.is_empty() && !pane.docs().is_empty() {
+                    pane.selected.click("0", egui::Modifiers::NONE, Vec::new);
+                } else {
+                    pane.selected.touched = Some(std::time::Instant::now());
+                }
+            }
+        }
+        (Zone::Explorer, _) => ctx.data_mut(|d| {
+            d.insert_temp(Id::new(explorer::FOCUS), true);
+        }),
+        _ => {}
+    }
+    app.zone = Some(target);
+    app.zone_flash = Some((target, std::time::Instant::now()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alt_arrows_go_to_the_area_next_to_the_current_one() {
+        let rect = |x0: f32, y0: f32, x1: f32, y1: f32| egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
+        let (explorer, editor, results, logs) = (rect(0.0, 0.0, 260.0, 800.0), rect(260.0, 0.0, 1400.0, 170.0), rect(260.0, 170.0, 1400.0, 800.0), rect(0.0, 800.0, 1400.0, 960.0));
+        let zones = [(Zone::Logs, logs), (Zone::Explorer, explorer), (Zone::Editor, editor), (Zone::Results, results)];
+        let (left, right, up, down) = (egui::vec2(-1.0, 0.0), egui::vec2(1.0, 0.0), egui::vec2(0.0, -1.0), egui::vec2(0.0, 1.0));
+        assert_eq!(zone_towards(&zones, results, up), Some(Zone::Editor));
+        assert_eq!(zone_towards(&zones, results, left), Some(Zone::Explorer));
+        assert_eq!(zone_towards(&zones, results, down), Some(Zone::Logs));
+        assert_eq!(zone_towards(&zones, results, right), None);
+        assert_eq!(zone_towards(&zones, editor, down), Some(Zone::Results));
+        assert_eq!(zone_towards(&zones, editor, left), Some(Zone::Explorer));
+        assert_eq!(zone_towards(&zones, explorer, right), Some(Zone::Results), "the one facing it the most");
+        assert_eq!(zone_towards(&zones, logs, up), Some(Zone::Results));
+        // Editor on the left of the results (F10).
+        let (editor, results) = (rect(260.0, 0.0, 700.0, 800.0), rect(700.0, 0.0, 1400.0, 800.0));
+        let zones = [(Zone::Logs, logs), (Zone::Explorer, explorer), (Zone::Editor, editor), (Zone::Results, results)];
+        assert_eq!(zone_towards(&zones, results, left), Some(Zone::Editor));
+        assert_eq!(zone_towards(&zones, editor, left), Some(Zone::Explorer));
+        assert_eq!(zone_towards(&zones, editor, right), Some(Zone::Results));
+    }
 }

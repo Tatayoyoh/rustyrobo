@@ -4,6 +4,7 @@
 
 ### Added
 
+- Alt+arrows: go between the explorer, the editor, the results and the logs
 - Ctrl+K: next view (tree, table, text)
 - View Document: Ctrl+E to edit
 - Edit Document: Ctrl+S to save

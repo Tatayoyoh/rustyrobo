@@ -1385,6 +1385,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("F6", "Stop execution"),
                         ("F2 / F3 / F4", "Tree / table / text view"),
                         ("Ctrl+K", "Next view: tree, table, text"),
+                        ("Alt+Arrows", "Go to the explorer, editor, results or logs"),
                         ("F10", "Rotate editor and results"),
                         ("F11", "Full screen"),
                         ("Ctrl+N", "Connections"),

@@ -13,6 +13,9 @@ use crate::ui::{ICON_COLLECTION, ICON_DB, ICON_FOLDER, ICON_FUNCTION, ICON_INDEX
 
 const SYSTEM_DBS: &[&str] = &["admin", "config", "local"];
 
+/// Memory key: Alt+arrows went to the explorer, its selected row takes the keyboard.
+pub const FOCUS: &str = "explorer-focus";
+
 /// `db.getCollection('name')` with quotes and backslashes escaped.
 pub fn coll_ref(name: &str) -> String {
     format!("db.getCollection('{}')", name.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -26,6 +29,11 @@ fn selected_id(ui: &Ui) -> Option<Id> {
 fn row(ui: &mut Ui, id: Id, text: RichText) -> Response {
     let sel = selected_id(ui) == Some(id);
     let r = ui.add(egui::Button::selectable(sel, text).frame_when_inactive(false));
+    // The first row when none is selected.
+    if (sel || selected_id(ui).is_none()) && ui.data_mut(|d| d.remove_temp::<bool>(Id::new(FOCUS))).is_some() {
+        r.request_focus();
+        ui.data_mut(|d| d.insert_temp(Id::new("explorer_selected"), id));
+    }
     if r.clicked() || r.secondary_clicked() {
         ui.data_mut(|d| d.insert_temp(Id::new("explorer_selected"), id));
     }
@@ -105,6 +113,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         for s in &app.servers {
             server_node(app, s, ui, &actions);
         }
+    });
+    // Its selected row is hidden (folded): the keyboard goes nowhere.
+    ui.data_mut(|d| {
+        d.remove_temp::<bool>(Id::new(FOCUS));
     });
     app.actions.extend(actions.into_inner());
 }

@@ -105,6 +105,11 @@ Key design rules:
 - The update check starts in `main.rs`, not in `App::new`: tests and the autotest must not reach the network.
 - Ctrl+C and Ctrl+Shift+C reach egui as `Event::Copy`, not as keys (look at `modifiers.shift`). In the results, Ctrl+C and Ctrl+F follow the pointer, unless keys went to
   the editor since it last moved (`QueryTab::typing`): the hover of the last frame decides, before the editor sees the event.
+- `egui_wants_keyboard_input()` is true when any widget has the focus, a button too; `text_edit_focused()`
+  only for text fields. Alt+arrows (`ui::move_zone`) go by the rects of the areas drawn in the last
+  frame (`App::zones`); a click starts from its area, unless it lands in a dialog or a menu on top.
+- egui's `consume_key`/`consume_shortcut` also match with Shift or Alt down: plain arrows would take
+  Alt+arrows. Use `ui::consume_plain_key` for keys without modifiers.
 - A `ScrollArea` takes the scroll requests of both axes: `scroll_to_rect` in a table cell never reaches the horizontal scroll
   area around the table. Ask once the table is finished.
 - egui's "strong" text colour is `widgets.active.fg_stroke`: keep it equal to the theme text colour.

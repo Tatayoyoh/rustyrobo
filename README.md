@@ -56,6 +56,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Query history: search the scripts you ran and open them again (Ctrl+H)
 - Edit values in place in the table view (double-click a cell)
 - View or edit the selected document (R, E, or double-click its `_id`), in a modal that maximizes (Ctrl+M); Ctrl+S saves it, Ctrl+E edits the viewed one
+- Ctrl+K switches the results between tree, table and text; Alt+arrows go between the explorer, the editor, the results and the logs
 
 ## Install
 
