@@ -286,7 +286,7 @@ fn search_filters_the_list() {
 }
 
 /// A click of the pointer at `pos`, where there may be no widget of its own.
-fn click_at(h: &mut Harness<'_, App>, pos: egui::Pos2, button: egui::PointerButton) {
+fn click_at<State>(h: &mut Harness<'_, State>, pos: egui::Pos2, button: egui::PointerButton) {
     h.hover_at(pos);
     h.run_steps(1);
     for pressed in [true, false] {
@@ -1926,6 +1926,46 @@ fn text_view_shows_the_next_documents_at_its_end() {
 }
 
 #[test]
+fn text_view_scrolls_and_its_cursor_goes_by_pages() {
+    let docs: Vec<Bson> = (0..60).map(|i| Bson::Document(doc! { "_id": i, "a": 1, "b": 2 })).collect();
+    let mut h = pane_harness(docs, ViewMode::Text);
+    let fmt = FormatOptions { tz: Default::default(), uuid: Default::default() };
+    // Where the first line of the text is drawn, and the top of the view.
+    let top = |h: &Harness<'_, OutputPane>| {
+        h.output().shapes.iter().find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.job.text.starts_with("/* 1 */") => Some((t.pos.y, c.clip_rect.top())),
+            _ => None,
+        })
+    };
+    let (start, view_top) = top(&h).expect("text");
+    // Without a cursor in it: the keys scroll it.
+    for (key, scrolled) in [(Key::End, true), (Key::Home, false), (Key::PageDown, true), (Key::ArrowUp, true), (Key::Home, false), (Key::ArrowDown, true)] {
+        let _ = rustyrobo::ui::output::navigate(h.state_mut(), key, 1, 1, fmt);
+        h.run_steps(10);
+        let (y, _) = top(&h).expect("text");
+        assert_eq!(y < start, scrolled, "{key:?}: {y} from {start}");
+    }
+    let _ = rustyrobo::ui::output::navigate(h.state_mut(), Key::Home, 1, 1, fmt);
+    h.run_steps(10);
+
+    // With the cursor in it: PageDown moves it by a page, End and Home to the ends.
+    click_at(&mut h, egui::pos2(100.0, view_top + 10.0), egui::PointerButton::Primary);
+    let cursor = |h: &Harness<'_, OutputPane>| egui::TextEdit::load_state(&h.ctx, egui::Id::new(("out-json", 1u64, 0usize)).with("t")).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0).unwrap_or_default();
+    let text = h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().unwrap_or_default();
+    let line = |at: usize| text.chars().take(at).filter(|&c| c == '\n').count();
+    let before = line(cursor(&h));
+    h.key_press(Key::PageDown);
+    h.run_steps(3);
+    assert!(line(cursor(&h)) > before + 5, "a page down");
+    h.key_press(Key::End);
+    h.run_steps(3);
+    assert_eq!(cursor(&h), text.chars().count());
+    h.key_press(Key::Home);
+    h.run_steps(3);
+    assert_eq!(cursor(&h), 0);
+}
+
+#[test]
 fn copy_value_menu_shows_its_shortcut() {
     let mut h = pane_harness(vec![Bson::Document(doc! { "_id": 1, "a": "x", "b": "y" })], ViewMode::Tree);
     let menu_has = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+C")));
@@ -3114,6 +3154,13 @@ fn live_documents_open_from_ctrl_p_and_the_keys() {
     assert!(has_input(&h, "\"Ada\""), "edited in place");
     h.key_press(Key::Escape);
     h.run_steps(3);
+    // End and Home: the last row, the first.
+    h.key_press(Key::End);
+    h.run_steps(2);
+    assert_eq!(current(&h).as_deref(), Some("1"));
+    h.key_press(Key::Home);
+    h.run_steps(2);
+    assert_eq!(current(&h).as_deref(), Some("0"));
 
     // In the table: Left and Right go through the columns, Enter edits the cell.
     h.key_press(Key::F3);

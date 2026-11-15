@@ -176,7 +176,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
     // Before they are drawn: the Enter that ends the edit of a cell is its own.
     if !modal_open && app.zone == Some(Zone::Results) && !ui.ctx().text_edit_focused() && tab.outputs.iter().all(|o| o.cell_edit.is_none()) {
         use egui::Key;
-        for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Enter] {
+        for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::PageUp, Key::PageDown, Key::Home, Key::End, Key::Enter] {
             if ui.input_mut(|i| crate::ui::consume_plain_key(i, key)) {
                 // A focused button would take the arrows too (egui moves its focus).
                 if let Some(focused) = ui.memory(|m| m.focused()) {

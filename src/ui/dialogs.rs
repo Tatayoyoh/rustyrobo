@@ -1452,6 +1452,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Del", "Delete the selected documents"),
                         ("R / E", "View / edit the selected document"),
                         ("Up / Down", "Previous / next row of the results"),
+                        ("PageUp / PageDown", "A page up / down in the results"),
+                        ("Home / End", "First / last row of the results"),
                         ("Right / Left", "Open / close a node of the tree, next / previous column of the table"),
                         ("Enter", "Edit the selected value, or its document; open the selected collection"),
                         ("Ctrl+M", "Maximize the document dialog"),

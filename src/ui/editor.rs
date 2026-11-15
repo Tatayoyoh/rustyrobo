@@ -1418,10 +1418,16 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
     let mut view: &str = text;
     let theme_copy = *theme;
     let copy = take_reordered_copy(ui, id.with("t"), text, theme, &font);
-    let text_id = id.with("t");
-    let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
-        pieces_layout(ui, text_id, buf.as_str(), &theme_copy, &font)
+    // With the cursor in it: PageUp and PageDown move it by a page, Home and End
+    // to the start and the end (the text cannot change: lines matter less).
+    let keys = if ui.memory(|m| m.has_focus(id.with("t"))) {
+        ui.input_mut(|i| [Key::PageUp, Key::PageDown, Key::Home, Key::End].into_iter().filter(|&k| crate::ui::consume_plain_key(i, k)).collect())
+    } else {
+        Vec::new()
     };
+    let row_height = ui.fonts_mut(|f| f.row_height(&font));
+    let text_id = id.with("t");
+    let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> { pieces_layout(ui, text_id, buf.as_str(), &theme_copy, &font) };
     let highlights = ui.painter().add(egui::Shape::Noop);
     let output = egui::TextEdit::multiline(&mut view)
         .id(id.with("t"))
@@ -1432,6 +1438,29 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
         .show(ui);
     if let Some(order) = &copy {
         copy_drawn(ui, &output, text, order);
+    }
+    if let (Some(range), false) = (output.cursor_range, keys.is_empty()) {
+        let page = ((ui.clip_rect().height() / row_height) as usize).saturating_sub(1).max(1);
+        let mut cursor = range.primary.index;
+        for key in keys {
+            cursor = match key {
+                Key::Home => output.galley.begin().index,
+                Key::End => output.galley.end().index,
+                _ => {
+                    let mut c = CCursor::new(cursor.0);
+                    for _ in 0..page {
+                        c = if key == Key::PageUp { output.galley.cursor_up_one_row(&c, None).0 } else { output.galley.cursor_down_one_row(&c, None).0 };
+                    }
+                    c.index
+                }
+            };
+        }
+        let mut state = output.state.clone();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(cursor.0))));
+        state.store(ui.ctx(), id.with("t"));
+        let rect = output.galley.pos_from_cursor(CCursor::new(cursor.0)).translate(output.galley_pos.to_vec2());
+        ui.scroll_to_rect(rect, None);
+        ui.ctx().request_repaint();
     }
     if let Some(find) = find {
         ui.painter().set(highlights, egui::Shape::Vec(match_shapes(ui, &output, find.matches, find.current, theme)));
@@ -1492,13 +1521,34 @@ fn fold_gutter(ui: &Ui, rect: egui::Rect, resp: &egui::Response, out: &egui::tex
     click
 }
 
+/// Keys that scroll a read-only text without a cursor in it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scroll {
+    Rows(i32),
+    Pages(i32),
+    Start,
+    End,
+}
+
 /// [`code_view`] with a fold gutter: `marks[i]` is `Some(folded)` when line
 /// `i` opens a block. Only the visible markers are painted. Also tells whether
 /// the end of the text is in view.
-pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>) -> (Option<FoldClick>, bool) {
+#[allow(clippy::too_many_arguments)]
+pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>, scroll: Option<Scroll>) -> (Option<FoldClick>, bool) {
     let mut click = None;
     let row_height = ui.fonts_mut(|f| f.row_height(&font));
     let scroll = egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
+        if let Some(s) = scroll {
+            let page = ui.clip_rect().height() - row_height;
+            let delta = match s {
+                Scroll::Rows(n) => -(n as f32) * row_height,
+                Scroll::Pages(n) => -(n as f32) * page,
+                // Beyond any text: the scroll area stops at its ends.
+                Scroll::Start => 1e7,
+                Scroll::End => -1e7,
+            };
+            ui.scroll_with_delta(egui::vec2(0.0, delta));
+        }
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let size = egui::vec2(row_height, row_height * marks.len().max(1) as f32);

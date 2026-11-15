@@ -57,6 +57,10 @@ pub struct OutputPane {
     scroll_to: Option<String>,
     /// The current cell of the table, brought into view across too.
     show_cell: bool,
+    /// Rows of a page for PageUp and PageDown: those the tree or the table showed.
+    page_rows: usize,
+    /// Keys scrolling the text view, for its next frame.
+    text_scroll: Option<crate::ui::editor::Scroll>,
 }
 
 /// Why an object or an array cannot be edited in place.
@@ -284,6 +288,8 @@ impl OutputPane {
             column: None,
             scroll_to: None,
             show_cell: false,
+            page_rows: 10,
+            text_scroll: None,
             skip_input: skip.to_string(),
             size_input: page_size.to_string(),
             pointer_over: false,
@@ -885,6 +891,8 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         .column(Column::remainder().at_least(70.0).clip(true))
         .auto_shrink([false, false]);
     let key_row = pane.scroll_to.take().and_then(|p| rows.iter().position(|r| r.path == p));
+    // First and last rows drawn: a page.
+    let mut shown = (usize::MAX, 0);
     if let Some(row) = scroll_row {
         table = table.scroll_to_row(row, Some(Align::Center));
     } else if let Some(row) = key_row {
@@ -900,6 +908,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         })
         .body(|body| {
             body.rows(row_h, rows.len(), |mut row| {
+                shown = (shown.0.min(row.index()), shown.1.max(row.index()));
                 let r = &rows[row.index()];
                 row.set_selected(pane.selected.contains(&r.path));
                 let hit = pane.find.row(&r.path);
@@ -972,6 +981,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         });
 
     pane.hovered = hovered;
+    pane.page_rows = shown.1.saturating_sub(shown.0).max(1);
     // Scrolled out of sight or folded: the edit is dropped, like a click elsewhere.
     pane.cell_edit = edit.filter(|_| edit_drawn);
     end_cell_edit(pane, cx, edit_end, start_edit);
@@ -1169,17 +1179,31 @@ pub fn open_selection(pane: &OutputPane, server: u64, tab: u64, mode: DocMode, f
 }
 
 /// Keys on the results (see `query::current_pane`): Up and Down go to the row
-/// above and below. In the tree, Right opens a node, then goes to its first
+/// above and below, PageUp and PageDown a page away, Home and End to the first
+/// and last rows. In the tree, Right opens a node, then goes to its first
 /// child, Left closes it, or goes to its parent; in the table, Right and Left
 /// go to the next and previous column. Enter edits the value in place, or
 /// opens the document: an object or an array is edited with it, an `_id` only
-/// viewed.
+/// viewed. The text view scrolls.
 pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fmt: FormatOptions) -> Option<Action> {
+    use crate::ui::editor::Scroll;
     use egui::Key;
     let rows: Vec<(String, usize, Vec<String>, bool)> = match pane.mode {
         ViewMode::Tree => pane.rows_cache.as_ref()?.2.iter().map(|r| (r.path.clone(), r.doc, r.keys.clone(), r.container)).collect(),
         ViewMode::Table => (0..pane.docs().len()).map(|i| (i.to_string(), i, Vec::new(), false)).collect(),
-        ViewMode::Text => return None,
+        // The text view scrolls.
+        ViewMode::Text => {
+            pane.text_scroll = match key {
+                Key::ArrowUp => Some(Scroll::Rows(-1)),
+                Key::ArrowDown => Some(Scroll::Rows(1)),
+                Key::PageUp => Some(Scroll::Pages(-1)),
+                Key::PageDown => Some(Scroll::Pages(1)),
+                Key::Home => Some(Scroll::Start),
+                Key::End => Some(Scroll::End),
+                _ => pane.text_scroll,
+            };
+            return None;
+        }
     };
     if rows.is_empty() {
         return None;
@@ -1189,6 +1213,10 @@ pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fm
     match (key, at) {
         (Key::ArrowDown, _) => target = Some(at.map_or(0, |i| (i + 1).min(rows.len() - 1))),
         (Key::ArrowUp, _) => target = Some(at.map_or(0, |i| i.saturating_sub(1))),
+        (Key::PageDown, _) => target = Some(at.map_or(0, |i| (i + pane.page_rows).min(rows.len() - 1))),
+        (Key::PageUp, _) => target = Some(at.map_or(0, |i| i.saturating_sub(pane.page_rows))),
+        (Key::Home, _) => target = Some(0),
+        (Key::End, _) => target = Some(rows.len() - 1),
         (Key::ArrowRight | Key::ArrowLeft, _) if pane.mode == ViewMode::Table => {
             let columns = pane.columns_cache.as_ref().filter(|(_, scalar)| !scalar).map(|(c, _)| c)?;
             let i = pane.column.as_ref().and_then(|c| columns.iter().position(|x| x == c));
@@ -1412,6 +1440,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let mut click_column = None;
     let current = pane.selected.current().map(str::to_string).zip(pane.column.clone());
     let mut current_shown = false;
+    let mut shown = (usize::MAX, 0);
 
     egui::ScrollArea::horizontal().id_salt(("table-h", cx.tab, cx.index)).show(ui, |ui| {
         let mut tb = TableBuilder::new(ui)
@@ -1448,6 +1477,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         .body(|body| {
             body.rows(row_h, docs.len(), |mut row| {
                 let i = row.index();
+                shown = (shown.0.min(i), shown.1.max(i));
                 let d = &docs[i];
                 let path = i.to_string();
                 row.set_selected(pane.selected.contains(&path));
@@ -1534,6 +1564,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     });
     pane.hovered = hovered;
     pane.menu_cell = menu_cell;
+    pane.page_rows = shown.1.saturating_sub(shown.0).max(1);
     // Scrolled out of sight: the edit is dropped, like a click elsewhere.
     pane.cell_edit = edit.filter(|_| edit_drawn);
     end_cell_edit(pane, cx, edit_end, start_edit);
@@ -1692,7 +1723,8 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         pane.find.scroll = 3;
     }
     let find = if pane.find.open { text_matches(&pane.find) } else { None };
-    let (click, at_end) = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size), find.as_ref());
+    let scroll = pane.text_scroll.take();
+    let (click, at_end) = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size), find.as_ref(), scroll);
     match click {
         Some(FoldClick::Toggle(row)) => {
             let line = view.lines[row];
@@ -1774,6 +1806,16 @@ mod tests {
         assert_eq!(at(&p).as_deref(), Some("0"));
         press(&mut p, Key::ArrowUp);
         assert_eq!(at(&p).as_deref(), Some("0"), "the first row stays");
+        // A page away (here 2 rows), the last row, the first.
+        p.page_rows = 2;
+        press(&mut p, Key::PageDown);
+        assert_eq!(at(&p).as_deref(), Some("0/a"));
+        press(&mut p, Key::End);
+        assert_eq!(at(&p).as_deref(), Some("1"));
+        press(&mut p, Key::PageUp);
+        assert_eq!(at(&p).as_deref(), Some("0/a"));
+        press(&mut p, Key::Home);
+        assert_eq!(at(&p).as_deref(), Some("0"));
 
         // Enter: a value in place, an object with the document, an _id viewed.
         for _ in 0..3 {

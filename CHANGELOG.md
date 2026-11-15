@@ -4,6 +4,7 @@
 
 ### Added
 
+- Tree, table and text views: PageUp/PageDown and Home/End; Up/Down scroll the text view
 - Tree and table views: 
   - Enter on an object or an array opens the document on it, its block highlighted
   - Up/Down go through the rows, Right/Left open and close the nodes of the tree or go through the columns of the table, Enter edits
