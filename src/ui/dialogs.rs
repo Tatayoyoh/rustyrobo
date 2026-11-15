@@ -42,6 +42,11 @@ type CheckResult = (u64, Result<(), String>);
 
 const CHECK_DELAY: Duration = Duration::from_millis(300);
 
+/// Memory key: the document dialog fills the window but `DOC_MARGIN` (Ctrl+M),
+/// also for the next documents of the session.
+const DOC_MAXIMIZED: &str = "doc-dialog-maximized";
+const DOC_MARGIN: f32 = 12.0;
+
 impl DocCheck {
     /// Returns the result for `text`, or the previous one while `text` is
     /// being checked (`None` before the first check).
@@ -992,14 +997,47 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             }
             Dialog::Document { mode, server, db, coll, text, original_id, tab, check } => {
                 let screen = ui.ctx().content_rect();
-                ui.set_width((screen.width() * 0.6).clamp(420.0, 900.0));
+                let mut maximized = ui.data(|d| d.get_temp::<bool>(Id::new(DOC_MAXIMIZED))).unwrap_or(false);
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::M)) {
+                    maximized = !maximized;
+                }
+                // Around the editor: title, status and buttons, measured in the last frame.
+                let chrome_id = Id::new("doc-dialog-chrome");
+                let chrome = ui.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(120.0);
+                let (w, h) = if maximized {
+                    let room = screen.size() - egui::Frame::popup(ui.style()).total_margin().sum() - egui::Vec2::splat(2.0 * DOC_MARGIN);
+                    (room.x, (room.y - chrome).max(200.0))
+                } else {
+                    ((screen.width() * 0.6).clamp(420.0, 900.0), (screen.height() * 0.6).clamp(200.0, 700.0))
+                };
+                ui.set_width(w);
                 let t = match mode {
                     DocMode::Insert => format!("Insert Document — {db}.{coll}"),
                     DocMode::Edit => format!("Edit Document — {db}.{coll}"),
                     DocMode::View => "View Document".to_string(),
                 };
-                title(ui, &t);
-                let h = (screen.height() * 0.6).clamp(200.0, 700.0);
+                let mut out = Outcome::Keep;
+                ui.horizontal(|ui| {
+                    // Like the title bar of a window: a double-click maximizes or restores.
+                    let mut bar = ui.add(egui::Label::new(RichText::new(&t).heading()).selectable(false).sense(egui::Sense::click()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new(icon::X).frame(false)).on_hover_text("Close").clicked() {
+                            out = Outcome::Close;
+                        }
+                        let (glyph, tip) = if maximized { (icon::CORNERS_IN, "Restore (Ctrl+M)") } else { (icon::CORNERS_OUT, "Maximize (Ctrl+M)") };
+                        if ui.add(egui::Button::new(glyph).frame(false)).on_hover_text(tip).clicked() {
+                            maximized = !maximized;
+                        }
+                        bar |= ui.allocate_response(ui.available_size(), egui::Sense::click());
+                    });
+                    if bar.double_clicked() {
+                        maximized = !maximized;
+                    }
+                });
+                ui.separator();
+                ui.data_mut(|d| d.insert_temp(Id::new(DOC_MAXIMIZED), maximized));
+                let save_key = *mode != DocMode::View && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S)));
+                let edit_key = *mode == DocMode::View && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::E)));
                 egui::Frame::new().fill(theme.base).stroke(egui::Stroke::new(1.0, theme.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
                     ui.set_height(h);
                     crate::ui::editor::code_editor(
@@ -1021,7 +1059,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         },
                     );
                 });
-                let hint = RichText::new("Ctrl+F find · Ctrl+D select next occurrence · click the gutter to fold").small().color(theme.text_weak);
+                let keys = if *mode == DocMode::View { "Ctrl+E edit" } else { "Ctrl+S save" };
+                let hint = RichText::new(format!("{keys} · Ctrl+F find · Ctrl+D select next occurrence · click the gutter to fold")).small().color(theme.text_weak);
                 if *mode == DocMode::View {
                     ui.label(hint);
                 } else {
@@ -1034,7 +1073,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(hint));
                     });
                 }
-                let mut out = Outcome::Keep;
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if *mode != DocMode::View && ui.button("Format").clicked() {
@@ -1049,6 +1087,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     if ui.button("Copy").clicked() {
                         ui.ctx().copy_text(text.clone());
                     }
+                    // The same document, in the editor: needs its `_id` and its collection.
+                    let editable = original_id.is_some() && !coll.is_empty();
+                    if *mode == DocMode::View && (ui.add_enabled(editable, egui::Button::new("Edit")).on_hover_text("Ctrl+E").clicked() || (edit_key && editable)) {
+                        actions.push(Action::Dialog(Dialog::document(DocMode::Edit, *server, db, coll, text.clone(), original_id.clone(), *tab)));
+                        out = Outcome::Close;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if *mode == DocMode::View {
                             if ui.button("Close").clicked() {
@@ -1056,7 +1100,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             }
                             return;
                         }
-                        if ui.button(RichText::new("Save").strong()).clicked() {
+                        if ui.button(RichText::new("Save").strong()).on_hover_text("Ctrl+S").clicked() || save_key {
                             match parse_doc(text) {
                                 Ok(d) => {
                                     let refresh = tab.map(Refresh::Tab).unwrap_or(Refresh::None);
@@ -1076,6 +1120,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                 });
+                let measured = ui.min_rect().height() - h;
+                if (measured - chrome).abs() > 0.5 {
+                    ui.data_mut(|d| d.insert_temp(chrome_id, measured));
+                    ui.ctx().request_repaint();
+                }
                 out
             }
             Dialog::User { server, db, edit, name, password, roles, extra_roles, error } => {
@@ -1352,6 +1401,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+Shift+C", "Copy them with their names"),
                         ("Ctrl+D", "Select the next occurrence"),
                         ("Del", "Delete the selected documents"),
+                        ("Ctrl+M", "Maximize the document dialog"),
+                        ("Ctrl+S / Ctrl+E", "Save the document / edit the viewed one"),
                         ("Alt+1…9", "Connect to the n-th connection"),
                     ] {
                         ui.label(RichText::new(k).monospace());

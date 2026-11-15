@@ -15,6 +15,7 @@ use rustyrobo::app::App;
 use rustyrobo::bsonfmt::FormatOptions;
 use rustyrobo::shell::{OutputKind, ShellOutput};
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort, ViewMode};
+use rustyrobo::ui::dialogs::{Dialog, DocMode};
 use rustyrobo::ui::editor::code_view;
 use rustyrobo::ui::icon;
 use rustyrobo::ui::output::{PaneCtx, show_pane};
@@ -1280,6 +1281,85 @@ fn an_update_waits_for_the_transfers_to_restart() {
     h.run_steps(2);
     assert!(!h.state().restart_on_quit, "no restart later on");
     assert!(h.state().logs.iter().any(|l| l.text.contains("the new version starts with the next launch")));
+}
+
+// ------------------------------------------------------------ documents
+
+fn editor_rect(h: &Harness<'_, App>) -> egui::Rect {
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect()
+}
+
+/// The close button of the document dialog, next to the maximize one.
+fn close_document_dialog(h: &mut Harness<'_, App>) {
+    let row = h.query_all_by(|n| n.label().is_some_and(|l| l == icon::CORNERS_OUT || l == icon::CORNERS_IN)).next().expect("maximize button").rect();
+    h.query_all_by_label(icon::X).find(|n| (n.rect().center().y - row.center().y).abs() < 2.0).expect("close button").click();
+    h.run_steps(3);
+}
+
+#[test]
+fn document_dialog_maximizes_and_closes_like_a_window() {
+    let _env = env("doc-dialog", &AppSettings::default());
+    let mut h = harness();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    let text = "{\n    \"_id\" : 1,\n    \"name\" : \"Ada\"\n}";
+    h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "shop", "orders", text.into(), Some(Bson::Int32(1)), Some(1)));
+    h.run_steps(4);
+    let normal = editor_rect(&h);
+
+    h.get_by_label(icon::CORNERS_OUT).click();
+    h.run_steps(4);
+    let max = editor_rect(&h);
+    assert!(max.width() > 1300.0 && max.height() > 700.0, "{normal:?} → {max:?}");
+    assert!(max.bottom() < 900.0, "the buttons stay in the window: {max:?}");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::M);
+    h.run_steps(4);
+    assert_eq!(editor_rect(&h).width(), normal.width(), "Ctrl+M restores it");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::M);
+    h.run_steps(4);
+
+    // Edit: the same document in the editor, still maximized.
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Document { mode: DocMode::Edit, original_id: Some(Bson::Int32(1)), tab: Some(1), text: t, .. }) if t == text));
+    assert!(has_label(&h, "Edit Document — shop.orders"));
+    assert!(editor_rect(&h).width() > 1300.0, "maximized for the next documents too");
+    // A double-click on the title bar restores it, and maximizes it again.
+    let title = h.get_by_label("Edit Document — shop.orders").rect().center();
+    double_click_at(&mut h, title);
+    assert_eq!(editor_rect(&h).width(), normal.width());
+    let bar = h.get_by_label(icon::CORNERS_OUT).rect().left_center() - egui::vec2(60.0, 0.0);
+    double_click_at(&mut h, bar);
+    assert!(editor_rect(&h).width() > 1300.0, "also between the title and the buttons");
+    close_document_dialog(&mut h);
+    assert!(h.state().dialog.is_none(), "closed by its window button");
+
+    // Not from a collection: nothing to edit.
+    h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "", "", "{ \"a\" : 1 }".into(), None, Some(1)));
+    h.run_steps(4);
+    assert!(h.get_by_label("Edit").accesskit_node().is_disabled());
+}
+
+#[test]
+fn alt_f4_closes_a_document_not_the_app() {
+    let _env = env("alt-f4", &AppSettings::default());
+    let mut h = closed_manager_harness();
+    h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "shop", "orders", "{ \"_id\" : 1 }".into(), Some(Bson::Int32(1)), Some(1)));
+    h.run_steps(3);
+    h.input_mut().events.push(egui::Event::ModifiersChanged(Modifiers::ALT));
+    request_close(&mut h);
+    assert!(sent(&h, &egui::ViewportCommand::CancelClose));
+    assert!(h.state().dialog.is_none());
+    // Without a document, or with the close button of the window: the app closes.
+    h.input_mut().events.push(egui::Event::ModifiersChanged(Modifiers::ALT));
+    request_close(&mut h);
+    assert!(!sent(&h, &egui::ViewportCommand::CancelClose));
+    h.state_mut().dialog = Some(Dialog::document(DocMode::View, 1, "shop", "orders", "{ \"_id\" : 1 }".into(), Some(Bson::Int32(1)), Some(1)));
+    h.run_steps(3);
+    h.input_mut().events.push(egui::Event::ModifiersChanged(Modifiers::NONE));
+    request_close(&mut h);
+    assert!(!sent(&h, &egui::ViewportCommand::CancelClose));
 }
 
 // -------------------------------------------------------- fonts and RTL

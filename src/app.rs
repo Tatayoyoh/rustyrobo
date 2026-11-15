@@ -1536,6 +1536,13 @@ impl App {
     /// what it changed (the new collection of a replacement) first.
     fn confirm_quit(&mut self, ctx: &egui::Context) {
         let requested = ctx.input(|i| i.viewport().close_requested());
+        // Alt+F4 reaches the app as a request to close, Alt still down: it
+        // closes a document first, like its own window.
+        if requested && ctx.input(|i| i.modifiers.alt) && matches!(self.dialog, Some(Dialog::Document { .. })) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.dialog = None;
+            return;
+        }
         match self.quit.as_ref().and_then(|q| q.stopping) {
             // A request now is this one, or the user insisting: it closes.
             Some(since) => {

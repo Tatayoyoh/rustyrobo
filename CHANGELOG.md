@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- View Document: Ctrl+E to edit
+- Edit Document: Ctrl+S to save
+- Document modal: maximize (button, double-click on its title, Ctrl+M) and close button
+- Document modal: Alt+F4 closes it, not the app
+
 ### Fixed
 
 - View Document and Edit Document: selecting text after right-to-left text copies the right text (#1)
