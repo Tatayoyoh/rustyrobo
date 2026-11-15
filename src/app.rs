@@ -161,6 +161,8 @@ pub enum Action {
     Page { tab: u64, out: usize, skip: u64, limit: u64 },
     /// Counts the documents of the `find` of a result pane, for its header.
     Count { tab: u64, out: usize },
+    /// "Auto expand first document", from the options of the tree.
+    SetAutoExpand(bool),
     Command { server: u64, db: String, cmd: Document, label: String, refresh: Refresh },
     Commands { server: u64, db: String, cmds: Vec<Document>, label: String, refresh: Refresh },
     Dialog(Dialog),
@@ -1022,6 +1024,10 @@ impl App {
                     let res = crate::shell::fetch_page(&conn, &spec, skip, limit).await.map_err(|e| mongo::error_message(&e));
                     AppEvent::Page(tab, out, skip, res)
                 });
+            }
+            Action::SetAutoExpand(on) => {
+                self.settings.auto_expand = on;
+                self.actions.push(Action::SaveSettings);
             }
             Action::Count { tab, out } => {
                 let Some(t) = self.tabs.iter().find(|t| t.id == tab) else { return };

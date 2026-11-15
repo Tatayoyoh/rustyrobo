@@ -147,6 +147,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
     let theme = app.theme;
     let fmt = app.fmt();
     let font_size = app.settings.font_size;
+    let auto_expand = app.settings.auto_expand;
     let orientation = app.settings.orientation;
     let tabbed = app.settings.tabbed_results;
     let completion = match app.settings.autocompletion {
@@ -360,7 +361,7 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 }
                 return;
             }
-            let mut cx = PaneCtx { tab: tab.id, server: tab.server, index: 0, theme: &theme, fmt, font_size, actions: &mut actions };
+            let mut cx = PaneCtx { tab: tab.id, server: tab.server, index: 0, theme: &theme, fmt, font_size, auto_expand, actions: &mut actions };
             let n = tab.outputs.len();
             if tabbed && n > 1 {
                 ui.horizontal_wrapped(|ui| {

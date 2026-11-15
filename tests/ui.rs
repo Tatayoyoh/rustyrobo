@@ -1439,7 +1439,7 @@ fn alt_f4_closes_a_document_not_the_app() {
 fn pane_actions_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, (OutputPane, Vec<Action>)> {
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
         |ui, (pane, actions): &mut (OutputPane, Vec<Action>)| {
-            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, actions };
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, auto_expand: false, actions };
             show_pane(ui, pane, &mut cx);
         },
         (OutputPane::new(docs_output(docs), mode, 50, true), Vec::new()),
@@ -1933,7 +1933,7 @@ fn pane_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, OutputPane>
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
         |ui, pane: &mut OutputPane| {
             let mut actions = Vec::new();
-            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, actions: &mut actions };
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, auto_expand: false, actions: &mut actions };
             show_pane(ui, pane, &mut cx);
         },
         OutputPane::new(docs_output(docs), mode, 50, true),
@@ -2046,6 +2046,28 @@ fn a_button_opens_the_documents_of_the_tree_or_closes_them() {
     h.state_mut().mode = ViewMode::Table;
     h.run_steps(3);
     assert!(h.query_by_label(icon::ARROWS_OUT_SIMPLE).is_none());
+}
+
+#[test]
+fn the_options_of_the_tree_are_in_its_menu() {
+    let mut h = pane_actions_harness(vec![Bson::Document(doc! { "_id": 1 })], ViewMode::Tree);
+    let menu = h.get_by_label(icon::DOTS_THREE_VERTICAL).rect();
+    let text = h.query_all_by_label_contains("Text").map(|n| n.rect()).find(|r| (r.center().y - menu.center().y).abs() < 4.0).expect("Text view");
+    assert!(menu.left() > text.right() + 4.0, "after the views, apart: {text:?} {menu:?}");
+    h.get_by_label(icon::DOTS_THREE_VERTICAL).click();
+    h.run_steps(3);
+    h.get_by_label("Auto expand first document").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().1.last(), Some(Action::SetAutoExpand(true))));
+    // There only.
+    let env = env("tree-options", &AppSettings::default());
+    let mut h = app_harness();
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    assert!(!has_label(&h, "Auto expand first document"));
+    h.state_mut().actions.push(Action::SetAutoExpand(true));
+    h.run_steps(2);
+    assert!(h.state().settings.auto_expand && saved_settings(&env).auto_expand);
 }
 
 #[test]
@@ -2184,7 +2206,7 @@ fn find_in_the_text_views() {
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
         |ui, pane: &mut OutputPane| {
             let mut actions = Vec::new();
-            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions::default(), font_size: 13.0, actions: &mut actions };
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions::default(), font_size: 13.0, auto_expand: false, actions: &mut actions };
             show_pane(ui, pane, &mut cx);
         },
         OutputPane::new(output, ViewMode::Tree, 50, true),

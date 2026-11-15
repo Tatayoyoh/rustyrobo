@@ -591,6 +591,8 @@ pub struct PaneCtx<'a> {
     pub theme: &'a Theme,
     pub fmt: FormatOptions,
     pub font_size: f32,
+    /// "Auto expand first document", in the menu of the tree options.
+    pub auto_expand: bool,
     pub actions: &'a mut Vec<Action>,
 }
 
@@ -717,6 +719,16 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     if !matches!(pane.output.kind, OutputKind::Docs { .. }) {
                         return;
                     }
+                    // The options of the tree, also shown with the other views: the
+                    // buttons of the views stay in place.
+                    let mut auto_expand = cx.auto_expand;
+                    let options = ui.menu_button(icon::DOTS_THREE_VERTICAL, |ui| {
+                        if crate::ui::check_item(ui, &mut auto_expand, "Auto expand first document") {
+                            cx.actions.push(Action::SetAutoExpand(auto_expand));
+                        }
+                    });
+                    options.response.on_hover_text("Tree view options");
+                    ui.add_space(4.0);
                     for (mode, glyph, name, tip) in [
                         (ViewMode::Text, icon::TEXT_ALIGN_LEFT, "Text", "Text mode (F4)"),
                         (ViewMode::Table, icon::TABLE, "Table", "Table mode (F3)"),

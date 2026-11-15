@@ -30,6 +30,7 @@
 ### Changed
 
 - Tree view: the documents start closed, a document alone open ("Auto expand first document" is off by default)
+- "Auto expand first document": in the tree options (⋮ after the views), instead of the Options menu
 
 ### Fixed
 

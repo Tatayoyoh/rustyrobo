@@ -100,7 +100,7 @@ fn menu_item(ui: &mut Ui, text: &str, shortcut: &str) -> bool {
     clicked
 }
 
-fn check_item(ui: &mut Ui, value: &mut bool, text: &str) -> bool {
+pub fn check_item(ui: &mut Ui, value: &mut bool, text: &str) -> bool {
     let changed = ui.checkbox(value, text).changed();
     if changed {
         ui.close();
@@ -219,7 +219,6 @@ fn menus(app: &mut App, ui: &mut Ui) {
             ui.separator();
             let s = &mut app.settings;
             let mut changed = check_item(ui, &mut s.load_mongorc, "Load .mongorc.js");
-            changed |= check_item(ui, &mut s.auto_expand, "Auto expand first document");
             changed |= check_item(ui, &mut s.line_numbers, "Show line numbers by default");
             changed |= check_item(ui, &mut s.disable_connection_shortcuts, "Disable connection shortcuts");
             changed |= check_item(ui, &mut s.auto_exec, "Automatically execute code in new tab");
