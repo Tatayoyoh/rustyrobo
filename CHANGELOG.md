@@ -21,6 +21,7 @@
 - Document modal: the eye of View in its title, Edit and Insert in the colours of the menus
 - Explorer: Up/Down go through the rows, Right/Left open and close them, Enter opens a collection
 - Explorer and tree view: Space opens and closes a node
+- Tree view: a button and Shift+Space open the documents of the page, first level only, or close them
 - Connecting (connection manager, welcome page) puts the keyboard in the explorer, on the server opened
 - Query editor: a completed field name is followed by `:`, Ctrl+arrows stop at `:`, Ctrl+Shift+Left from a value selects its key
 

@@ -68,7 +68,7 @@ fn wait_until(h: &mut Harness<'_, App>, what: &str, timeout: Duration, cond: imp
     }
 }
 
-fn has_label(h: &Harness<'_, App>, text: &str) -> bool {
+fn has_label<S>(h: &Harness<'_, S>, text: &str) -> bool {
     h.query_all_by_label_contains(text).next().is_some()
 }
 
@@ -2011,6 +2011,24 @@ fn keys_hide_the_highlight_of_the_row_under_the_pointer() {
 }
 
 #[test]
+fn a_button_opens_the_documents_of_the_tree_or_closes_them() {
+    let docs = (0..3).map(|i| Bson::Document(doc! { "_id": i, "name": format!("name {i}"), "address": { "city": "Paris" } })).collect();
+    let mut h = pane_harness(docs, ViewMode::Tree);
+    assert!(has_label(&h, "name 0") && !has_label(&h, "name 2"), "the first document open");
+    h.get_by_label(icon::ARROWS_OUT_SIMPLE).click();
+    h.run_steps(3);
+    assert!(has_label(&h, "name 1") && has_label(&h, "name 2"), "all the documents");
+    assert!(!has_label(&h, "Paris"), "their first level only");
+    h.get_by_label(icon::ARROWS_IN_SIMPLE).click();
+    h.run_steps(3);
+    assert!(!has_label(&h, "name 0"), "all closed");
+    // Not in the table.
+    h.state_mut().mode = ViewMode::Table;
+    h.run_steps(3);
+    assert!(h.query_by_label(icon::ARROWS_OUT_SIMPLE).is_none());
+}
+
+#[test]
 fn copy_value_menu_shows_its_shortcut() {
     let mut h = pane_harness(vec![Bson::Document(doc! { "_id": 1, "a": "x", "b": "y" })], ViewMode::Tree);
     let menu_has = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+C")));
@@ -3225,6 +3243,15 @@ fn live_documents_open_from_ctrl_p_and_the_keys() {
     assert_eq!(current(&h).as_deref(), Some("1"));
     h.key_press(Key::Home);
     h.run_steps(2);
+    assert_eq!(current(&h).as_deref(), Some("0"));
+    // Shift+Space: all the documents open, then closed.
+    let open = |h: &Harness<'_, App>| h.state().tabs[tab].outputs[0].expanded.clone();
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run_steps(2);
+    assert_eq!(open(&h), std::collections::HashSet::from(["0".to_string(), "1".to_string()]));
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run_steps(2);
+    assert!(open(&h).is_empty());
     assert_eq!(current(&h).as_deref(), Some("0"));
 
     // In the table: Left and Right go through the columns, Enter edits the cell.

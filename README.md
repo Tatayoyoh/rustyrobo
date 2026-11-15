@@ -58,7 +58,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Open a collection by its name (Ctrl+P)
 - View or edit the selected document (R, E, or double-click its `_id`), in a modal that maximizes (Ctrl+M); Ctrl+S saves it, Ctrl+E edits the viewed one
 - Ctrl+K switches the results between tree, table and text; Alt+arrows go between the explorer, the editor, the results and the logs
-- Keyboard in the explorer and the tree and table views: Up/Down go through the rows, Right/Left open and close the nodes (or go through the columns of the table), Space opens or closes a node, Enter edits a value or opens a collection; PageUp/PageDown and Home/End in the tree, table and text views
+- Keyboard in the explorer and the tree and table views: Up/Down go through the rows, Right/Left open and close the nodes (or go through the columns of the table), Space opens or closes a node (Shift+Space: all the documents), Enter edits a value or opens a collection; PageUp/PageDown and Home/End in the tree, table and text views
 
 ## Install
 

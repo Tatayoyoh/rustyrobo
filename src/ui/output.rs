@@ -466,6 +466,26 @@ impl OutputPane {
         self.field_update(edit.doc, &edit.keys, Some(value))
     }
 
+    /// Whether every document of the page is open in the tree.
+    fn documents_open(&self) -> bool {
+        (0..self.docs().len()).all(|i| self.expanded.contains(&i.to_string()))
+    }
+
+    /// Shift+Space and the button of the tree: opens the documents of the
+    /// page, their first level only, or closes them when all are open. A row
+    /// hidden by it leaves the selection to its document.
+    pub fn toggle_documents(&mut self) {
+        self.expanded = if self.documents_open() { HashSet::new() } else { (0..self.docs().len()).map(|i| i.to_string()).collect() };
+        self.rows_cache = None;
+        let hidden = |p: &str| p.match_indices('/').any(|(i, _)| !self.expanded.contains(&p[..i]));
+        if let Some(doc) = self.selected.current_doc()
+            && self.selected.current().is_some_and(hidden)
+        {
+            self.selected.click(&doc.to_string(), egui::Modifiers::NONE, Vec::new);
+        }
+        self.scroll_to = self.selected.current().map(str::to_string);
+    }
+
     /// Database and collection of the documents of a `find`.
     pub fn source(&self) -> Option<(String, String)> {
         match &self.output.kind {
@@ -697,6 +717,17 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     ] {
                         if ui.selectable_label(pane.mode == mode, format!("{glyph} {name}")).on_hover_text(tip).clicked() {
                             pane.mode = mode;
+                        }
+                    }
+                    if pane.mode == ViewMode::Tree {
+                        ui.separator();
+                        let (glyph, tip) = if pane.documents_open() {
+                            (icon::ARROWS_IN_SIMPLE, "Close the documents (Shift+Space)")
+                        } else {
+                            (icon::ARROWS_OUT_SIMPLE, "Open the documents, first level only (Shift+Space)")
+                        };
+                        if ui.add_enabled(!pane.docs().is_empty(), egui::Button::new(glyph).small()).on_hover_text(tip).clicked() {
+                            pane.toggle_documents();
                         }
                     }
                     ui.separator();
@@ -1891,6 +1922,26 @@ mod tests {
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::View));
         p.column = None;
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::Edit), "no cell: the document");
+    }
+
+    #[test]
+    fn documents_open_at_their_first_level_or_close() {
+        let mut p = pane(docs(), None);
+        let first_level = HashSet::from(["0".to_string(), "1".to_string()]);
+        p.expanded.insert("0/a".into());
+        p.selected.click("0/s", egui::Modifiers::NONE, Vec::new);
+        p.toggle_documents();
+        assert_eq!(p.expanded, first_level, "first level only");
+        assert_eq!(p.selected.current(), Some("0/s"), "still shown");
+        p.toggle_documents();
+        assert!(p.expanded.is_empty(), "all open: closed");
+        assert_eq!(p.selected.current(), Some("0"), "a hidden row leaves it to its document");
+        assert_eq!(p.scroll_to.as_deref(), Some("0"));
+        p.expanded.extend(["0".to_string(), "0/a".to_string()]);
+        p.selected.click("0/a/b", egui::Modifiers::NONE, Vec::new);
+        p.toggle_documents();
+        assert_eq!(p.expanded, first_level);
+        assert_eq!(p.selected.current(), Some("0"), "below the first level: hidden");
     }
 
     #[test]

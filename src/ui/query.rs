@@ -188,6 +188,11 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 }
             }
         }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, Key::Space))
+            && let Some(pane) = current_pane(tab, tabbed).filter(|p| p.mode == crate::settings::ViewMode::Tree)
+        {
+            pane.toggle_documents();
+        }
     }
     for pane in &mut tab.outputs {
         pane.pointer_over = false;
