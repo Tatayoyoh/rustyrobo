@@ -46,6 +46,12 @@ pub struct OutputPane {
     pub cell_edit: Option<CellEdit>,
     /// Table cell of the last right-click, for its context menu.
     menu_cell: Option<(usize, String)>,
+    /// Column of the table that Left and Right go through, and Enter edits.
+    pub column: Option<String>,
+    /// Row brought into view by the keyboard (its path).
+    scroll_to: Option<String>,
+    /// The current cell of the table, brought into view across too.
+    show_cell: bool,
 }
 
 /// Why an object or an array cannot be edited in place.
@@ -267,6 +273,9 @@ impl OutputPane {
             fold_cache: None,
             rows_cache: None,
             columns_cache: None,
+            column: None,
+            scroll_to: None,
+            show_cell: false,
             skip_input: skip.to_string(),
             size_input: page_size.to_string(),
             pointer_over: false,
@@ -867,8 +876,11 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         .column(Column::initial(320.0).at_least(80.0).clip(true))
         .column(Column::remainder().at_least(70.0).clip(true))
         .auto_shrink([false, false]);
+    let key_row = pane.scroll_to.take().and_then(|p| rows.iter().position(|r| r.path == p));
     if let Some(row) = scroll_row {
         table = table.scroll_to_row(row, Some(Align::Center));
+    } else if let Some(row) = key_row {
+        table = table.scroll_to_row(row, None);
     }
     table
         .header(row_h, |mut h| {
@@ -1148,6 +1160,78 @@ pub fn open_selection(pane: &OutputPane, server: u64, tab: u64, mode: DocMode, f
     document_dialog(pane, server, tab, doc, mode, fmt).ok_or("This document cannot be edited: the results do not come from a collection or it has no _id")
 }
 
+/// Keys on the results (see `query::current_pane`): Up and Down go to the row
+/// above and below. In the tree, Right opens a node, then goes to its first
+/// child, Left closes it, or goes to its parent; in the table, Right and Left
+/// go to the next and previous column. Enter edits the value in place, or
+/// opens the document: an object or an array is edited with it, an `_id` only
+/// viewed.
+pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fmt: FormatOptions) -> Option<Action> {
+    use egui::Key;
+    let rows: Vec<(String, usize, Vec<String>, bool)> = match pane.mode {
+        ViewMode::Tree => pane.rows_cache.as_ref()?.2.iter().map(|r| (r.path.clone(), r.doc, r.keys.clone(), r.container)).collect(),
+        ViewMode::Table => (0..pane.docs().len()).map(|i| (i.to_string(), i, Vec::new(), false)).collect(),
+        ViewMode::Text => return None,
+    };
+    if rows.is_empty() {
+        return None;
+    }
+    let at = pane.selected.current().and_then(|p| rows.iter().position(|r| r.0 == p));
+    let mut target = None;
+    match (key, at) {
+        (Key::ArrowDown, _) => target = Some(at.map_or(0, |i| (i + 1).min(rows.len() - 1))),
+        (Key::ArrowUp, _) => target = Some(at.map_or(0, |i| i.saturating_sub(1))),
+        (Key::ArrowRight | Key::ArrowLeft, _) if pane.mode == ViewMode::Table => {
+            let columns = pane.columns_cache.as_ref().filter(|(_, scalar)| !scalar).map(|(c, _)| c)?;
+            let i = pane.column.as_ref().and_then(|c| columns.iter().position(|x| x == c));
+            let next = match (key, i) {
+                (Key::ArrowRight, Some(i)) => (i + 1).min(columns.len().saturating_sub(1)),
+                (_, Some(i)) => i.saturating_sub(1),
+                (_, None) => 0,
+            };
+            pane.column = columns.get(next).cloned();
+            pane.show_cell = true;
+            target = Some(at.unwrap_or(0));
+        }
+        (Key::ArrowRight, Some(i)) if rows[i].3 => {
+            if pane.expanded.insert(rows[i].0.clone()) {
+                pane.rows_cache = None;
+            } else if rows.get(i + 1).is_some_and(|r| r.0.starts_with(&format!("{}/", rows[i].0))) {
+                target = Some(i + 1);
+            }
+        }
+        (Key::ArrowLeft, Some(i)) => {
+            if rows[i].3 && pane.expanded.remove(&rows[i].0) {
+                pane.rows_cache = None;
+            } else if let Some((parent, _)) = rows[i].0.rsplit_once('/') {
+                target = rows.iter().position(|r| r.0 == parent);
+            }
+        }
+        (Key::Enter, Some(i)) => {
+            let (doc, keys) = match pane.mode {
+                ViewMode::Table => (rows[i].1, pane.column.iter().cloned().collect::<Vec<_>>()),
+                _ => (rows[i].1, rows[i].2.clone()),
+            };
+            let view = document_dialog(pane, server, tab, doc, DocMode::View, fmt);
+            if keys == ["_id"] {
+                return view;
+            }
+            // An object or an array: its document.
+            return match pane.edit_cell(doc, &keys) {
+                Ok(()) => None,
+                Err(_) => document_dialog(pane, server, tab, doc, DocMode::Edit, fmt).or(view),
+            };
+        }
+        _ => {}
+    }
+    if let Some(t) = target {
+        pane.selected.click(&rows[t].0, egui::Modifiers::NONE, Vec::new);
+        pane.scroll_to = Some(rows[t].0.clone());
+        pane.show_cell = pane.mode == ViewMode::Table;
+    }
+    None
+}
+
 fn copy_value(v: &Bson, fmt: FormatOptions) -> String {
     match v {
         Bson::String(s) => s.clone(),
@@ -1291,6 +1375,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         pane.columns_cache = Some(table_columns(pane.docs()));
     }
     let (columns, scalar_mode) = pane.columns_cache.take().unwrap_or_default();
+    let key_row = pane.scroll_to.take().and_then(|p| p.parse::<usize>().ok());
     // The cell being edited, out of the pane while the table borrows it.
     let mut edit = pane.cell_edit.take();
     let docs = pane.docs();
@@ -1313,6 +1398,9 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let mut edit_end: Option<bool> = None;
     let mut start_edit: Option<(usize, Vec<String>)> = None;
     let mut menu_cell = pane.menu_cell.clone();
+    let mut click_column = None;
+    let current = pane.selected.current().map(str::to_string).zip(pane.column.clone());
+    let mut current_shown = false;
 
     egui::ScrollArea::horizontal().id_salt(("table-h", cx.tab, cx.index)).show(ui, |ui| {
         let mut tb = TableBuilder::new(ui)
@@ -1328,6 +1416,8 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         }
         if let Some((doc, _)) = scrolling_to {
             tb = tb.scroll_to_row(*doc, Some(Align::Center));
+        } else if let Some(doc) = key_row {
+            tb = tb.scroll_to_row(doc, None);
         }
         tb.header(row_h, |mut h| {
             h.col(|ui| {
@@ -1375,7 +1465,14 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                         if let Some(v) = v {
                             cell_label(ui, &bsonfmt::short_value(v, fmt), &mono, bson_color(th, v));
                         }
+                        if current.as_ref().is_some_and(|(row, column)| *row == path && column == c) {
+                            ui.painter().rect_stroke(ui.max_rect(), 0, egui::Stroke::new(1.0, th.accent), egui::StrokeKind::Inside);
+                        }
                     });
+                    if current.as_ref().is_some_and(|(row, column)| *row == path && column == c) && pane.show_cell {
+                        cell_to_show = Some(rect);
+                        current_shown = true;
+                    }
                     if !scalar_mode && cell.contains_pointer() {
                         pointed = Some(c.clone());
                     }
@@ -1388,6 +1485,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     }
                 }
                 let resp = row.response();
+                let pointed_column = pointed.clone();
                 if let Some(c) = pointed {
                     if resp.double_clicked() {
                         start_edit = Some((i, vec![c.clone()]));
@@ -1398,6 +1496,7 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 }
                 if resp.clicked() {
                     click = Some((path.clone(), Some(resp.ctx.input(|i| i.modifiers))));
+                    click_column = pointed_column.clone();
                 }
                 if resp.secondary_clicked() {
                     click = Some((path.clone(), None));
@@ -1427,6 +1526,12 @@ fn table_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     // Scrolled out of sight: the edit is dropped, like a click elsewhere.
     pane.cell_edit = edit.filter(|_| edit_drawn);
     end_cell_edit(pane, cx, edit_end, start_edit);
+    if current_shown {
+        pane.show_cell = false;
+    }
+    if click_column.is_some() {
+        pane.column = click_column;
+    }
     match click {
         Some((path, Some(mods))) => {
             let n = pane.docs().len();
@@ -1582,6 +1687,92 @@ mod tests {
             Bson::Document(doc! { "_id": 1, "a": { "b": [1, { "c": 2 }] }, "s": "x" }),
             Bson::Document(doc! { "_id": 2, "z": true }),
         ]
+    }
+
+    #[test]
+    fn arrows_go_through_the_rows_and_enter_edits() {
+        use egui::Key;
+        let fmt = FormatOptions::default();
+        let spec = QuerySpec { db: "d".into(), coll: "c".into(), filter: doc! {}, projection: None, sort: None, skip: 0, limit: 0, hint: None, collation: None };
+        let mut p = pane(vec![Bson::Document(doc! { "_id": 1, "a": { "b": 2 }, "s": "x" }), Bson::Document(doc! { "_id": 2 })], Some(spec));
+        let rebuild = |p: &mut OutputPane| {
+            if p.rows_cache.is_none() {
+                p.rows_cache = Some((fmt, "t", flatten(p.docs(), &p.expanded, fmt, &crate::theme::THEMES[0])));
+            }
+        };
+        let press = |p: &mut OutputPane, k: Key| {
+            let action = navigate(p, k, 1, 1, fmt);
+            rebuild(p);
+            action
+        };
+        let at = |p: &OutputPane| p.selected.current().map(str::to_string);
+        let dialog = |a: Option<Action>| match a {
+            Some(Action::Dialog(Dialog::Document { mode, .. })) => Some(mode),
+            _ => None,
+        };
+        rebuild(&mut p);
+
+        // Tree: the first row, then down; Right opens a node, then goes into it.
+        press(&mut p, Key::ArrowDown);
+        assert_eq!(at(&p).as_deref(), Some("0"));
+        for _ in 0..2 {
+            press(&mut p, Key::ArrowDown);
+        }
+        assert_eq!(at(&p).as_deref(), Some("0/a"));
+        assert_eq!(p.scroll_to.as_deref(), Some("0/a"), "brought into view");
+        press(&mut p, Key::ArrowRight);
+        assert!(p.expanded.contains("0/a"));
+        assert_eq!(at(&p).as_deref(), Some("0/a"));
+        press(&mut p, Key::ArrowRight);
+        assert_eq!(at(&p).as_deref(), Some("0/a/b"));
+        // Left goes to the parent, closes it, then goes to its parent.
+        press(&mut p, Key::ArrowLeft);
+        assert_eq!(at(&p).as_deref(), Some("0/a"));
+        press(&mut p, Key::ArrowLeft);
+        assert!(!p.expanded.contains("0/a"));
+        press(&mut p, Key::ArrowLeft);
+        assert_eq!(at(&p).as_deref(), Some("0"));
+        press(&mut p, Key::ArrowUp);
+        assert_eq!(at(&p).as_deref(), Some("0"), "the first row stays");
+
+        // Enter: a value in place, an object with the document, an _id viewed.
+        for _ in 0..3 {
+            press(&mut p, Key::ArrowDown);
+        }
+        assert_eq!(at(&p).as_deref(), Some("0/s"));
+        assert!(press(&mut p, Key::Enter).is_none());
+        assert_eq!(p.cell_edit.as_ref().map(|e| e.keys.clone()), Some(vec!["s".to_string()]));
+        p.cell_edit = None;
+        press(&mut p, Key::ArrowUp);
+        let edit = press(&mut p, Key::Enter);
+        assert_eq!(dialog(edit), Some(DocMode::Edit));
+        press(&mut p, Key::ArrowUp);
+        assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::View));
+
+        // Table: Right and Left go through the columns, Up and Down keep it.
+        p.mode = ViewMode::Table;
+        p.columns_cache = Some(table_columns(p.docs()));
+        p.selected.click("0", egui::Modifiers::NONE, Vec::new);
+        press(&mut p, Key::ArrowRight);
+        assert_eq!(p.column.as_deref(), Some("_id"));
+        assert!(p.show_cell);
+        for _ in 0..3 {
+            press(&mut p, Key::ArrowRight);
+        }
+        assert_eq!(p.column.as_deref(), Some("s"), "the last column stays");
+        press(&mut p, Key::ArrowLeft);
+        press(&mut p, Key::ArrowDown);
+        assert_eq!((at(&p).as_deref(), p.column.as_deref()), (Some("1"), Some("a")));
+        press(&mut p, Key::ArrowDown);
+        assert_eq!(at(&p).as_deref(), Some("1"), "the last row stays");
+        // Enter: the cell, here a field to add.
+        assert!(press(&mut p, Key::Enter).is_none());
+        assert_eq!(p.cell_edit.as_ref().map(|e| (e.doc, e.keys.clone())), Some((1, vec!["a".to_string()])));
+        p.cell_edit = None;
+        p.column = Some("_id".into());
+        assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::View));
+        p.column = None;
+        assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::Edit), "no cell: the document");
     }
 
     fn pane(docs: Vec<Bson>, spec: Option<QuerySpec>) -> OutputPane {

@@ -172,6 +172,23 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
             pane.open_find();
         }
     }
+    // Arrows and Enter: through the results, when they were the last clicked.
+    // Before they are drawn: the Enter that ends the edit of a cell is its own.
+    if !modal_open && app.zone == Some(Zone::Results) && !ui.ctx().text_edit_focused() && tab.outputs.iter().all(|o| o.cell_edit.is_none()) {
+        use egui::Key;
+        for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Enter] {
+            if ui.input_mut(|i| crate::ui::consume_plain_key(i, key)) {
+                // A focused button would take the arrows too (egui moves its focus).
+                if let Some(focused) = ui.memory(|m| m.focused()) {
+                    ui.memory_mut(|m| m.surrender_focus(focused));
+                }
+                let (server, id) = (tab.server, tab.id);
+                if let Some(pane) = current_pane(tab, tabbed) {
+                    actions.extend(crate::ui::output::navigate(pane, key, server, id, fmt));
+                }
+            }
+        }
+    }
     for pane in &mut tab.outputs {
         pane.pointer_over = false;
         pane.hovered = None;
