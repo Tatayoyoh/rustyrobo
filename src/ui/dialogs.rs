@@ -1148,7 +1148,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         if ui.button(RichText::new("Save").strong()).on_hover_text("Ctrl+S").clicked() || save_key {
                             match parse_doc(text) {
                                 Ok(d) => {
-                                    let refresh = tab.map(Refresh::Tab).unwrap_or(Refresh::None);
+                                    // The pages of the results again, their rows still open and selected.
+                                    let refresh = tab.map_or(Refresh::None, |tab| Refresh::Results { tab, db: db.clone(), coll: coll.clone() });
                                     let cmd = match (*mode, original_id) {
                                         (DocMode::Edit, Some(id)) => doc! { "update": coll.as_str(), "updates": [{ "q": { "_id": id.clone() }, "u": d, "upsert": false }] },
                                         _ => doc! { "insert": coll.as_str(), "documents": [d] },

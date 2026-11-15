@@ -26,6 +26,7 @@
 
 - View Document and Edit Document: selecting text after right-to-left text copies the right text (#1)
 - Text view: slow with large results
+- Saving a document from the results took them back to their first page, the nodes closed and nothing selected
 
 ## 1.4.0
 

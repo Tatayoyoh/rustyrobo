@@ -2991,6 +2991,26 @@ fn live_tree_values_are_edited_in_place() {
     assert!(has_label(&h, "Remove the field \"address.zip\" from this document?"));
     h.get_by_label("Yes").click();
     wait_until(&mut h, "field removed", Duration::from_secs(15), |h| !doc(h).get_document("address").unwrap().contains_key("zip"));
+
+    // Enter on an object edits its document; saved with Ctrl+S, the page comes
+    // back with the same rows open and selected, the keys going on from there.
+    let current = |h: &Harness<'_, App>| h.state().tabs[0].outputs[0].selected.current().map(str::to_string);
+    let at = h.get_by_label("address").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Primary);
+    assert_eq!(current(&h).as_deref(), Some("0/address"));
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    let Some(Dialog::Document { text, .. }) = &mut h.state_mut().dialog else { panic!("Edit Document") };
+    *text = text.replace("\"Lyon\"", "\"Nice\"");
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    wait_until(&mut h, "page reloaded", Duration::from_secs(15), |h| doc(h).get_document("address").unwrap().get_str("city") == Ok("Nice"));
+    assert!(h.state().dialog.is_none());
+    assert_eq!(current(&h).as_deref(), Some("0/address"));
+    assert!(h.state().tabs[0].outputs[0].expanded.contains("0/tags"), "still open: the page only was loaded again");
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(current(&h).as_deref(), Some("0/address/city"));
 }
 
 #[test]

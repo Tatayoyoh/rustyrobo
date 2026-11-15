@@ -383,6 +383,10 @@ impl OutputPane {
             *more = docs.len() as u64 >= self.page_size;
             *d = docs;
         }
+        // The same page again (after an edit): its rows stay selected.
+        if skip != self.skip {
+            self.selected.clear();
+        }
         self.skip = skip;
         self.skip_input = skip.to_string();
         self.text_cache = None;
@@ -390,7 +394,6 @@ impl OutputPane {
         self.fold_cache = None;
         self.rows_cache = None;
         self.columns_cache = None;
-        self.selected.clear();
         self.find.stale = true;
         self.cell_edit = None;
     }
@@ -463,7 +466,8 @@ impl OutputPane {
         self.field_update(edit.doc, &edit.keys, Some(value))
     }
 
-    fn source(&self) -> Option<(String, String)> {
+    /// Database and collection of the documents of a `find`.
+    pub fn source(&self) -> Option<(String, String)> {
         match &self.output.kind {
             OutputKind::Docs { spec: Some(s), .. } => Some((s.db.clone(), s.coll.clone())),
             _ => None,
@@ -1870,6 +1874,18 @@ mod tests {
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::View));
         p.column = None;
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::Edit), "no cell: the document");
+    }
+
+    #[test]
+    fn the_same_page_again_keeps_its_selection_and_its_open_nodes() {
+        let mut p = pane(docs(), None);
+        p.expanded.insert("1".into());
+        p.selected.click("1/z", egui::Modifiers::NONE, Vec::new);
+        p.set_page(docs(), 0);
+        assert_eq!(p.selected.current(), Some("1/z"), "after an edit");
+        assert!(p.expanded.contains("1"));
+        p.set_page(docs(), 50);
+        assert!(p.selected.is_empty(), "another page");
     }
 
     fn pane(docs: Vec<Bson>, spec: Option<QuerySpec>) -> OutputPane {

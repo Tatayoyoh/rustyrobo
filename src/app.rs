@@ -121,6 +121,9 @@ pub enum Refresh {
     Tab(u64),
     /// The page shown by a result pane: `out` of tab `tab`.
     Page { tab: u64, out: usize },
+    /// The pages of the panes of tab `tab` that show collection `coll` of
+    /// `db`; the whole script again when none does.
+    Results { tab: u64, db: String, coll: String },
 }
 
 #[derive(Clone)]
@@ -743,6 +746,23 @@ impl App {
             Refresh::Page { tab, out } => {
                 if let Some(p) = self.tabs.iter().find(|t| t.id == tab).and_then(|t| t.outputs.get(out)) {
                     self.actions.push(Action::Page { tab, out, skip: p.skip, limit: p.page_size });
+                }
+            }
+            Refresh::Results { tab, db, coll } => {
+                let Some(t) = self.tabs.iter().find(|t| t.id == tab) else { return };
+                let source = Some((db, coll));
+                let pages: Vec<(usize, u64, u64)> = t
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.source() == source)
+                    .map(|(out, p)| (out, p.skip, p.page_size))
+                    .collect();
+                if pages.is_empty() {
+                    self.actions.push(Action::Execute(tab));
+                }
+                for (out, skip, limit) in pages {
+                    self.actions.push(Action::Page { tab, out, skip, limit });
                 }
             }
         }
