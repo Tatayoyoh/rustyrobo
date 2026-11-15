@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Results narrower than 800 px: the views (tree, table, text) and Export are in the ⋮ menu
+
 ## 1.5.0
 
 ### Added

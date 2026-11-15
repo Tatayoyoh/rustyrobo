@@ -13,7 +13,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use rustyrobo::app::{Action, App, CollNode, DbNode, Load, Server, ServerStatus, Zone};
 use rustyrobo::bsonfmt::FormatOptions;
-use rustyrobo::shell::{OutputKind, ShellOutput};
+use rustyrobo::shell::{OutputKind, QuerySpec, ShellOutput};
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort, ViewMode};
 use rustyrobo::ui::dialogs::{Dialog, DocMode};
 use rustyrobo::ui::editor::code_view;
@@ -1437,12 +1437,17 @@ fn alt_f4_closes_a_document_not_the_app() {
 
 /// [`pane_harness`] keeping the actions of the pane.
 fn pane_actions_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, (OutputPane, Vec<Action>)> {
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
+    pane_actions_harness_at(docs_output(docs), mode, 1000.0)
+}
+
+/// [`pane_actions_harness`] for `output`, `width` wide.
+fn pane_actions_harness_at(output: ShellOutput, mode: ViewMode, width: f32) -> Harness<'static, (OutputPane, Vec<Action>)> {
+    let mut h = Harness::builder().with_size(egui::vec2(width, 400.0)).build_ui_state(
         |ui, (pane, actions): &mut (OutputPane, Vec<Action>)| {
             let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, auto_expand: false, actions };
             show_pane(ui, pane, &mut cx);
         },
-        (OutputPane::new(docs_output(docs), mode, 50, true), Vec::new()),
+        (OutputPane::new(output, mode, 50, true), Vec::new()),
     );
     h.run_steps(3);
     h
@@ -2068,6 +2073,27 @@ fn the_options_of_the_tree_are_in_its_menu() {
     h.state_mut().actions.push(Action::SetAutoExpand(true));
     h.run_steps(2);
     assert!(h.state().settings.auto_expand && saved_settings(&env).auto_expand);
+}
+
+#[test]
+fn narrow_results_have_their_views_and_export_in_the_menu() {
+    let spec = QuerySpec { db: "shop".into(), coll: "orders".into(), filter: doc! {}, projection: None, sort: None, skip: 0, limit: 0, hint: None, collation: None };
+    let output = |spec: &QuerySpec| ShellOutput { statement: "q".into(), line: 1, kind: OutputKind::Docs { docs: vec![Bson::Document(doc! { "_id": 1 })], spec: Some(spec.clone()), ns: None, more: false }, elapsed: Duration::ZERO };
+    let wide = pane_actions_harness_at(output(&spec), ViewMode::Tree, 1000.0);
+    assert!(has_label(&wide, "Table") && has_label(&wide, "Export"), "wide: in the header");
+    let mut h = pane_actions_harness_at(output(&spec), ViewMode::Tree, 700.0);
+    assert!(!has_label(&h, "Table") && !has_label(&h, "Export"), "narrow: in the menu");
+    h.get_by_label(icon::DOTS_THREE_VERTICAL).click();
+    h.run_steps(3);
+    assert!(has_label(&h, "Auto expand first document"), "with the options of the tree");
+    h.get_by_label_contains("Table").click();
+    h.run_steps(3);
+    assert_eq!(h.state().0.mode, ViewMode::Table);
+    h.get_by_label(icon::DOTS_THREE_VERTICAL).click();
+    h.run_steps(3);
+    h.get_by_label_contains("Export…").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().1.last(), Some(Action::Dialog(Dialog::Export(_)))));
 }
 
 #[test]

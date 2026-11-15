@@ -692,8 +692,12 @@ fn find_row(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     }
 }
 
+/// Below this width, the views and the Export of a result pane go in its menu.
+const NARROW: f32 = 800.0;
+
 fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let th = cx.theme;
+    let narrow = ui.available_width() < NARROW;
     egui::Frame::new()
         .fill(th.surface)
         .inner_margin(egui::Margin::symmetric(6, 3))
@@ -719,27 +723,44 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     if !matches!(pane.output.kind, OutputKind::Docs { .. }) {
                         return;
                     }
+                    const VIEWS: [(ViewMode, &str, &str, &str); 3] =
+                        [(ViewMode::Text, icon::TEXT_ALIGN_LEFT, "Text", "F4"), (ViewMode::Table, icon::TABLE, "Table", "F3"), (ViewMode::Tree, icon::TREE_VIEW, "Tree", "F2")];
                     // The options of the tree, also shown with the other views: the
-                    // buttons of the views stay in place.
+                    // buttons of the views stay in place. Narrow, the views and
+                    // Export too.
                     let mut auto_expand = cx.auto_expand;
                     let options = ui.menu_button(icon::DOTS_THREE_VERTICAL, |ui| {
+                        if narrow {
+                            for &(mode, glyph, name, key) in VIEWS.iter().rev() {
+                                if ui.add(egui::Button::selectable(pane.mode == mode, format!("{glyph} {name}")).shortcut_text(key)).clicked() {
+                                    pane.mode = mode;
+                                    ui.close();
+                                }
+                            }
+                            if let OutputKind::Docs { spec: Some(spec), .. } = &pane.output.kind {
+                                ui.separator();
+                                if menu::button(ui, "Export…").clicked() {
+                                    cx.actions.push(Action::Dialog(crate::ui::dialogs::Dialog::export_query(cx.server, spec)));
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                        }
                         if crate::ui::check_item(ui, &mut auto_expand, "Auto expand first document") {
                             cx.actions.push(Action::SetAutoExpand(auto_expand));
                         }
                     });
-                    options.response.on_hover_text("Tree view options");
+                    options.response.on_hover_text(if narrow { "Views, export and tree options" } else { "Tree view options" });
                     ui.add_space(4.0);
-                    for (mode, glyph, name, tip) in [
-                        (ViewMode::Text, icon::TEXT_ALIGN_LEFT, "Text", "Text mode (F4)"),
-                        (ViewMode::Table, icon::TABLE, "Table", "Table mode (F3)"),
-                        (ViewMode::Tree, icon::TREE_VIEW, "Tree", "Tree mode (F2)"),
-                    ] {
-                        if ui.selectable_label(pane.mode == mode, format!("{glyph} {name}")).on_hover_text(tip).clicked() {
+                    for (mode, glyph, name, key) in VIEWS.into_iter().filter(|_| !narrow) {
+                        if ui.selectable_label(pane.mode == mode, format!("{glyph} {name}")).on_hover_text(format!("{name} mode ({key})")).clicked() {
                             pane.mode = mode;
                         }
                     }
                     if pane.mode == ViewMode::Tree {
-                        ui.separator();
+                        if !narrow {
+                            ui.separator();
+                        }
                         let (glyph, tip) = if pane.documents_open() {
                             (icon::ARROWS_IN_SIMPLE, "Close the documents (Shift+Space)")
                         } else {
@@ -751,7 +772,7 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     }
                     ui.separator();
                     paging(ui, pane, cx);
-                    if let OutputKind::Docs { spec: Some(spec), .. } = &pane.output.kind {
+                    if !narrow && let OutputKind::Docs { spec: Some(spec), .. } = &pane.output.kind {
                         ui.separator();
                         if ui.small_button(format!("{} Export", crate::ui::ICON_EXPORT)).on_hover_text("Export the documents of this query").clicked() {
                             cx.actions.push(Action::Dialog(crate::ui::dialogs::Dialog::export_query(cx.server, spec)));
