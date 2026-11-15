@@ -1,0 +1,26 @@
+[package]
+name = "rustyrobo-demo-video"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Records the frames of the demo video (dev/demo-video.sh)"
+
+[dependencies]
+rustyrobo = { path = "../.." }
+chrono = "0.4.45"
+eframe = "0.36.2"
+egui = "0.36.2"
+egui_kittest = { version = "0.36.2", features = ["eframe", "wgpu"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde_json = "1.0.154"
+
+# Not a member of a workspace.
+[workspace]
+
+[profile.dev]
+opt-level = 1
+debug = false
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
