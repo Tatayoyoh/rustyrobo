@@ -7,6 +7,7 @@
 - Tree and table views: 
   - Enter on an object or an array opens the document on it, its block highlighted
   - Up/Down go through the rows, Right/Left open and close the nodes of the tree or go through the columns of the table, Enter edits
+- Text view: the documents come by parts when scrolled to the end, instead of being left out past 2 MB
 - Alt+arrows: go between the explorer, the editor, the results and the logs
 - Ctrl+P: open a collection by its name
 - Ctrl+K: next view (tree, table, text)
@@ -23,7 +24,7 @@
 ### Fixed
 
 - View Document and Edit Document: selecting text after right-to-left text copies the right text (#1)
-
+- Text view: slow with large results
 
 ## 1.4.0
 

@@ -231,6 +231,120 @@ fn layout(ui: &Ui, job: LayoutJob) -> Arc<Galley> {
     ui.ctx().memory_mut(|m| m.caches.cache::<Cache>().get(GalleyKey(&galley))[1].clone())
 }
 
+/// The galley of an editor, with the hash of what it shows and its witness: a
+/// small galley of the same fonts. egui lays the witness out again once it has
+/// made new fonts (full atlas, other scale, other fonts): the kept galley is
+/// then stale.
+struct Kept {
+    key: u64,
+    witness: Arc<Galley>,
+    galley: Arc<Galley>,
+    /// Pieces of a read-only text (see [`pieces_layout`]): their hash and galley.
+    pieces: Vec<(u64, Arc<Galley>)>,
+    used: bool,
+}
+
+/// [`Kept`] galleys by editor. Those not shown in a frame are dropped.
+#[derive(Default)]
+struct KeptGalleys(std::collections::HashMap<Id, Kept>);
+
+impl egui::cache::CacheTrait for KeptGalleys {
+    fn update(&mut self) {
+        self.0.retain(|_, kept| std::mem::take(&mut kept.used));
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+fn witness(ui: &Ui, font: &FontId) -> Arc<Galley> {
+    ui.fonts_mut(|f| f.layout_no_wrap("x".into(), font.clone(), Color32::WHITE))
+}
+
+/// The kept galley of `id`, if it is for `key` and still good.
+fn kept(ui: &Ui, id: Id, key: u64, witness: &Arc<Galley>) -> Option<Arc<Galley>> {
+    ui.ctx().memory_mut(|m| {
+        let kept = m.caches.cache::<KeptGalleys>().0.get_mut(&id).filter(|k| k.key == key && Arc::ptr_eq(&k.witness, witness))?;
+        kept.used = true;
+        Some(kept.galley.clone())
+    })
+}
+
+/// [`layout`] once for the text, font and theme hashed in `key`, then the same
+/// galley. A big text was slow even when nothing changed: copying its job (a
+/// section per token) then finding it in egui's cache took 40 ms a frame for
+/// 2 MB.
+fn kept_layout(ui: &Ui, id: Id, key: u64, font: &FontId, job: impl FnOnce() -> LayoutJob) -> Arc<Galley> {
+    let witness = witness(ui, font);
+    if let Some(galley) = kept(ui, id, key, &witness) {
+        return galley;
+    }
+    let galley = layout(ui, job());
+    ui.ctx().memory_mut(|m| m.caches.cache::<KeptGalleys>().0.insert(id, Kept { key, witness, galley: galley.clone(), pieces: Vec::new(), used: true }));
+    galley
+}
+
+/// Lines of a piece of a read-only text (see [`pieces`]).
+const PIECE_LINES: usize = 2000;
+
+/// `text` cut at line ends, at each document of the text view (`/* 2 */`) and
+/// after `PIECE_LINES` lines. Joined with `\n`, the pieces make the text.
+fn pieces(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut at, mut lines) = (0, 0, 0);
+    loop {
+        let end = text[at..].find('\n').map(|n| at + n);
+        if at > start && (lines >= PIECE_LINES || text[at..].starts_with("/* ")) {
+            out.push(&text[start..at - 1]);
+            (start, lines) = (at, 0);
+        }
+        lines += 1;
+        match end {
+            Some(end) => at = end + 1,
+            None => break,
+        }
+    }
+    out.push(&text[start..]);
+    out
+}
+
+/// A read-only text laid out by [`pieces`], each kept while it stays the same,
+/// then put together for the TextEdit ([`Galley::concat`], which shares their
+/// rows). A new part of the text view or a fold lays out its pieces only: the
+/// whole text took 150 ms a megabyte.
+fn pieces_layout(ui: &Ui, id: Id, text: &str, theme: &Theme, font: &FontId) -> Arc<Galley> {
+    let key = egui::epaint::util::hash((text, theme.name, font));
+    let witness = witness(ui, font);
+    if let Some(galley) = kept(ui, id, key, &witness) {
+        return galley;
+    }
+    let old: std::collections::HashMap<u64, Arc<Galley>> = ui.ctx().memory_mut(|m| {
+        let kept = m.caches.cache::<KeptGalleys>().0.get(&id).filter(|k| Arc::ptr_eq(&k.witness, &witness));
+        kept.map(|k| k.pieces.iter().cloned().collect()).unwrap_or_default()
+    });
+    let mut kept_pieces = Vec::new();
+    for piece in pieces(text) {
+        let hash = egui::epaint::util::hash((piece, theme.name, font));
+        let galley = old.get(&hash).cloned().unwrap_or_else(|| layout(ui, crate::bidi::reorder_sections(highlight(piece, theme, font.clone())).0));
+        kept_pieces.push((hash, galley));
+    }
+    let galley = match kept_pieces.as_slice() {
+        [(_, one)] => one.clone(),
+        many => {
+            // Colours come with the rows. A job without sections would make an empty galley, not painted.
+            let mut job = LayoutJob::default();
+            job.append(text, 0.0, TextFormat::simple(font.clone(), theme.text));
+            let job = Arc::new(job);
+            let galleys: Vec<Arc<Galley>> = many.iter().map(|(_, g)| g.clone()).collect();
+            Arc::new(Galley::concat(job, &galleys, ui.ctx().pixels_per_point()))
+        }
+    };
+    let kept = Kept { key, witness, galley: galley.clone(), pieces: kept_pieces, used: true };
+    ui.ctx().memory_mut(|m| m.caches.cache::<KeptGalleys>().0.insert(id, kept));
+    galley
+}
+
 /// Read-only text draws right-to-left words in visual order: a selection there
 /// covers other characters than those at its offsets in the text. Takes Ctrl+C
 /// (and Ctrl+X) from the TextEdit when the text has such words, and returns where
@@ -976,8 +1090,8 @@ pub fn code_editor(ui: &mut Ui, id: Id, text: &mut String, theme: &Theme, opts: 
     let font = opts.font.clone();
     let read_only = opts.read_only;
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
-        let job = editor_job(ui.ctx(), buf.as_str(), &theme_copy, &font, read_only);
-        layout(ui, job)
+        let key = egui::epaint::util::hash((buf.as_str(), theme_copy.name, &font, read_only));
+        kept_layout(ui, edit_id, key, &font, || editor_job(ui.ctx(), buf.as_str(), &theme_copy, &font, read_only))
     };
 
     let row_height = ui.fonts_mut(|f| f.row_height(&opts.font));
@@ -1304,9 +1418,9 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
     let mut view: &str = text;
     let theme_copy = *theme;
     let copy = take_reordered_copy(ui, id.with("t"), text, theme, &font);
+    let text_id = id.with("t");
     let mut layouter = move |ui: &Ui, buf: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
-        let job = read_only_highlight_cached(ui.ctx(), buf.as_str(), &theme_copy, &font);
-        layout(ui, job)
+        pieces_layout(ui, text_id, buf.as_str(), &theme_copy, &font)
     };
     let highlights = ui.painter().add(egui::Shape::Noop);
     let output = egui::TextEdit::multiline(&mut view)
@@ -1379,11 +1493,12 @@ fn fold_gutter(ui: &Ui, rect: egui::Rect, resp: &egui::Response, out: &egui::tex
 }
 
 /// [`code_view`] with a fold gutter: `marks[i]` is `Some(folded)` when line
-/// `i` opens a block. Only the visible markers are painted.
-pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>) -> Option<FoldClick> {
+/// `i` opens a block. Only the visible markers are painted. Also tells whether
+/// the end of the text is in view.
+pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>], theme: &Theme, font: FontId, find: Option<&TextMatches<'_>>) -> (Option<FoldClick>, bool) {
     let mut click = None;
     let row_height = ui.fonts_mut(|f| f.row_height(&font));
-    egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
+    let scroll = egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let size = egui::vec2(row_height, row_height * marks.len().max(1) as f32);
@@ -1392,7 +1507,8 @@ pub fn folding_code_view(ui: &mut Ui, id: Id, text: &str, marks: &[Option<bool>]
             click = fold_gutter(ui, rect, &resp, &out, marks, theme, &font);
         });
     });
-    click
+    let at_end = scroll.state.offset.y + scroll.inner_rect.height() >= scroll.content_size.y - row_height;
+    (click, at_end)
 }
 
 #[cfg(test)]
@@ -1534,6 +1650,60 @@ mod tests {
         assert_eq!(word_stop(text, text.find('2').unwrap(), false), text.find('$').unwrap());
         // Elsewhere, egui's stops.
         assert_eq!(stops("{ a: 1 }", true), [1, 3, 4, 6, 7, 8]);
+    }
+
+    #[test]
+    fn read_only_texts_are_laid_out_by_pieces_kept_while_they_stay() {
+        let text: String = (0..5000).map(|i| format!("\"line {i}\",\n")).collect();
+        let cut = pieces(&text);
+        assert_eq!(cut.join("\n"), text);
+        assert_eq!(cut.iter().map(|p| p.lines().count()).collect::<Vec<_>>(), [2000, 2000, 1000]);
+        assert_eq!(pieces("a\n/* 2 */\nb\n"), ["a", "/* 2 */\nb\n"], "a document of the text view");
+        assert_eq!(pieces("a"), ["a"]);
+
+        let ctx = egui::Context::default();
+        let (theme, font) = (&crate::theme::THEMES[0], FontId::monospace(12.0));
+        let frame = |text: &str| {
+            let mut galley = None;
+            let mut out = ctx.run_ui(Default::default(), |ui| galley = Some(pieces_layout(ui, Id::new("t"), text, theme, &font)));
+            out.textures_delta.clear();
+            galley.unwrap()
+        };
+        let a = frame(&text);
+        let more = format!("{text}\"more\"\n");
+        let b = frame(&more);
+        assert!(Arc::ptr_eq(&a.rows[0].row, &b.rows[0].row), "the first pieces are kept");
+        assert!(Arc::ptr_eq(&a.rows[3999].row, &b.rows[3999].row));
+        // One glyph per character, and the line breaks between the pieces.
+        let chars: usize = b.rows.iter().map(|r| r.row.glyphs.len() + usize::from(r.ends_with_newline)).sum();
+        assert_eq!(chars, more.chars().count());
+        assert_eq!(b.job.text, more);
+    }
+
+    #[test]
+    fn galleys_are_kept_until_the_text_or_the_fonts_change() {
+        let ctx = egui::Context::default();
+        let (theme, font) = (&crate::theme::THEMES[0], FontId::monospace(12.0));
+        let frame = |text: &str| {
+            let mut galley = None;
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let key = egui::epaint::util::hash(text);
+                galley = Some(kept_layout(ui, Id::new("t"), key, &font, || highlight(text, theme, font.clone())));
+            });
+            out.textures_delta.clear();
+            galley.unwrap()
+        };
+        let a = frame("{ a: 1 }");
+        assert!(Arc::ptr_eq(&a, &frame("{ a: 1 }")));
+        let b = frame("{ a: 2 }");
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert_eq!(b.job.text, "{ a: 2 }");
+        // Other fonts: egui laid everything out again, the kept galley is stale.
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().reverse();
+        ctx.set_fonts(fonts);
+        frame("{ a: 2 }");
+        assert!(!Arc::ptr_eq(&b, &frame("{ a: 2 }")));
     }
 
     #[test]

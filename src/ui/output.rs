@@ -30,6 +30,11 @@ pub struct OutputPane {
     /// Derived views, rebuilt only when the page, the expansion state, the
     /// format options or the theme change (not every frame).
     text_cache: Option<(FormatOptions, String)>,
+    /// The documents of the text view formatted so far, where each one ends,
+    /// and how much of it is shown (`text_cache`, a note on the rest after it).
+    text_full: String,
+    text_ends: Vec<usize>,
+    text_shown: usize,
     /// Folded blocks of the text view (first line of each, in `text_cache`).
     folded: HashSet<usize>,
     fold_cache: Option<FoldedText>,
@@ -269,6 +274,9 @@ impl OutputPane {
             expanded,
             selected: Selection::default(),
             text_cache: None,
+            text_full: String::new(),
+            text_ends: Vec::new(),
+            text_shown: 0,
             folded: HashSet::new(),
             fold_cache: None,
             rows_cache: None,
@@ -1628,33 +1636,55 @@ fn cell_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: &[Str
 
 // ------------------------------------------------------------------ text
 
-const TEXT_VIEW_LIMIT: usize = 2 << 20;
+/// The text view shows the documents of the page by parts of these many lines
+/// or bytes (cut at a line end, documents too), the next one once scrolled to
+/// the end: laying text out takes about 7 µs a line.
+const TEXT_VIEW_LINES: usize = 4000;
+const TEXT_VIEW_BYTES: usize = 256 << 10;
+
+/// Shows the next part of the documents in the text view, formatting those it
+/// needs, with a note on the rest at its end.
+fn extend_text(pane: &mut OutputPane, fmt: FormatOptions) {
+    let target = pane.text_shown + TEXT_VIEW_BYTES;
+    let mut full = std::mem::take(&mut pane.text_full);
+    let mut ends = std::mem::take(&mut pane.text_ends);
+    let docs = pane.docs();
+    while full.len() < target && ends.len() < docs.len() {
+        let i = ends.len();
+        if docs.len() > 1 {
+            full.push_str(&format!("/* {} */\n", pane.skip as usize + i + 1));
+        }
+        full.push_str(&bsonfmt::to_shell_json(&docs[i], 0, fmt));
+        full.push_str("\n\n");
+        ends.push(full.len());
+    }
+    let (mut shown, mut lines) = (pane.text_shown, 0);
+    while shown < full.len() && shown < target && lines < TEXT_VIEW_LINES {
+        shown = full[shown..].find('\n').map_or(full.len(), |n| shown + n + 1);
+        lines += 1;
+    }
+    let left = docs.len() - ends.iter().filter(|&&end| end <= shown).count();
+    let mut text = full[..shown].to_string();
+    if left > 0 {
+        text.push_str(&format!("/* {left} more document(s): scroll down to show them */\n"));
+    }
+    (pane.text_full, pane.text_ends, pane.text_shown) = (full, ends, shown);
+    pane.text_cache = Some((fmt, text));
+}
+
+/// More of the text view to show.
+fn text_has_more(pane: &OutputPane) -> bool {
+    pane.text_shown < pane.text_full.len() || pane.text_ends.len() < pane.docs().len()
+}
 
 fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
     let fmt = cx.fmt;
     let needs = !matches!(&pane.text_cache, Some((f, _)) if *f == fmt);
     if needs {
-        let mut s = String::new();
-        let docs = pane.docs();
-        for (i, d) in docs.iter().enumerate() {
-            // Laying out megabytes of text freezes the UI: stop at TEXT_VIEW_LIMIT.
-            if s.len() > TEXT_VIEW_LIMIT {
-                s.push_str(&format!(
-                    "/* {} more document(s) not shown: the text view is limited to {} MB. Use the tree view or a smaller page size. */\n",
-                    docs.len() - i,
-                    TEXT_VIEW_LIMIT >> 20
-                ));
-                break;
-            }
-            if docs.len() > 1 {
-                s.push_str(&format!("/* {} */\n", pane.skip as usize + i + 1));
-            }
-            s.push_str(&bsonfmt::to_shell_json(d, 0, fmt));
-            s.push_str("\n\n");
-        }
-        pane.text_cache = Some((fmt, s));
+        (pane.text_full, pane.text_ends, pane.text_shown) = (String::new(), Vec::new(), 0);
         pane.folded.clear();
         pane.fold_cache = None;
+        extend_text(pane, fmt);
     }
     let Some((_, text)) = &pane.text_cache else { return };
     let view = pane.fold_cache.get_or_insert_with(|| fold_text(text, &pane.folded));
@@ -1662,7 +1692,7 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         pane.find.scroll = 3;
     }
     let find = if pane.find.open { text_matches(&pane.find) } else { None };
-    let click = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size), find.as_ref());
+    let (click, at_end) = crate::ui::editor::folding_code_view(ui, Id::new(("out-json", cx.tab, cx.index)), &view.text, &view.marks, cx.theme, FontId::monospace(cx.font_size), find.as_ref());
     match click {
         Some(FoldClick::Toggle(row)) => {
             let line = view.lines[row];
@@ -1672,10 +1702,17 @@ fn text_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
         }
         Some(FoldClick::CollapseAll) => pane.folded = view.collapse_all(),
         Some(FoldClick::ExpandAll) => pane.folded.clear(),
-        None => return,
+        None => {}
     }
-    pane.fold_cache = None;
-    pane.find.stale = true;
+    // The next part once the end is in view. The lines shown stay: so do the folds.
+    let more = at_end && text_has_more(pane);
+    if more {
+        extend_text(pane, fmt);
+    }
+    if click.is_some() || more {
+        pane.fold_cache = None;
+        pane.find.stale = true;
+    }
 }
 
 #[cfg(test)]
@@ -1956,23 +1993,28 @@ mod tests {
     }
 
     #[test]
-    fn text_view_is_capped() {
-        let big = "x".repeat(600 * 1024);
-        let docs: Vec<Bson> = (0..10).map(|i| Bson::Document(doc! { "i": i, "s": big.clone() })).collect();
+    fn text_view_comes_by_parts() {
+        let lines: Vec<Bson> = (0..20_000).map(|i| Bson::String(format!("line {i}"))).collect();
+        let docs: Vec<Bson> = (0..3).map(|i| Bson::Document(doc! { "i": i, "lines": lines.clone() })).collect();
         let mut p = pane(docs, None);
-        p.mode = ViewMode::Text;
-        let ctx = egui::Context::default();
-        let theme = crate::theme::THEMES[0];
-        let mut actions = Vec::new();
-        let mut out = ctx.run_ui(Default::default(), |ui| {
-            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: &theme, fmt: FormatOptions::default(), font_size: 13.0, actions: &mut actions };
-            text_view(ui, &mut p, &mut cx);
-        });
-        // No renderer here: the font atlas upload is discarded on purpose.
-        out.textures_delta.clear();
-        let (_, text) = p.text_cache.as_ref().unwrap();
-        assert!(text.len() < TEXT_VIEW_LIMIT + 700 * 1024);
-        assert!(text.contains("more document(s) not shown"));
+        let text = |p: &OutputPane| p.text_cache.as_ref().unwrap().1.clone();
+        let mut parts = Vec::new();
+        p.text_cache = Some((FormatOptions::default(), String::new()));
+        extend_text(&mut p, FormatOptions::default());
+        while text_has_more(&p) {
+            parts.push(text(&p));
+            extend_text(&mut p, FormatOptions::default());
+        }
+        // A part at a time, cut at a line end, inside the documents too.
+        assert!(parts.len() > 3, "{}", parts.len());
+        assert_eq!(parts[0].lines().count(), TEXT_VIEW_LINES + 1, "and the note");
+        assert!(parts[0].ends_with("/* 3 more document(s): scroll down to show them */\n"));
+        for pair in parts.windows(2) {
+            let shown = pair[0].rsplit_once("/* ").unwrap().0;
+            assert!(pair[1].starts_with(shown), "the lines shown stay");
+        }
+        let all = text(&p);
+        assert!(all.contains("/* 3 */") && all.contains("\"line 19999\"") && !all.contains("more document"), "all shown");
     }
 
     #[test]

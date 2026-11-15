@@ -1904,6 +1904,28 @@ fn pane_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, OutputPane>
 }
 
 #[test]
+fn text_view_shows_the_next_documents_at_its_end() {
+    // 2.4 MB: shown by parts.
+    let big = "x".repeat(6000);
+    let docs: Vec<Bson> = (0..400).map(|i| Bson::Document(doc! { "_id": i, "s": big.clone() })).collect();
+    let mut h = pane_harness(docs, ViewMode::Text);
+    let text = |h: &Harness<'_, OutputPane>| h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().unwrap_or_default();
+    assert!(text(&h).contains("more document(s): scroll down to show them"));
+    assert!(!text(&h).contains("/* 400 */"));
+    // Scrolled down to the end with the wheel, part after part.
+    h.hover_at(egui::pos2(500.0, 200.0));
+    let mut parts = 1;
+    while !text(&h).contains("/* 400 */") && parts < 40 {
+        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Page, delta: egui::vec2(0.0, -1000.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        parts += 1;
+    }
+    assert!(text(&h).contains("/* 400 */"), "loaded at the end");
+    assert!(parts > 2, "by parts: {parts}");
+    assert!(!text(&h).contains("more document(s)"));
+}
+
+#[test]
 fn copy_value_menu_shows_its_shortcut() {
     let mut h = pane_harness(vec![Bson::Document(doc! { "_id": 1, "a": "x", "b": "y" })], ViewMode::Tree);
     let menu_has = |h: &Harness<'_, OutputPane>, item: &str| h.query_all_by_label_contains(item).any(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Ctrl+C")));

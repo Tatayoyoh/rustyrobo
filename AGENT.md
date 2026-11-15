@@ -113,6 +113,12 @@ Key design rules:
   Alt+arrows. Use `ui::consume_plain_key` for keys without modifiers.
 - The first frame of a dialog is an invisible sizing pass (`ui.is_sizing_pass()`), run again at once in the
   same frame: a one-off action (scroll, focus) done in it uses a wrong layout and is not seen.
+- Editors keep their galley from frame to frame (`editor::kept_layout`): building the job of a big text and
+  finding it in egui's cache took 40 ms a frame for 2 MB. A small witness galley tells when egui made new
+  fonts (full atlas, scale, other fonts) and the kept one is stale. Read-only texts are laid out by pieces
+  kept on their own and joined with `Galley::concat` (`pieces_layout`); its job needs a section, or egui
+  takes the galley for empty and does not paint it. egui lays text out at about 7 µs a line: the text view
+  shows a page by parts of 4000 lines.
 - A `ScrollArea` takes the scroll requests of both axes: `scroll_to_rect` in a table cell never reaches the horizontal scroll
   area around the table. Ask once the table is finished.
 - egui's "strong" text colour is `widgets.active.fg_stroke`: keep it equal to the theme text colour.
