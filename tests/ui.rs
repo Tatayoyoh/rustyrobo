@@ -1546,6 +1546,11 @@ fn the_explorer_goes_with_the_arrows_and_enter_opens_a_collection() {
     assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop")).with("collections")));
     press(&mut h, Key::ArrowLeft);
     assert!(!has_label(&h, "orders"), "closed");
+    // Space opens it again, and closes it.
+    press(&mut h, Key::Space);
+    assert!(has_label(&h, "orders"), "open");
+    press(&mut h, Key::Space);
+    assert!(!has_label(&h, "orders"), "closed again");
     press(&mut h, Key::ArrowUp);
     assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop"))));
 }

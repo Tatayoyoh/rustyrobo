@@ -1396,9 +1396,9 @@ impl App {
         if pressed(cmd, Key::J) {
             self.actions.push(Action::ShowFavorites);
         }
-        // The explorer, when it was the last clicked: arrows and Enter.
+        // The explorer, when it was the last clicked: arrows, Space and Enter.
         if self.zone == Some(Zone::Explorer) && !ctx.text_edit_focused() {
-            for k in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Enter] {
+            for k in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Space, Key::Enter] {
                 if ctx.input_mut(|i| crate::ui::consume_plain_key(i, k)) {
                     crate::ui::explorer::key(ctx, k);
                 }

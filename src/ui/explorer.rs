@@ -33,7 +33,8 @@ const SCROLL: &str = "explorer-scroll";
 
 /// Keys on the explorer: Up and Down go to the row above and below, Right
 /// opens a node then goes to its first child, Left closes it or goes to its
-/// parent, Enter does what a double-click does (opens a collection).
+/// parent, Space opens or closes it, Enter does what a double-click does
+/// (opens a collection).
 pub fn key(ctx: &egui::Context, key: egui::Key) {
     use egui::Key;
     let Some(rows) = ctx.data(|d| d.get_temp::<Rows>(Id::new(SHOWN))).filter(|r| !r.list.is_empty()) else { return };
@@ -69,6 +70,11 @@ pub fn key(ctx: &egui::Context, key: egui::Key) {
             } else if let Some(parent) = list[..i].iter().rposition(|r| r.1 < list[i].1) {
                 select(parent);
             }
+        }
+        (Key::Space, Some(i)) if list[i].2 => {
+            let mut state = CollapsingState::load_with_default_open(ctx, list[i].0, false);
+            state.set_open(!state.is_open());
+            state.store(ctx);
         }
         (Key::Enter, Some(i)) => ctx.data_mut(|d| {
             d.insert_temp(Id::new(ACTIVATE), list[i].0);

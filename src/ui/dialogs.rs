@@ -1456,6 +1456,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("PageUp / PageDown", "A page up / down in the results"),
                         ("Home / End", "First / last row of the results"),
                         ("Right / Left", "Open / close a node of the tree, next / previous column of the table"),
+                        ("Space", "Open or close a node of the tree or the explorer"),
                         ("Enter", "Edit the selected value, or its document; open the selected collection"),
                         ("Ctrl+M", "Maximize the document dialog"),
                         ("Ctrl+S / Ctrl+E", "Save the document / edit the viewed one"),

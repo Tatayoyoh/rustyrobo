@@ -19,6 +19,7 @@
 - Document modal: maximize (button, double-click on its title, Ctrl+M) and close button
 - Document modal: Alt+F4 closes it, not the app
 - Explorer: Up/Down go through the rows, Right/Left open and close them, Enter opens a collection
+- Explorer and tree view: Space opens and closes a node
 - Connecting (connection manager, welcome page) puts the keyboard in the explorer, on the server opened
 - Query editor: a completed field name is followed by `:`, Ctrl+arrows stop at `:`, Ctrl+Shift+Left from a value selects its key
 

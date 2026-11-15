@@ -1195,10 +1195,11 @@ pub fn open_selection(pane: &OutputPane, server: u64, tab: u64, mode: DocMode, f
 /// Keys on the results (see `query::current_pane`): Up and Down go to the row
 /// above and below, PageUp and PageDown a page away, Home and End to the first
 /// and last rows. In the tree, Right opens a node, then goes to its first
-/// child, Left closes it, or goes to its parent; in the table, Right and Left
-/// go to the next and previous column. Enter edits the value in place, or
-/// opens the document: an object or an array is edited with it, an `_id` only
-/// viewed. The text view scrolls.
+/// child, Left closes it, or goes to its parent, Space opens or closes it; in
+/// the table, Right and Left go to the next and previous column. Enter edits
+/// the value in place, or opens the
+/// document: an object or an array is edited with it, an `_id` only viewed.
+/// The text view scrolls.
 pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fmt: FormatOptions) -> Option<Action> {
     use crate::ui::editor::Scroll;
     use egui::Key;
@@ -1249,6 +1250,12 @@ pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fm
             } else if rows.get(i + 1).is_some_and(|r| r.0.starts_with(&format!("{}/", rows[i].0))) {
                 target = Some(i + 1);
             }
+        }
+        (Key::Space, Some(i)) if rows[i].3 && pane.mode == ViewMode::Tree => {
+            if !pane.expanded.remove(&rows[i].0) {
+                pane.expanded.insert(rows[i].0.clone());
+            }
+            pane.rows_cache = None;
         }
         (Key::ArrowLeft, Some(i)) => {
             if rows[i].3 && pane.expanded.remove(&rows[i].0) {
@@ -1822,6 +1829,16 @@ mod tests {
         assert!(!p.expanded.contains("0/a"));
         press(&mut p, Key::ArrowLeft);
         assert_eq!(at(&p).as_deref(), Some("0"));
+        // Space closes and opens the node, a value has none.
+        press(&mut p, Key::Space);
+        assert!(!p.expanded.contains("0"));
+        press(&mut p, Key::Space);
+        assert!(p.expanded.contains("0"));
+        assert_eq!(at(&p).as_deref(), Some("0"), "the row stays");
+        press(&mut p, Key::ArrowDown);
+        press(&mut p, Key::Space);
+        assert_eq!(p.expanded, HashSet::from(["0".to_string()]));
+        press(&mut p, Key::ArrowUp);
         press(&mut p, Key::ArrowUp);
         assert_eq!(at(&p).as_deref(), Some("0"), "the first row stays");
         // A page away (here 2 rows), the last row, the first.
