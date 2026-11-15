@@ -76,6 +76,26 @@ impl QuerySpec {
         }
         cmd
     }
+
+    /// Counts the documents of the whole `find`, within its own skip and limit.
+    /// Stopped after a while: it may go through the whole collection.
+    pub fn count_command(&self) -> Document {
+        let mut cmd = bson::doc! { "count": &self.coll, "query": self.filter.clone() };
+        if self.skip > 0 {
+            cmd.insert("skip", self.skip as i64);
+        }
+        if self.limit != 0 {
+            cmd.insert("limit", self.limit.abs());
+        }
+        if let Some(h) = &self.hint {
+            cmd.insert("hint", h.clone());
+        }
+        if let Some(c) = &self.collation {
+            cmd.insert("collation", c.clone());
+        }
+        cmd.insert("maxTimeMS", 10_000);
+        cmd
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -738,6 +758,12 @@ mod tests {
         assert_eq!(cmd.get_i64("limit").unwrap(), 50);
         assert!(cmd.get_bool("singleBatch").unwrap());
         assert_eq!(cmd.keys().next().unwrap(), "find");
+        // Counted within the skip and the limit of the script, not of the page.
+        let count = q.count_command();
+        assert_eq!(count.keys().next().unwrap(), "count");
+        assert_eq!(count.get_document("query").unwrap(), &bson::doc! { "a": 1 });
+        assert_eq!((count.get_i64("skip").unwrap(), count.get_i64("limit").unwrap()), (5, 10));
+        assert_eq!(count.get_str("hint").unwrap(), "a_1");
         // A string filter means { _id: … }.
         assert_eq!(js("JSON.stringify(db.c.find('x')._filter)").unwrap(), r#"{"_id":"x"}"#);
         // Modifying an executed query is rejected.

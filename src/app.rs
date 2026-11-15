@@ -159,6 +159,8 @@ pub enum Action {
     CloseTab(u64),
     DuplicateTab(u64),
     Page { tab: u64, out: usize, skip: u64, limit: u64 },
+    /// Counts the documents of the `find` of a result pane, for its header.
+    Count { tab: u64, out: usize },
     Command { server: u64, db: String, cmd: Document, label: String, refresh: Refresh },
     Commands { server: u64, db: String, cmds: Vec<Document>, label: String, refresh: Refresh },
     Dialog(Dialog),
@@ -187,6 +189,8 @@ pub enum AppEvent {
     Fields(u64, String, String, Vec<String>),
     Shell(u64, ShellReply),
     Page(u64, usize, u64, Result<Vec<Bson>, String>),
+    /// The count of a `find`, for the panes that still show it.
+    Count { tab: u64, out: usize, spec: Box<crate::shell::QuerySpec>, n: Option<u64> },
     CommandDone { server: u64, label: String, result: Result<Document, String>, refresh: Refresh },
     /// Documents exported, imported, or read before an import, so far.
     TransferProgress(u64, Progress),
@@ -623,6 +627,7 @@ impl App {
                 let batch = self.settings.batch_size as u64;
                 let auto_expand = self.settings.auto_expand;
                 let mut errors = Vec::new();
+                let mut counted = Vec::new();
                 if let Some(tab) = self.tab_mut(tab_id) {
                     if tab.pending != Some(reply.request) {
                         return;
@@ -650,6 +655,7 @@ impl App {
                         })
                         .collect();
                     tab.result_tab = 0;
+                    counted = (0..tab.outputs.len()).filter(|&out| tab.outputs[out].source().is_some()).collect();
                     if tab.outputs.is_empty() {
                         tab.notice = Some("Script executed successfully, but there are no results to show.".into());
                     } else {
@@ -659,6 +665,7 @@ impl App {
                 for e in errors {
                     self.log(LogLevel::Error, e);
                 }
+                self.actions.extend(counted.into_iter().map(|out| Action::Count { tab: tab_id, out }));
             }
             AppEvent::Page(tab_id, out, skip, res) => {
                 let mut err = None;
@@ -671,6 +678,13 @@ impl App {
                 }
                 if let Some(e) = err {
                     self.log(LogLevel::Error, e);
+                }
+            }
+            AppEvent::Count { tab, out, spec, n } => {
+                if let Some(pane) = self.tab_mut(tab).and_then(|t| t.outputs.get_mut(out))
+                    && matches!(&pane.output.kind, OutputKind::Docs { spec: Some(s), .. } if *s == *spec)
+                {
+                    pane.total = n;
                 }
             }
             AppEvent::CommandDone { server, label, result, refresh } => {
@@ -762,7 +776,8 @@ impl App {
                     self.actions.push(Action::Execute(tab));
                 }
                 for (out, skip, limit) in pages {
-                    self.actions.push(Action::Page { tab, out, skip, limit });
+                    // Counted again: an insert changes the count.
+                    self.actions.extend([Action::Page { tab, out, skip, limit }, Action::Count { tab, out }]);
                 }
             }
         }
@@ -1006,6 +1021,18 @@ impl App {
                 self.spawn(async move {
                     let res = crate::shell::fetch_page(&conn, &spec, skip, limit).await.map_err(|e| mongo::error_message(&e));
                     AppEvent::Page(tab, out, skip, res)
+                });
+            }
+            Action::Count { tab, out } => {
+                let Some(t) = self.tabs.iter().find(|t| t.id == tab) else { return };
+                let Some(OutputKind::Docs { spec: Some(spec), .. }) = t.outputs.get(out).map(|p| &p.output.kind) else { return };
+                let spec = Box::new(spec.clone());
+                let Some(conn) = self.server(t.server).and_then(|s| s.conn().cloned()) else { return };
+                self.spawn(async move {
+                    // Not counted (too long, not allowed): no count shown.
+                    let reply = conn.run_command(&spec.db, spec.count_command(), None).await.ok();
+                    let n = reply.and_then(|r| r.get("n").and_then(mongo::bson_as_i64)).map(|n| n.max(0) as u64);
+                    AppEvent::Count { tab, out, spec, n }
                 });
             }
             Action::Command { server, db, cmd, label, refresh } => {

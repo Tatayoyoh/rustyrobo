@@ -2426,6 +2426,14 @@ fn live_connect_query_and_views() {
     assert!(has_label(&h, "people"), "result header shows the collection");
     assert!(has_label(&h, "(1) ObjectId("), "tree view root rows");
     assert!(has_label(&h, "Ada"), "first document auto-expanded");
+    // The documents of the query, counted after the first page.
+    wait_until(&mut h, "count", Duration::from_secs(15), |h| has_label(h, "2 documents"));
+    h.state_mut().tabs[0].script = "db.people.find({ name: 'Ada' })".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "one document", Duration::from_secs(15), |h| has_label(h, "1 document"));
+    h.state_mut().tabs[0].script = "db.people.find({ age: { $gt: 30 } }).sort({ age: 1 })".into();
+    h.key_press(Key::F5);
+    wait_until(&mut h, "query results", Duration::from_secs(15), |h| h.state().tabs[0].outputs.first().is_some_and(|o| o.docs().len() == 2));
 
     // Table and text views (F3 / F4).
     h.key_press(Key::F3);

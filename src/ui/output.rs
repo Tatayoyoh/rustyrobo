@@ -27,6 +27,8 @@ pub struct OutputPane {
     pub page_size: u64,
     pub expanded: HashSet<String>,
     pub selected: Selection,
+    /// Documents of the whole `find`, once counted.
+    pub total: Option<u64>,
     /// Derived views, rebuilt only when the page, the expansion state, the
     /// format options or the theme change (not every frame).
     text_cache: Option<(FormatOptions, String)>,
@@ -277,6 +279,7 @@ impl OutputPane {
             page_size,
             expanded,
             selected: Selection::default(),
+            total: None,
             text_cache: None,
             text_full: String::new(),
             text_ends: Vec::new(),
@@ -704,6 +707,9 @@ fn header(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                 let color = if matches!(pane.output.kind, OutputKind::Error(_)) { th.error } else { th.text };
                 ui.label(RichText::new(format!("{icon} {title}")).strong().color(color))
                     .on_hover_text(&pane.output.statement);
+                if let Some(n) = pane.total {
+                    ui.label(RichText::new(format!("{n} document{}", if n == 1 { "" } else { "s" })).color(th.text_weak));
+                }
                 ui.label(RichText::new(format!("{:.3} sec.", pane.output.elapsed.as_secs_f64())).color(th.text_weak));
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
