@@ -1703,6 +1703,26 @@ fn preferences_show_fonts_at_once_and_save_them_on_save() {
 }
 
 #[test]
+fn preferences_choose_the_default_view_mode() {
+    let env = env("view-mode", &AppSettings::default());
+    let mut h = app_harness();
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    assert!(!has_label(&h, "Default View Mode"), "in the Preferences, not in the menu");
+    h.get_by_label("Preferences…").click();
+    h.run_steps(5);
+    assert!(has_label(&h, "Default view mode:"));
+    combo_box(&h, 3).click();
+    h.run_steps(3);
+    h.get_by_label("Table").click();
+    h.run_steps(3);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.view_mode, ViewMode::Table);
+    assert_eq!(saved_settings(&env).view_mode, ViewMode::Table);
+}
+
+#[test]
 fn preferences_show_theme_and_font_size_at_once_and_cancel_restores_them() {
     let env = env("appearance", &AppSettings::default());
     let mut h = app_harness();

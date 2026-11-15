@@ -17,7 +17,7 @@ use std::sync::Arc;
 use egui::{Align, Color32, Id, Layout, RichText, Ui};
 
 use crate::app::{Action, App, LogLevel, Zone};
-use crate::settings::{AutocompletionMode, Orientation, TimeZoneMode, UuidEncoding, ViewMode};
+use crate::settings::{AutocompletionMode, Orientation, TimeZoneMode, UuidEncoding};
 use crate::transfer::Progress;
 use crate::ui::dialogs::Dialog;
 
@@ -192,15 +192,6 @@ fn menus(app: &mut App, ui: &mut Ui) {
             }
         });
         ui.menu_button("Options", |ui| {
-            ui.menu_button("Default View Mode", |ui| {
-                let s = &mut app.settings;
-                let mut changed = radio_item(ui, &mut s.view_mode, ViewMode::Tree, "Tree Mode  (F2)");
-                changed |= radio_item(ui, &mut s.view_mode, ViewMode::Table, "Table Mode  (F3)");
-                changed |= radio_item(ui, &mut s.view_mode, ViewMode::Text, "Text Mode  (F4)");
-                if changed {
-                    app.actions.push(Action::SaveSettings);
-                }
-            });
             ui.menu_button("Display Dates In…", |ui| {
                 let s = &mut app.settings;
                 if radio_item(ui, &mut s.time_zone, TimeZoneMode::Utc, "UTC")

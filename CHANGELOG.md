@@ -25,6 +25,7 @@
 - Results: the number of documents of the query, next to the name of the collection
 - Connecting (connection manager, welcome page) puts the keyboard in the explorer, on the server opened
 - Query editor: a completed field name is followed by `:`, Ctrl+arrows stop at `:`, Ctrl+Shift+Left from a value selects its key
+- Change default view into Preferences > Default view mode
 
 ### Changed
 

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::app::{Action, App, Quit, Refresh};
 use crate::bsonfmt;
 use crate::mongo::ConnectSecrets;
-use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, ExportDefaults, SshAuthMethod};
+use crate::settings::{AppSettings, AuthMechanism, ConnectionSettings, ExportDefaults, SshAuthMethod, ViewMode};
 use crate::shell::{QuerySpec, parse_shell_value};
 use crate::dump::{DumpEntry, DumpOptions, RestoreOptions};
 use crate::transfer::{Delimiter, ExportOptions, Format, ImportOptions, Progress};
@@ -117,16 +117,21 @@ pub struct Preferences {
     font_size: f32,
     fonts: crate::fonts::FontChoice,
     theme: String,
+    view_mode: ViewMode,
 }
+
+/// Views of the results, as the Preferences dialog names them.
+const VIEW_MODES: [(ViewMode, &str); 3] = [(ViewMode::Tree, "Tree"), (ViewMode::Table, "Table"), (ViewMode::Text, "Text")];
 
 impl Preferences {
     fn of(settings: &AppSettings) -> Self {
-        Self { batch_size: settings.batch_size, font_size: settings.font_size, fonts: settings.fonts.clone(), theme: settings.theme.clone() }
+        Self { batch_size: settings.batch_size, font_size: settings.font_size, fonts: settings.fonts.clone(), theme: settings.theme.clone(), view_mode: settings.view_mode }
     }
 
     /// Puts these values in the settings and shows what changes, without saving.
     pub fn apply(&self, settings: &mut AppSettings, actions: &mut Vec<Action>) {
         settings.batch_size = self.batch_size;
+        settings.view_mode = self.view_mode;
         if self.font_size != settings.font_size || self.theme != settings.theme {
             settings.font_size = self.font_size;
             settings.theme = self.theme.clone();
@@ -1343,6 +1348,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.label("Theme:");
                     if let Some(name) = combo(ui, "pref-theme", &edit.theme, crate::theme::names()) {
                         edit.theme = name.to_string();
+                    }
+                    ui.end_row();
+                    ui.label("Default view mode:");
+                    let name = VIEW_MODES.iter().find(|m| m.0 == edit.view_mode).map_or("Tree", |m| m.1);
+                    if let Some(picked) = combo(ui, "pref-view-mode", name, VIEW_MODES.iter().map(|m| m.1)) {
+                        edit.view_mode = VIEW_MODES.iter().find(|m| m.1 == picked).map_or(edit.view_mode, |m| m.0);
                     }
                     ui.end_row();
                 });
