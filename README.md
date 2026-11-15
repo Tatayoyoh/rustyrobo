@@ -55,6 +55,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Dump / restore of databases in the formats of mongodump (folder or archive), no tools to install
 - Query history: search the scripts you ran and open them again (Ctrl+H)
 - Edit values in place in the table view (double-click a cell)
+- View or edit the selected document (R, E, or double-click its `_id`), in a modal that maximizes (Ctrl+M); Ctrl+S saves it, Ctrl+E edits the viewed one
 
 ## Install
 

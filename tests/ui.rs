@@ -11,7 +11,7 @@ use bson::{Bson, doc};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use rustyrobo::app::App;
+use rustyrobo::app::{Action, App};
 use rustyrobo::bsonfmt::FormatOptions;
 use rustyrobo::shell::{OutputKind, ShellOutput};
 use rustyrobo::settings::{AppSettings, ConnectionSettings, Credentials, HostPort, ViewMode};
@@ -451,6 +451,7 @@ fn shortcuts_dialog_lists_the_copy_shortcuts() {
     assert!(has_label(&h, "Keyboard Shortcuts"));
     assert!(has_label(&h, "Ctrl+C"));
     assert!(has_label(&h, "Ctrl+Shift+C"));
+    assert!(has_label(&h, "View / edit the selected document"));
 }
 
 fn opened_url(h: &Harness<'_, App>) -> Option<String> {
@@ -813,7 +814,7 @@ fn favorite_scripts_tree_and_drag_and_drop() {
 
 /// Two clicks of the pointer (`Node::click` goes through AccessKit, which
 /// egui does not count as a double-click).
-fn double_click_at(h: &mut Harness<'_, App>, pos: egui::Pos2) {
+fn double_click_at<State>(h: &mut Harness<'_, State>, pos: egui::Pos2) {
     h.hover_at(pos);
     h.run_steps(1);
     // All in one frame: the harness runs a frame per queued event, and a
@@ -1360,6 +1361,35 @@ fn alt_f4_closes_a_document_not_the_app() {
     h.input_mut().events.push(egui::Event::ModifiersChanged(Modifiers::NONE));
     request_close(&mut h);
     assert!(!sent(&h, &egui::ViewportCommand::CancelClose));
+}
+
+/// [`pane_harness`] keeping the actions of the pane.
+fn pane_actions_harness(docs: Vec<Bson>, mode: ViewMode) -> Harness<'static, (OutputPane, Vec<Action>)> {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_ui_state(
+        |ui, (pane, actions): &mut (OutputPane, Vec<Action>)| {
+            let mut cx = PaneCtx { tab: 1, server: 1, index: 0, theme: theme::resolve(theme::DEFAULT_THEME, true), fmt: FormatOptions { tz: Default::default(), uuid: Default::default() }, font_size: 13.0, actions };
+            show_pane(ui, pane, &mut cx);
+        },
+        (OutputPane::new(docs_output(docs), mode, 50, true), Vec::new()),
+    );
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn a_double_click_on_the_id_views_the_document() {
+    for mode in [ViewMode::Tree, ViewMode::Table] {
+        let mut h = pane_actions_harness(vec![Bson::Document(doc! { "_id": "ada-id", "name": "Ada" })], mode);
+        let at = h.get_by_label("ada-id").rect().center();
+        double_click_at(&mut h, at);
+        let viewed = |h: &Harness<'_, (OutputPane, Vec<Action>)>| h.state().1.iter().filter(|a| matches!(a, Action::Dialog(Dialog::Document { mode: DocMode::View, text, .. }) if text.contains("Ada"))).count();
+        assert_eq!(viewed(&h), 1, "{mode:?}");
+        assert!(h.state().0.cell_edit.is_none(), "{mode:?}: an _id is not edited in place");
+        // Not the other values (edited in place, see the live tests).
+        let at = h.get_by_label("Ada").rect().center();
+        double_click_at(&mut h, at);
+        assert_eq!(viewed(&h), 1, "{mode:?}");
+    }
 }
 
 // -------------------------------------------------------- fonts and RTL

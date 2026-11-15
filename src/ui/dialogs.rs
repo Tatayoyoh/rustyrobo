@@ -1401,6 +1401,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Ctrl+Shift+C", "Copy them with their names"),
                         ("Ctrl+D", "Select the next occurrence"),
                         ("Del", "Delete the selected documents"),
+                        ("R / E", "View / edit the selected document"),
                         ("Ctrl+M", "Maximize the document dialog"),
                         ("Ctrl+S / Ctrl+E", "Save the document / edit the viewed one"),
                         ("Alt+1…9", "Connect to the n-th connection"),

@@ -11,7 +11,7 @@ pub use crate::ui::output::OutputPane;
 use crate::app::{Action, App, ServerStatus};
 use crate::settings::{AutocompletionMode, Orientation};
 use crate::shell::ShellHandle;
-use crate::ui::dialogs::Dialog;
+use crate::ui::dialogs::{Dialog, DocMode};
 use crate::ui::editor::{CompletionMode, EditorOptions, code_editor};
 use crate::ui::output::{PaneCtx, show_pane};
 use crate::ui::{ICON_DB, ICON_FAVORITE, ICON_SERVER, ICON_STOP, color_dot, icon, menu, toggle_switch};
@@ -397,6 +397,18 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
             Some(Ok(action)) => actions.push(action),
             Some(Err(why)) => app.log(crate::app::LogLevel::Warn, why),
             None => {}
+        }
+    }
+    // R and E keys: the View and Edit dialogs of the last clicked document.
+    for (key, mode) in [(egui::Key::R, DocMode::View), (egui::Key::E, DocMode::Edit)] {
+        if !modal_open && !ui.ctx().egui_wants_keyboard_input() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+            let tab = &app.tabs[idx];
+            let pane = tab.outputs.iter().filter(|o| !o.selected.is_empty()).max_by_key(|o| o.selected.touched);
+            match pane.map(|p| crate::ui::output::open_selection(p, tab.server, tab.id, mode, fmt)) {
+                Some(Ok(action)) => actions.push(action),
+                Some(Err(why)) => app.log(crate::app::LogLevel::Warn, why),
+                None => {}
+            }
         }
     }
     app.actions.extend(actions);

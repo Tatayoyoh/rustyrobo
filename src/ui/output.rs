@@ -515,6 +515,16 @@ impl Selection {
         self.anchor = Some(path.to_string());
     }
 
+    /// The last clicked row, when it is selected.
+    pub fn current(&self) -> Option<&str> {
+        self.anchor.as_deref().filter(|p| self.contains(p))
+    }
+
+    /// Document of the last clicked row, when it is selected.
+    pub fn current_doc(&self) -> Option<usize> {
+        self.current()?.split('/').next()?.parse().ok()
+    }
+
     /// Right click: keeps the selection when `path` is part of it.
     pub fn context(&mut self, path: &str) {
         if !self.contains(path) {
@@ -919,7 +929,7 @@ fn tree_view(ui: &mut Ui, pane: &mut OutputPane, cx: &mut PaneCtx<'_>) {
                     pane.selected.context(&r.path);
                 }
                 if resp.double_clicked() {
-                    if r.container {
+                    if r.container && r.keys != ["_id"] {
                         toggle = Some(r.path.clone());
                     } else {
                         start_edit = Some((r.doc, r.keys.clone()));
@@ -1117,6 +1127,27 @@ pub fn delete_selection(pane: &OutputPane, server: u64, tab: u64, fmt: FormatOpt
     delete_documents(pane, server, tab, &indices, fmt).map(|(_, a)| a).ok_or("These results cannot be deleted: they do not come from a collection or have no _id")
 }
 
+/// The View or Edit dialog of the document at `doc` of the page. Editing needs
+/// the collection of the results and the `_id` of the document.
+fn document_dialog(pane: &OutputPane, server: u64, tab: u64, doc: usize, mode: DocMode, fmt: FormatOptions) -> Option<Action> {
+    let root = pane.docs().get(doc)?;
+    let id = root.as_document().and_then(|d| d.get("_id")).cloned();
+    let source = pane.source();
+    if mode == DocMode::Edit && (source.is_none() || id.is_none()) {
+        return None;
+    }
+    let (db, coll) = source.unwrap_or_default();
+    let text = bsonfmt::to_shell_json(root, 0, fmt);
+    Some(Action::Dialog(Dialog::document(mode, server, &db, &coll, text, id, Some(tab))))
+}
+
+/// R and E keys: views or edits the document of the last clicked row.
+/// `Err` explains why nothing opens.
+pub fn open_selection(pane: &OutputPane, server: u64, tab: u64, mode: DocMode, fmt: FormatOptions) -> Result<Action, &'static str> {
+    let doc = pane.selected.current_doc().filter(|_| pane.mode != ViewMode::Text).ok_or("Select a document in the tree or table view")?;
+    document_dialog(pane, server, tab, doc, mode, fmt).ok_or("This document cannot be edited: the results do not come from a collection or it has no _id")
+}
+
 fn copy_value(v: &Bson, fmt: FormatOptions) -> String {
     match v {
         Bson::String(s) => s.clone(),
@@ -1160,7 +1191,6 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
     let docs = pane.docs();
     let Some(root) = docs.get(doc) else { return };
     let source = pane.source();
-    let id = root.as_document().and_then(|d| d.get("_id")).cloned();
 
     if let (Some(path), Some(keys)) = (path, keys) {
         let value = lookup(docs, doc, keys);
@@ -1207,15 +1237,18 @@ fn single_menu(ui: &mut Ui, pane: &OutputPane, cx: MenuCx, doc: usize, keys: Opt
         ui.close();
     }
     ui.separator();
-    let text = bsonfmt::to_shell_json(root, 0, cx.fmt);
     let (db, coll) = source.clone().unwrap_or_default();
-    if menu::button(ui, "View Document…").clicked() {
-        out.push(MenuAction::Push(Action::Dialog(Dialog::document(DocMode::View, cx.server, &db, &coll, text.clone(), None, None))));
+    if menu::entry(ui, true, "View Document…", "R").clicked()
+        && let Some(a) = document_dialog(pane, cx.server, cx.tab, doc, DocMode::View, cx.fmt)
+    {
+        out.push(MenuAction::Push(a));
         ui.close();
     }
-    let editable = source.is_some() && id.is_some();
-    if menu::entry(ui, editable, "Edit Document…", "").clicked() {
-        out.push(MenuAction::Push(Action::Dialog(Dialog::document(DocMode::Edit, cx.server, &db, &coll, text.clone(), id.clone(), Some(cx.tab)))));
+    let edit = document_dialog(pane, cx.server, cx.tab, doc, DocMode::Edit, cx.fmt);
+    if menu::entry(ui, edit.is_some(), "Edit Document…", "E").clicked()
+        && let Some(a) = edit
+    {
+        out.push(MenuAction::Push(a));
         ui.close();
     }
     if menu::entry(ui, source.is_some(), "Insert Document…", "").clicked() {
@@ -1422,7 +1455,12 @@ fn end_cell_edit(pane: &mut OutputPane, cx: &mut PaneCtx<'_>, end: Option<bool>,
         None => {}
     }
     if let Some((doc, keys)) = start {
-        let _ = pane.edit_cell(doc, &keys);
+        // `_id` cannot change: a double-click shows the document.
+        if keys == ["_id"] {
+            cx.actions.extend(document_dialog(pane, cx.server, cx.tab, doc, DocMode::View, cx.fmt));
+        } else {
+            let _ = pane.edit_cell(doc, &keys);
+        }
     }
 }
 
