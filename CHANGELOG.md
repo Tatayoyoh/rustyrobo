@@ -26,6 +26,10 @@
 - Connecting (connection manager, welcome page) puts the keyboard in the explorer, on the server opened
 - Query editor: a completed field name is followed by `:`, Ctrl+arrows stop at `:`, Ctrl+Shift+Left from a value selects its key
 
+### Changed
+
+- Tree view: the documents start closed, a document alone open ("Auto expand first document" is off by default)
+
 ### Fixed
 
 - View Document and Edit Document: selecting text after right-to-left text copies the right text (#1)

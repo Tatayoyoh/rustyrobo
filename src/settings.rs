@@ -440,7 +440,7 @@ impl Default for AppSettings {
             uuid_encoding: UuidEncoding::Default,
             autocompletion: AutocompletionMode::All,
             load_mongorc: true,
-            auto_expand: true,
+            auto_expand: false,
             line_numbers: false,
             auto_exec: true,
             disable_connection_shortcuts: false,

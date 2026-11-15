@@ -267,8 +267,9 @@ impl OutputPane {
             }
             _ => (0, batch),
         };
+        // A document alone is open; the first of several with "Auto expand first document".
         let mut expanded = HashSet::new();
-        if auto_expand {
+        if auto_expand || matches!(&output.kind, OutputKind::Docs { docs, .. } if docs.len() == 1) {
             expanded.insert("0".to_string());
         }
         OutputPane {
@@ -1928,6 +1929,16 @@ mod tests {
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::View));
         p.column = None;
         assert_eq!(dialog(press(&mut p, Key::Enter)), Some(DocMode::Edit), "no cell: the document");
+    }
+
+    #[test]
+    fn a_document_alone_is_open() {
+        let p = |docs: Vec<Bson>, auto_expand| {
+            OutputPane::new(ShellOutput { statement: "q".into(), line: 0, kind: OutputKind::Docs { docs, spec: None, ns: None, more: false }, elapsed: Duration::ZERO }, ViewMode::Tree, 50, auto_expand).expanded
+        };
+        assert!(p(docs(), false).is_empty(), "several: closed");
+        assert_eq!(p(docs(), true), HashSet::from(["0".to_string()]), "Auto expand first document");
+        assert_eq!(p(docs()[..1].to_vec(), false), HashSet::from(["0".to_string()]));
     }
 
     #[test]
