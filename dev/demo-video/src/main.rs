@@ -13,7 +13,7 @@ use rustyrobo::ui::icon;
 
 const FPS: f32 = 30.0;
 /// How long the keys stay on screen, the last part fading out (seconds).
-const KEYS_SHOWN: f64 = 1.2;
+const KEYS_SHOWN: f64 = 2.4;
 const KEYS_FADE: f64 = 0.3;
 
 /// The app, with the keys last pressed over it.
@@ -42,19 +42,28 @@ impl eframe::App for Demo {
             .interactable(false)
             .show(ui.ctx(), |ui| {
                 ui.multiply_opacity(opacity);
-                ui.horizontal(|ui| {
-                    for (i, key) in self.keys.iter().enumerate() {
-                        if i > 0 {
-                            ui.label(RichText::new("+").size(22.0).strong().color(Color32::WHITE));
-                        }
-                        egui::Frame::new()
-                            .fill(Color32::from_black_alpha(210))
-                            .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(90)))
-                            .corner_radius(6)
-                            .inner_margin(egui::Margin::symmetric(14, 6))
-                            .show(ui, |ui| ui.label(RichText::new(key).size(22.0).strong().color(Color32::WHITE)));
-                    }
-                });
+                // Light keys on a dark plate with a shadow: they stand out on any theme.
+                egui::Frame::new()
+                    .fill(Color32::from_gray(18))
+                    .stroke(egui::Stroke::new(2.0, Color32::from_gray(200)))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::same(10))
+                    .shadow(egui::Shadow { offset: [0, 6], blur: 24, spread: 4, color: Color32::from_black_alpha(200) })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (i, key) in self.keys.iter().enumerate() {
+                                if i > 0 {
+                                    ui.label(RichText::new("+").size(28.0).strong().color(Color32::WHITE));
+                                }
+                                egui::Frame::new()
+                                    .fill(Color32::from_gray(245))
+                                    .stroke(egui::Stroke::new(1.0, Color32::from_gray(150)))
+                                    .corner_radius(7)
+                                    .inner_margin(egui::Margin::symmetric(16, 6))
+                                    .show(ui, |ui| ui.label(RichText::new(key).size(28.0).strong().color(Color32::from_gray(15))));
+                            }
+                        });
+                    });
             });
     }
 

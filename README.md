@@ -37,6 +37,7 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 - Embedded mongo shell
 - Easy document editing
 - Collection, index, user and function management
+- Native single binary, light on resources
 
 **Plus**
 - MongoDB 3.6 → 8.x, shell included (no 4.2 limit)
