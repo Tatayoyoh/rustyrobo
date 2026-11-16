@@ -6,10 +6,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::collapsing_header::CollapsingState;
-use egui::{Context, Id};
+use egui::{Context, Id, Rect, pos2, vec2};
 
-use crate::app::{Action, App};
+use crate::app::{Action, App, Zone};
 use crate::settings::ViewMode;
+use crate::theme::THEMES;
 use crate::ui::connections::{ConnectionEditor, Section};
 use crate::ui::dialogs::{Dialog, DocMode};
 
@@ -17,8 +18,12 @@ pub struct AutoTest {
     dir: PathBuf,
     next_at: Instant,
     step: usize,
-    pending_shot: Option<String>,
+    /// The screenshot asked for: its name, and the part of the window kept.
+    pending_shot: Option<(String, Option<Rect>)>,
 }
+
+/// Step of the first theme of the query screenshots, which end the walkthrough.
+const THEMES_STEP: usize = 36;
 
 impl AutoTest {
     pub fn from_env() -> Option<Self> {
@@ -34,9 +39,35 @@ fn open(ctx: &Context, id: Id) {
     s.store(ctx);
 }
 
-fn shot(t: &mut AutoTest, ctx: &Context, name: &str) {
-    t.pending_shot = Some(name.to_string());
+/// A screenshot of the window, or of the part of it in `crop`.
+fn shot(t: &mut AutoTest, ctx: &Context, name: &str, crop: Option<Rect>) {
+    t.pending_shot = Some((name.to_string(), crop.map(|r| r.intersect(ctx.content_rect()))));
     ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+}
+
+/// Where the dialog on top was drawn in the last frame, with room for its
+/// shadow: its widgets but the backdrop, which covers the window.
+fn dialog(ctx: &Context) -> Option<Rect> {
+    let screen = ctx.content_rect();
+    let layer = ctx.memory(|m| m.areas().top_layer_id(egui::Order::Foreground))?;
+    let rect = ctx.viewport(|v| v.prev_pass.widgets.get_layer(layer).map(|w| w.rect).filter(|r| !r.contains_rect(screen)).fold(Rect::NOTHING, Rect::union));
+    rect.is_positive().then(|| rect.expand(12.0))
+}
+
+fn zone(app: &App, zone: Zone) -> Option<Rect> {
+    app.zones.iter().find(|(z, _)| *z == zone).map(|(_, r)| *r)
+}
+
+/// The top of the results: their first rows.
+fn results(app: &App) -> Option<Rect> {
+    zone(app, Zone::Results).map(|r| Rect::from_min_size(r.min, vec2(r.width(), 440.0)))
+}
+
+/// The query, from its tab down to the first rows of its results.
+fn query(app: &App) -> Option<Rect> {
+    let results = zone(app, Zone::Results)?;
+    let explorer = zone(app, Zone::Explorer).unwrap_or(results);
+    Some(Rect::from_min_max(pos2(explorer.max.x.min(results.min.x), explorer.min.y), pos2(results.max.x, results.min.y + 400.0)))
 }
 
 pub fn tick(app: &mut App, ctx: &Context) {
@@ -54,8 +85,12 @@ pub fn tick(app: &mut App, ctx: &Context) {
             .collect()
     });
     for img in images {
-        if let Some(name) = t.pending_shot.take() {
+        if let Some((name, crop)) = t.pending_shot.take() {
             let path = t.dir.join(format!("{name}.png"));
+            let img = match crop {
+                Some(r) => cropped(&img, r, ctx.pixels_per_point()),
+                None => (*img).clone(),
+            };
             if let Err(e) = save_png(&path, &img) {
                 eprintln!("autotest: {e}");
             } else {
@@ -74,28 +109,28 @@ pub fn tick(app: &mut App, ctx: &Context) {
     let conn_main = app.settings.connections.first().map(|c| c.id);
     match t.step {
         0 => app.conn_list = None,
-        1 => shot(&mut t, ctx, "00-welcome"),
+        1 => shot(&mut t, ctx, "00-welcome", None),
         2 => app.conn_list = Some(crate::ui::connections::ConnectionList::new(&app.settings)),
-        3 => shot(&mut t, ctx, "01-connections"),
+        3 => shot(&mut t, ctx, "01-connections", dialog(ctx)),
         4 => {
             if let Some(c) = conn_ssh.clone() {
                 app.conn_editor = Some(ConnectionEditor::new(c, false));
             }
         }
-        5 => shot(&mut t, ctx, "02-editor-general"),
+        5 => shot(&mut t, ctx, "02-editor-general", dialog(ctx)),
         6 => {
             if let Some(e) = &mut app.conn_editor {
                 e.section = Section::Ssh;
             }
         }
-        7 => shot(&mut t, ctx, "03-editor-ssh"),
+        7 => shot(&mut t, ctx, "03-editor-ssh", dialog(ctx)),
         8 => {
             if let Some(e) = &mut app.conn_editor {
                 e.run_test = true;
             }
             wait = 3.0;
         }
-        9 => shot(&mut t, ctx, "04-editor-test"),
+        9 => shot(&mut t, ctx, "04-editor-test", dialog(ctx)),
         10 => {
             app.conn_editor = None;
             app.conn_list = None;
@@ -123,11 +158,11 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
             wait = 2.5;
         }
-        12 => shot(&mut t, ctx, "05-tree"),
+        12 => shot(&mut t, ctx, "05-tree", None),
         13 => set_mode(app, ViewMode::Table),
-        14 => shot(&mut t, ctx, "06-table"),
+        14 => shot(&mut t, ctx, "06-table", results(app)),
         15 => set_mode(app, ViewMode::Text),
-        16 => shot(&mut t, ctx, "07-text"),
+        16 => shot(&mut t, ctx, "07-text", results(app)),
         17 => {
             if let Some(tab) = app.tabs.last_mut() {
                 tab.script = "db.items.countDocuments({ tag: \"fizz\" })\nprint(\"hello from the shell\")\ndb.items.aggregate([{ $group: { _id: \"$tag\", n: { $sum: 1 } } }])\ndb.items.find({ $bad: 1 })".into();
@@ -136,13 +171,8 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
             wait = 2.0;
         }
-        18 => shot(&mut t, ctx, "08-multi"),
+        18 => shot(&mut t, ctx, "08-multi", None),
         19 => {
-            app.settings.theme = "Nord".into();
-            app.actions.push(Action::ApplyTheme);
-        }
-        20 => shot(&mut t, ctx, "09-theme-nord"),
-        21 => {
             app.settings.theme = "Porcelain".into();
             app.actions.push(Action::ApplyTheme);
             if let Some(s) = app.servers.first() {
@@ -157,8 +187,8 @@ pub fn tick(app: &mut App, ctx: &Context) {
                 ));
             }
         }
-        22 => shot(&mut t, ctx, "10-light-doc"),
-        23 => {
+        20 => shot(&mut t, ctx, "10-light-doc", dialog(ctx)),
+        21 => {
             app.settings.theme = crate::theme::DEFAULT_THEME.into();
             app.actions.push(Action::ApplyTheme);
             let release = std::sync::Arc::new(crate::update::Release {
@@ -169,24 +199,24 @@ pub fn tick(app: &mut App, ctx: &Context) {
             app.update = Some(std::sync::Arc::clone(&release));
             app.dialog = None;
         }
-        24 => shot(&mut t, ctx, "11-update-chip"),
-        25 => app.dialog = Some(Dialog::Update { release: app.update.clone().expect("set above"), os: crate::update::Os::current(), commands_open: true }),
-        26 => shot(&mut t, ctx, "12-update"),
-        27 => {
+        22 => shot(&mut t, ctx, "11-update-chip", None),
+        23 => app.dialog = Some(Dialog::Update { release: app.update.clone().expect("set above"), os: crate::update::Os::current(), commands_open: true }),
+        24 => shot(&mut t, ctx, "12-update", dialog(ctx)),
+        25 => {
             app.dialog = None;
             app.update = None;
             // The scripts executed above are in the history.
             app.history_window = Some(Default::default());
         }
-        28 => shot(&mut t, ctx, "13-history"),
-        29 => {
+        26 => shot(&mut t, ctx, "13-history", dialog(ctx)),
+        27 => {
             app.history_window = None;
             if let Some(s) = app.servers.first() {
                 app.dialog = Some(Dialog::export(s.id, "rrtest", "items"));
             }
         }
-        30 => shot(&mut t, ctx, "14-export"),
-        31 => {
+        28 => shot(&mut t, ctx, "14-export", dialog(ctx)),
+        29 => {
             app.dialog = None;
             if let Some(tab) = app.tabs.last_mut() {
                 tab.script = "db.getCollection('items').find({})".into();
@@ -195,7 +225,7 @@ pub fn tick(app: &mut App, ctx: &Context) {
             }
             wait = 2.0;
         }
-        32 => {
+        30 => {
             set_mode(app, ViewMode::Table);
             if let Some(pane) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
                 let _ = pane.edit_cell(1, &["tag".to_string()]);
@@ -204,8 +234,8 @@ pub fn tick(app: &mut App, ctx: &Context) {
                 }
             }
         }
-        33 => shot(&mut t, ctx, "15-table-edit"),
-        34 => {
+        31 => shot(&mut t, ctx, "15-table-edit", results(app)),
+        32 => {
             if let Some(tab) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
                 tab.cell_edit = None;
             }
@@ -217,7 +247,36 @@ pub fn tick(app: &mut App, ctx: &Context) {
                 app.dialog = Some(Dialog::dump(s.id, "rrtest", listed));
             }
         }
-        35 => shot(&mut t, ctx, "16-dump"),
+        33 => shot(&mut t, ctx, "16-dump", dialog(ctx)),
+        // The themes: a query on nested documents, the first one opened.
+        34 => {
+            app.dialog = None;
+            if let Some(s) = app.servers.first() {
+                app.actions.push(Action::OpenShell {
+                    server: s.id,
+                    db: "shop".into(),
+                    script: "// Paid orders, the biggest first\ndb.getCollection('orders').find({\n    status: 'paid',\n    total: { $gt: 20 }\n}).sort({ total: -1 })".into(),
+                    execute: true,
+                    title: "orders".into(),
+                    cursor: None,
+                });
+            }
+            wait = 2.5;
+        }
+        35 => {
+            if let Some(pane) = app.tabs.last_mut().and_then(|t| t.outputs.first_mut()) {
+                pane.expand(&["0", "0/customer", "0/items", "0/items/[0]"]);
+            }
+        }
+        n if (THEMES_STEP..THEMES_STEP + 2 * THEMES.len()).contains(&n) => {
+            let theme = THEMES[(n - THEMES_STEP) / 2].name;
+            if (n - THEMES_STEP).is_multiple_of(2) {
+                app.settings.theme = theme.into();
+                app.actions.push(Action::ApplyTheme);
+            } else {
+                shot(&mut t, ctx, &format!("09-theme-{}", theme.to_lowercase().replace(' ', "-")), query(app));
+            }
+        }
         _ => {
             app.dialog = None;
             app.history_window = None;
@@ -235,6 +294,13 @@ fn set_mode(app: &mut App, mode: ViewMode) {
             o.mode = mode;
         }
     }
+}
+
+/// The part `r` (in points) of a screenshot.
+fn cropped(img: &egui::ColorImage, r: Rect, ppp: f32) -> egui::ColorImage {
+    let [w, h] = img.size;
+    let (x, y) = (((r.min.x * ppp) as usize).min(w), ((r.min.y * ppp) as usize).min(h));
+    img.region_by_pixels([x, y], [((r.width() * ppp) as usize).min(w - x), ((r.height() * ppp) as usize).min(h - y)])
 }
 
 fn save_png(path: &std::path::Path, img: &egui::ColorImage) -> anyhow::Result<()> {

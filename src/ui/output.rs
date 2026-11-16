@@ -470,6 +470,12 @@ impl OutputPane {
         self.field_update(edit.doc, &edit.keys, Some(value))
     }
 
+    /// Opens the nodes of the tree at `paths` (`"0"`, `"0/items/[0]"`…).
+    pub fn expand(&mut self, paths: &[&str]) {
+        self.expanded.extend(paths.iter().map(|p| p.to_string()));
+        self.rows_cache = None;
+    }
+
     /// Whether every document of the page is open in the tree.
     fn documents_open(&self) -> bool {
         (0..self.docs().len()).all(|i| self.expanded.contains(&i.to_string()))
@@ -1855,6 +1861,17 @@ mod tests {
             Bson::Document(doc! { "_id": 1, "a": { "b": [1, { "c": 2 }] }, "s": "x" }),
             Bson::Document(doc! { "_id": 2, "z": true }),
         ]
+    }
+
+    #[test]
+    fn expand_opens_nodes_and_drops_the_rows() {
+        let fmt = FormatOptions::default();
+        let mut p = pane(docs(), None);
+        p.rows_cache = Some((fmt, "t", flatten(p.docs(), &p.expanded, fmt, &crate::theme::THEMES[0])));
+        p.expand(&["0", "0/a", "0/a/b"]);
+        assert!(p.rows_cache.is_none());
+        let rows: Vec<_> = flatten(p.docs(), &p.expanded, fmt, &crate::theme::THEMES[0]).into_iter().map(|r| r.path).collect();
+        assert_eq!(rows, ["0", "0/_id", "0/a", "0/a/b", "0/a/b/[0]", "0/a/b/[1]", "0/s", "1"]);
     }
 
     #[test]
