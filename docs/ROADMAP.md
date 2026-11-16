@@ -41,6 +41,15 @@ here for the record, not as a commitment.
   change a top-level value in shell syntax, its type included (`NumberLong(5)`, `ISODate(…)`), or
   to add a field the document lacks; "Remove Field" unsets it. Sends `$set` / `$unset` on the
   `_id` of the row and reloads the page. Objects and arrays still go through Edit Document
+- [x] **Read-only connections**: a checkbox of the connection editor; `run_command` then runs only
+  the commands known to read (`find`, `aggregate` without `$out` / `$merge`, inline `mapReduce`,
+  `explain`, stats, lists…) and refuses any other one, unknown commands included, from the shell,
+  the dialogs, imports and restores. A READ-ONLY badge in the connection manager, a lock in the
+  explorer. Tested on MongoDB 8 and 4.2
+- [x] **Keyboard navigation**: Ctrl+P opens a collection by its name, Alt+arrows go between the
+  explorer, editor, results and logs; arrows, Space and Enter in the explorer and the results;
+  Shift+arrows and Ctrl+A select several documents; Ctrl+W in the explorer closes a connection;
+  the shortcuts dialog is sorted by section and searchable
 
 ## Queries and aggregation
 
@@ -95,7 +104,6 @@ here for the record, not as a commitment.
 - [ ] **Kerberos (GSSAPI)** and **AWS IAM (`MONGODB-AWS`)** authentication (driver features to
   enable, plus the fields in the connection editor).
 - [ ] **HTTP / SOCKS5 proxies**.
-- [ ] [PRIORITIZED] **Read-only connections**: refuse write commands on a connection marked as production.
 
 ## Tools and teamwork
 
