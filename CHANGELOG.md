@@ -10,12 +10,12 @@
 - New connections get a colour of their own
 - Read-only connections: the commands that write are refused (for production servers)
 - Update dialog: the changelog formatted
-- Connecting shows the explorer when it was hidden
 - Tree and table views: Ctrl+A selects all the rows shown
 
 ### Changed
 
-- Results narrower than 800 px: the views (tree, table, text) and Export are in the ⋮ menu
+- Connecting shows the explorer when it was hidden
+- Results narrower than 800 px: the views (tree, table, text) and Export are in the section top right menu
 
 ## 1.5.0
 
