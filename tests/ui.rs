@@ -1600,21 +1600,37 @@ fn the_explorer_goes_with_the_arrows_and_enter_opens_a_collection() {
     assert!(!has_label(&h, "orders"), "closed again");
     press(&mut h, Key::ArrowUp);
     assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop"))));
-    // Ctrl+W closes the connection of the selected row.
+    // Ctrl+W closes the connection of the selected row; the keyboard goes to
+    // the last server left, which Ctrl+W closes in turn.
+    h.state_mut().servers.push(Server {
+        id: 9,
+        settings: ConnectionSettings { name: "Staging".into(), ..Default::default() },
+        secrets: Default::default(),
+        status: ServerStatus::Connecting,
+        dbs: Vec::new(),
+        dbs_loading: false,
+    });
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(2);
+    assert_eq!(h.state().servers.iter().map(|s| s.id).collect::<Vec<_>>(), [9]);
+    assert!(h.state().logs.iter().any(|l| l.text == "Disconnected from Prod"));
+    assert_eq!(selected(&h), Some(egui::Id::new(("srv", 9u64))));
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(2);
     assert!(h.state().servers.is_empty());
-    assert!(h.state().logs.iter().any(|l| l.text == "Disconnected from Prod"));
 }
 
 #[test]
 fn a_new_connection_takes_the_keyboard_to_the_explorer() {
     // Nothing listens there: the connection fails, after the checks.
     let nowhere = ConnectionSettings { name: "Nowhere".into(), hosts: vec![HostPort { host: "127.0.0.1".into(), port: 1 }], last_connected: Some(chrono::Utc::now()), ..Default::default() };
-    let s = AppSettings { connections: vec![nowhere], ..Default::default() };
+    // The explorer hidden: connecting shows it.
+    let s = AppSettings { connections: vec![nowhere], show_explorer: false, ..Default::default() };
     let _env = env("connect-focus", &s);
     let check = |h: &Harness<'_, App>| {
         let sid = h.state().servers.last().expect("server").id;
+        assert!(h.state().settings.show_explorer, "the explorer shown");
         assert_eq!(h.state().zone, Some(Zone::Explorer));
         assert_eq!(h.ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("explorer_selected"))), Some(egui::Id::new(("srv", sid))));
         assert!(h.ctx.memory(|m| m.focused()).is_some(), "its row has the keyboard");

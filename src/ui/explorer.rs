@@ -94,12 +94,16 @@ pub fn selected_server(ctx: &egui::Context, servers: impl IntoIterator<Item = u6
 
 /// A server just connected: its row takes the keyboard, its databases shown.
 pub fn focus_server(ctx: &egui::Context, sid: u64) {
-    let id = Id::new(("srv", sid));
-    let mut state = CollapsingState::load_with_default_open(ctx, id, false);
+    let mut state = CollapsingState::load_with_default_open(ctx, Id::new(("srv", sid)), false);
     state.set_open(true);
     state.store(ctx);
+    select_server(ctx, sid);
+}
+
+/// The row of a server takes the keyboard.
+pub fn select_server(ctx: &egui::Context, sid: u64) {
     ctx.data_mut(|d| {
-        d.insert_temp(Id::new("explorer_selected"), id);
+        d.insert_temp(Id::new("explorer_selected"), Id::new(("srv", sid)));
         d.insert_temp(Id::new(FOCUS), true);
     });
 }

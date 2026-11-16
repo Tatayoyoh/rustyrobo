@@ -852,6 +852,12 @@ impl App {
                     self.tabs.retain(|t| t.server != id);
                     self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
                     self.log(LogLevel::Info, format!("Disconnected from {}", s.settings.name));
+                    // From the explorer: the keyboard goes to the last server left (Ctrl+W again closes it).
+                    if self.zone == Some(Zone::Explorer)
+                        && let Some(last) = self.servers.last()
+                    {
+                        crate::ui::explorer::select_server(&self.ctx, last.id);
+                    }
                 }
             }
             Action::RefreshServer(id) => {
@@ -1254,9 +1260,14 @@ impl App {
             dbs: Vec::new(),
             dbs_loading: false,
         });
-        // The keyboard goes to it, to its databases and collections.
+        // The keyboard goes to it, to its databases and collections, shown
+        // even when the explorer was hidden: else nothing seems to happen.
         crate::ui::explorer::focus_server(&self.ctx, id);
         self.zone = Some(Zone::Explorer);
+        if !self.settings.show_explorer {
+            self.settings.show_explorer = true;
+            self.actions.push(Action::SaveSettings);
+        }
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
         self.spawn(async move {
