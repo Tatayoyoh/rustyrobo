@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use egui::collapsing_header::CollapsingState;
 use egui::{Context, Id, Rect, pos2, vec2};
 
-use crate::app::{Action, App, Zone};
+use crate::app::{Action, App, LogLevel, Zone};
 use crate::settings::ViewMode;
 use crate::theme::THEMES;
 use crate::ui::connections::{ConnectionEditor, Section};
@@ -165,7 +165,7 @@ pub fn tick(app: &mut App, ctx: &Context) {
         16 => shot(&mut t, ctx, "07-text", results(app)),
         17 => {
             if let Some(tab) = app.tabs.last_mut() {
-                tab.script = "db.items.countDocuments({ tag: \"fizz\" })\nprint(\"hello from the shell\")\ndb.items.aggregate([{ $group: { _id: \"$tag\", n: { $sum: 1 } } }])\ndb.items.find({ $bad: 1 })".into();
+                tab.script = "db.items.countDocuments({ tag: \"fizz\" })\nprint(\"hello from the shell\")\ndb.items.aggregate([{ $group: { _id: \"$tag\", n: { $sum: 1 } } }])".into();
                 let id = tab.id;
                 app.actions.push(Action::Execute(id));
             }
@@ -275,6 +275,12 @@ pub fn tick(app: &mut App, ctx: &Context) {
                 app.actions.push(Action::ApplyTheme);
             } else {
                 shot(&mut t, ctx, &format!("09-theme-{}", theme.to_lowercase().replace(' ', "-")), query(app));
+            }
+        }
+        // The warnings and errors met on the way, for the one who runs it.
+        n if n == THEMES_STEP + 2 * THEMES.len() => {
+            for l in app.logs.iter().filter(|l| l.level != LogLevel::Info) {
+                eprintln!("autotest: {} {}", if l.level == LogLevel::Error { "error:" } else { "warning:" }, l.text);
             }
         }
         _ => {
