@@ -1482,7 +1482,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Dialog::Update { release, os, commands_open } => {
                 ui.set_width(600.0);
                 title(ui, &format!("New version {}", release.version));
-                read_only_text(ui, "update-notes", &release.notes, egui::TextStyle::Body, 220.0, &theme);
+                egui::Frame::new().fill(theme.base).stroke(egui::Stroke::new(1.0, theme.border)).corner_radius(4).inner_margin(6).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("update-notes").auto_shrink(false).max_height(220.0).show(ui, |ui| {
+                        crate::ui::markdown::show(ui, &release.notes);
+                    });
+                });
                 ui.hyperlink_to("Full changelog", release.changelog_url());
                 ui.hyperlink_to(format!("Download {} binary", release.version), release.download_url());
                 ui.add_space(4.0);

@@ -514,7 +514,8 @@ fn new_version_shows_a_chip_and_a_dialog() {
         assert!(has_label(h, "New version 9.9.9"));
     };
     open(&mut h);
-    assert!(text_field_shows(&h, "- Things"), "the changelog");
+    assert!(has_label(&h, "Added") && has_label(&h, "Things"), "the changelog, its Markdown shown");
+    assert!(!text_field_shows(&h, "- Things"));
     assert!(has_label(&h, "Full changelog"));
     assert!(!text_field_shows(&h, "SHA256SUMS"), "the commands start folded");
 

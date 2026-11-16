@@ -59,6 +59,7 @@ src/
     editor.rs      JS highlighting (memoised), line numbers, autocompletion
     connections.rs connection manager + editor (validation, URI, step-by-step test)
     dialogs.rs     other modals (documents, indexes, users, functions…)
+    markdown.rs    release notes rendered from Markdown (update dialog)
 ```
 
 Key design rules:
