@@ -271,7 +271,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
         });
         ui.menu_button("Help", |ui| {
             if menu_item(ui, "Keyboard Shortcuts", "") {
-                app.actions.push(Action::Dialog(Dialog::Shortcuts));
+                app.actions.push(Action::Dialog(Dialog::Shortcuts { filter: String::new() }));
             }
             if menu_item(ui, "About Rustyrobo…", "") {
                 app.actions.push(Action::Dialog(Dialog::About));

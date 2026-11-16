@@ -168,7 +168,7 @@ pub enum Dialog {
     /// Name of the script of a shell being added to the favorites.
     FavoriteName { tab: u64, name: String },
     About,
-    Shortcuts,
+    Shortcuts { filter: String },
     Update { release: Arc<Release>, os: Os, commands_open: bool },
 }
 
@@ -728,6 +728,93 @@ fn read_only_text(ui: &mut Ui, salt: &str, text: &str, font: egui::TextStyle, he
             ui.add(egui::TextEdit::multiline(&mut &*text).id_salt(salt).font(font).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
         });
     });
+}
+
+/// The keyboard shortcuts, by section.
+const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Scripts",
+        &[
+            ("F5, Ctrl+Enter", "Execute script or selection"),
+            ("F6", "Stop execution"),
+            ("Ctrl+R", "Re-execute"),
+            ("Ctrl+Space", "Autocompletion"),
+            ("Ctrl+D", "Select the next occurrence"),
+            ("Ctrl+F", "Find in the editor"),
+            ("Ctrl+O / Ctrl+S", "Open / save script"),
+            ("Ctrl+H", "Query history"),
+            ("Ctrl+J", "Favorite scripts"),
+        ],
+    ),
+    (
+        "Shells",
+        &[
+            ("Ctrl+T", "New shell"),
+            ("Ctrl+Shift+T", "Duplicate shell"),
+            ("Ctrl+W", "Close shell"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous shell"),
+        ],
+    ),
+    (
+        "Results",
+        &[
+            ("F2 / F3 / F4", "Tree / table / text view"),
+            ("Ctrl+K", "Next view: tree, table, text"),
+            ("Up / Down", "Previous / next row"),
+            ("Shift+Up / Shift+Down", "Select the rows above / below too"),
+            ("PageUp / PageDown", "A page up / down"),
+            ("Home / End", "First / last row"),
+            ("Right / Left", "Open / close a node of the tree, next / previous column of the table"),
+            ("Space", "Open or close a node of the tree"),
+            ("Shift+Space", "Open the documents of the tree, first level only, or close them"),
+            ("Enter", "Edit the selected value, or its document"),
+            ("R / E", "View / edit the selected document"),
+            ("Del", "Delete the selected documents"),
+            ("Ctrl+F", "Find in the results"),
+            ("Ctrl+C", "Copy the value under the pointer, or the selection"),
+            ("Ctrl+Shift+C", "Copy them with their names"),
+        ],
+    ),
+    (
+        "Document dialog",
+        &[("Ctrl+S / Ctrl+E", "Save the document / edit the viewed one"), ("Ctrl+M", "Maximize")],
+    ),
+    (
+        "Explorer",
+        &[
+            ("Up / Down", "Previous / next row"),
+            ("Right / Left", "Open / close a node"),
+            ("Space", "Open or close a node"),
+            ("Enter", "Open the selected collection"),
+            ("Ctrl+W", "Close the connection of the selected row"),
+        ],
+    ),
+    (
+        "Window and connections",
+        &[
+            ("Ctrl+N", "Connections"),
+            ("Alt+1…9", "Connect to the n-th connection"),
+            ("Ctrl+P", "Open a collection"),
+            ("Alt+Arrows", "Go to the explorer, editor, results or logs"),
+            ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
+            ("F10", "Rotate editor and results"),
+            ("F11", "Full screen"),
+        ],
+    ),
+];
+
+/// The sections and shortcuts matching `filter`, in any case: by their keys,
+/// their description, or the name of their section.
+fn shortcuts_matching(filter: &str) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    let f = filter.trim().to_lowercase();
+    SHORTCUTS
+        .iter()
+        .filter_map(|(section, keys)| {
+            let all = section.to_lowercase().contains(&f);
+            let keys: Vec<_> = keys.iter().copied().filter(|(k, d)| all || k.to_lowercase().contains(&f) || d.to_lowercase().contains(&f)).collect();
+            (!keys.is_empty()).then_some((*section, keys))
+        })
+        .collect()
 }
 
 fn close_button(ui: &mut Ui, label: &str) -> bool {
@@ -1444,52 +1531,42 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
                 if cancel { Outcome::Close } else { Outcome::Keep }
             }
-            Dialog::Shortcuts => {
+            Dialog::Shortcuts { filter } => {
+                ui.set_width(660.0);
                 title(ui, "Keyboard Shortcuts");
-                egui::Grid::new("keys").num_columns(2).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
-                    for (k, d) in [
-                        ("F5, Ctrl+Enter", "Execute script or selection"),
-                        ("F6", "Stop execution"),
-                        ("F2 / F3 / F4", "Tree / table / text view"),
-                        ("Ctrl+K", "Next view: tree, table, text"),
-                        ("Alt+Arrows", "Go to the explorer, editor, results or logs"),
-                        ("F10", "Rotate editor and results"),
-                        ("F11", "Full screen"),
-                        ("Ctrl+N", "Connections"),
-                        ("Ctrl+T", "New shell"),
-                        ("Ctrl+Shift+T", "Duplicate shell"),
-                        ("Ctrl+W", "Close shell"),
-                        ("Ctrl+R", "Re-execute"),
-                        ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous shell"),
-                        ("Ctrl+O / Ctrl+S", "Open / save script"),
-                        ("Ctrl+H", "Query history"),
-                        ("Ctrl+J", "Favorite scripts"),
-                        ("Ctrl+P", "Open a collection"),
-                        ("Ctrl+E / Ctrl+L", "Toggle explorer / logs"),
-                        ("Ctrl+Space", "Autocompletion"),
-                        ("Ctrl+F", "Find in the editor or the results"),
-                        ("Ctrl+C", "Copy the value under the pointer, or the selection"),
-                        ("Ctrl+Shift+C", "Copy them with their names"),
-                        ("Ctrl+D", "Select the next occurrence"),
-                        ("Del", "Delete the selected documents"),
-                        ("R / E", "View / edit the selected document"),
-                        ("Up / Down", "Previous / next row of the results"),
-                        ("PageUp / PageDown", "A page up / down in the results"),
-                        ("Home / End", "First / last row of the results"),
-                        ("Right / Left", "Open / close a node of the tree, next / previous column of the table"),
-                        ("Space", "Open or close a node of the tree or the explorer"),
-                        ("Shift+Space", "Open the documents of the tree, first level only, or close them"),
-                        ("Enter", "Edit the selected value, or its document; open the selected collection"),
-                        ("Ctrl+M", "Maximize the document dialog"),
-                        ("Ctrl+S / Ctrl+E", "Save the document / edit the viewed one"),
-                        ("Alt+1…9", "Connect to the n-th connection"),
-                    ] {
-                        ui.label(RichText::new(k).monospace());
-                        ui.label(d);
-                        ui.end_row();
+                let search = ui.add(egui::TextEdit::singleline(filter).id(Id::new("shortcuts-filter")).hint_text(format!("{} Search shortcuts (Ctrl+F)", icon::MAGNIFYING_GLASS)).desired_width(f32::INFINITY));
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) || (!search.has_focus() && ui.memory(|m| m.focused().is_none())) {
+                    search.request_focus();
+                }
+                // As high as the window allows, beside the title, the search and the button.
+                let max = (ui.ctx().content_rect().height() - 220.0).max(120.0);
+                egui::ScrollArea::vertical().max_height(max).min_scrolled_height(max).auto_shrink([false, true]).show(ui, |ui| {
+                    let sections = shortcuts_matching(filter);
+                    if sections.is_empty() {
+                        ui.label(RichText::new("No shortcut matches.").color(theme.text_weak));
+                    }
+                    for (section, keys) in sections {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(section).strong().color(theme.accent));
+                        // Rows rather than a grid: the same columns in each section, the stripes across the dialog.
+                        for (i, (k, d)) in keys.into_iter().enumerate() {
+                            let stripe = ui.painter().add(egui::Shape::Noop);
+                            let row = ui.horizontal(|ui| {
+                                ui.allocate_ui_with_layout(egui::vec2(210.0, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    ui.set_min_width(210.0);
+                                    ui.label(RichText::new(k).monospace());
+                                });
+                                ui.label(d);
+                            });
+                            if i % 2 == 1 {
+                                let r = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row.response.rect.y_range()).expand2(egui::vec2(0.0, 2.0));
+                                ui.painter().set(stripe, egui::Shape::rect_filled(r, 0.0, ui.visuals().faint_bg_color));
+                            }
+                        }
                     }
                 });
-                if close_button(ui, "Close") || enter { Outcome::Close } else { Outcome::Keep }
+                // Enter in the search does not close.
+                if close_button(ui, "Close") || (enter && !search.has_focus()) { Outcome::Close } else { Outcome::Keep }
             }
         }
     });
@@ -2100,6 +2177,16 @@ fn restore_dialog(ui: &mut Ui, f: &mut RestoreForm, theme: &crate::theme::Theme,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcuts_are_found_by_keys_description_or_section() {
+        assert_eq!(shortcuts_matching("").len(), SHORTCUTS.len());
+        let names = |f: &str| shortcuts_matching(f).into_iter().map(|(s, keys)| (s, keys.len())).collect::<Vec<_>>();
+        assert_eq!(names("ctrl+shift+c"), [("Results", 1)]);
+        assert_eq!(names(" COPY "), [("Results", 2)]);
+        assert_eq!(names("explorer"), [("Explorer", 5), ("Window and connections", 2)], "a section whole, the others by their keys");
+        assert!(shortcuts_matching("nothing like it").is_empty());
+    }
 
     #[test]
     fn export_form_builds_the_options() {

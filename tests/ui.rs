@@ -449,13 +449,36 @@ fn shortcuts_dialog_lists_the_copy_shortcuts() {
     h.run_steps(3);
     h.get_by_label("Close").click();
     h.run_steps(3);
-    h.state_mut().actions.push(rustyrobo::app::Action::Dialog(rustyrobo::ui::dialogs::Dialog::Shortcuts));
+    h.state_mut().actions.push(rustyrobo::app::Action::Dialog(rustyrobo::ui::dialogs::Dialog::Shortcuts { filter: String::new() }));
     h.run_steps(3);
     assert!(has_label(&h, "Keyboard Shortcuts"));
     assert!(has_label(&h, "Ctrl+C"));
     assert!(has_label(&h, "Ctrl+Shift+C"));
     assert!(has_label(&h, "Open a collection"));
     assert!(has_label(&h, "View / edit the selected document"));
+    assert!(has_label(&h, "Explorer"), "by section");
+    // A small window: the list scrolls, the dialog stays inside.
+    h.set_size(egui::vec2(900.0, 420.0));
+    h.run_steps(3);
+    let dialog = h.get_by_label("Keyboard Shortcuts").rect();
+    let close = h.get_by_label("Close").rect();
+    assert!(dialog.top() >= 0.0 && close.bottom() <= 420.0, "{dialog:?} {close:?}");
+    // The search has the keyboard: typed, it filters; Enter does not close.
+    h.event(egui::Event::Text("copy".into()));
+    h.run_steps(3);
+    assert!(has_label(&h, "Ctrl+Shift+C"));
+    assert!(!has_label(&h, "Open a collection"));
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_some());
+    // Ctrl+F takes the keyboard back to it.
+    h.get_by_label("Ctrl+C").click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    h.run_steps(2);
+    h.event(egui::Event::Text("zzz".into()));
+    h.run_steps(3);
+    assert!(has_label(&h, "No shortcut matches."));
 }
 
 fn opened_url(h: &Harness<'_, App>) -> Option<String> {

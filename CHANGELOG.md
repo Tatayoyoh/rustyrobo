@@ -6,6 +6,7 @@
 
 - Explorer: Ctrl+W closes the connection of the selected row
 - Tree and table views: Shift+Up/Down select several documents
+- Keyboard shortcuts: by section, with a search (Ctrl+F), scrolled in a small window
 
 ### Changed
 
