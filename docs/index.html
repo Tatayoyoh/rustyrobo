@@ -126,6 +126,22 @@
     .feature span { color: var(--muted); font-size: 14.5px; }
     a.feature { color: var(--text); }
     a.feature:hover { text-decoration: none; border-color: var(--rust); }
+    /* Feature cards: the title only, the description on hover, below the card
+       and over the next row, so that the grid stays regular. */
+    @media (hover: hover) {
+      .features.compact { grid-auto-rows: 1fr; }
+      .compact .feature { position: relative; align-items: center; transition: border-color .15s; }
+      .compact .feature b { margin: 0; }
+      .compact .feature span {
+        position: absolute; z-index: 2; left: -1px; right: -1px; top: calc(100% - 8px);
+        padding: 0 16px 16px 50px; background: var(--surface);
+        border: 1px solid var(--rust); border-top: 0; border-radius: 0 0 12px 12px;
+        box-shadow: 0 16px 32px rgba(0, 0, 0, .16);
+        opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .15s, transform .15s;
+      }
+      .compact .feature:hover { z-index: 2; border-color: var(--rust); border-radius: 12px 12px 0 0; border-bottom-color: transparent; }
+      .compact .feature:hover span { opacity: 1; transform: none; }
+    }
 
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: center; }
     .split img { width: 100%; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
@@ -213,23 +229,23 @@
       <div class="wrap">
         <h2>Everything you used in Robo 3T, and more</h2>
         <p class="sub">Feature parity with Robo 3T first, then the things it always lacked.</p>
-        <div class="features">
+        <div class="features compact">
           <div class="feature"><div class="icon"><i data-lucide="terminal"></i></div><div><b>Embedded mongo shell</b><span>find, cursors, aggregate, CRUD, indexes, users, use, show dbs, rs.*, sh.*</span></div></div>
-          <div class="feature"><div class="icon"><i data-lucide="list-tree"></i></div><div><b>Tree, table and text views</b><span>Paging, expand recursively, copy value / path / JSON / Extended JSON.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="list-tree"></i></div><div><b>Three result views</b><span>Paging, expand recursively, copy value / path / JSON / Extended JSON.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="wand-sparkles"></i></div><div><b>Smart autocompletion</b><span>Collections, methods, sampled field names, query and update operators, pipeline stages.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="key-round"></i></div><div><b>Working SSH tunnels</b><span>Password, private key with passphrase or SSH agent, known_hosts checks.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="file-pen-line"></i></div><div><b>Document editing</b><span>View, edit, insert and delete in shell syntax with validation.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="wrench"></i></div><div><b>Admin dialogs</b><span>Collections, indexes (TTL, partial, text), users and roles, stored functions.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="download"></i></div><div><b>Import from Robo 3T</b><span>Bring your existing connections, or paste any connection string.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="palette"></i></div><div><b>Real colour themes</b><span>Twelve complete themes for UI, editor and BSON values, or follow the system.</span></div></div>
-          <div class="feature"><div class="icon"><i data-lucide="search"></i></div><div><b>Find and copy in the results</b><span>Ctrl+F finds in the tree, table and text views and opens the nodes it needs. Ctrl+C copies the value under the pointer, Ctrl+Shift+C with its name.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="search"></i></div><div><b>Find and copy</b><span>Ctrl+F finds in the tree, table and text views and opens the nodes it needs. Ctrl+C copies the value under the pointer, Ctrl+Shift+C with its name.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="circle-arrow-up"></i></div><div><b>Update notifications</b><span>A chip in the toolbar tells when a new version is out, with its changelog and a direct download.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="arrow-down-up"></i></div><div><b>Import and export</b><span>Collections and query results in JSON (relaxed or canonical) and CSV, in the background with progress.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="archive"></i></div><div><b>Dump and restore</b><span>Whole databases as a folder or a single archive in the formats of mongodump, read back by mongorestore, without installing the tools.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="table-properties"></i></div><div><b>Edit in the table</b><span>Double-click a cell to change a value, its type included, without opening the document.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="history"></i></div><div><b>Query history</b><span>Every script you run, with its connection and database: search it and open it again with Ctrl+H.</span></div></div>
           <div class="feature"><div class="icon"><i data-lucide="text-search"></i></div><div><b>Keyboard first</b><span>Ctrl+P lists the collections of your servers as you type, Enter opens one. In the results, arrows go through the rows and Enter edits; R and E view or edit the document, Ctrl+K changes the view, Alt+arrows go from panel to panel.</span></div></div>
-          <div class="feature"><div class="icon"><i data-lucide="languages"></i></div><div><b>All languages</b><span>Uses the fonts of your system, or the ones you choose. Right-to-left text in the results.</span></div></div>
+          <div class="feature"><div class="icon"><i data-lucide="type"></i></div><div><b>Data in any script</b><span>Chinese, Arabic, Cyrillic… documents shown with the fonts of your system, or the ones you choose. Right-to-left text in the results.</span></div></div>
         </div>
       </div>
     </section>
