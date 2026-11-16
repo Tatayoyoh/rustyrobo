@@ -216,7 +216,7 @@ fn show_list(app: &mut App, ctx: &egui::Context) {
             ui.separator();
             ui.menu_button(format!("Import {}", icon::CARET_DOWN), |ui| {
                 if ui.button("From connection string…").clicked() {
-                    let mut e = ConnectionEditor::new(ConnectionSettings::default(), true);
+                    let mut e = ConnectionEditor::create(&app.settings.connections);
                     e.uri_editing = true;
                     e.uri_text.clear();
                     app.conn_editor = Some(e);
@@ -505,6 +505,18 @@ impl ConnectionEditor {
     fn dirty(&self) -> bool {
         self.is_new || self.conn != self.original
     }
+
+    /// A new connection, in the tag colour the `others` have the least.
+    pub fn create(others: &[ConnectionSettings]) -> Self {
+        Self::new(ConnectionSettings { color: Some(least_used_color(others)), ..Default::default() }, true)
+    }
+}
+
+/// The tag colour the fewest connections have, the first one on a tie. Not
+/// red, which tells production servers, nor grey, which tells nothing.
+fn least_used_color(connections: &[ConnectionSettings]) -> [u8; 3] {
+    let palette = &TAG_COLORS[1..TAG_COLORS.len() - 1];
+    *palette.iter().min_by_key(|c| connections.iter().filter(|x| x.color == Some(**c)).count()).expect("a palette")
 }
 
 pub fn validate(c: &ConnectionSettings) -> Vec<Issue> {
@@ -1403,6 +1415,19 @@ mod tests {
         assert!(matches(&c, "LOCALHOST"));
         assert!(matches(&c, "bill"));
         assert!(!matches(&c, "staging"));
+    }
+
+    #[test]
+    fn new_connections_take_the_least_used_colour() {
+        let conn = |color: Option<[u8; 3]>| ConnectionSettings { color, ..Default::default() };
+        assert_eq!(least_used_color(&[]), TAG_COLORS[1], "orange, not red");
+        let mut list = vec![conn(Some(TAG_COLORS[1])), conn(None), conn(Some(TAG_COLORS[0]))];
+        assert_eq!(least_used_color(&list), TAG_COLORS[2]);
+        list.extend(TAG_COLORS[2..8].iter().map(|c| conn(Some(*c))));
+        assert_eq!(least_used_color(&list), TAG_COLORS[1], "all taken once: the first again");
+        list.push(conn(Some(TAG_COLORS[1])));
+        assert_eq!(least_used_color(&list), TAG_COLORS[2]);
+        assert_eq!(ConnectionEditor::create(&list).conn.color, Some(TAG_COLORS[2]));
     }
 
     #[test]

@@ -823,7 +823,7 @@ impl App {
                 let Some(e) = self.history.get(id).cloned() else { return };
                 self.open_script(ScriptToOpen { connection: e.connection, db: e.db, script: e.script, title: String::new(), favorite: None });
             }
-            Action::NewConnection => self.conn_editor = Some(ConnectionEditor::new(ConnectionSettings::default(), true)),
+            Action::NewConnection => self.conn_editor = Some(ConnectionEditor::create(&self.settings.connections)),
             Action::EditConnection(id) => {
                 if let Some(c) = self.settings.connection(id) {
                     self.conn_editor = Some(ConnectionEditor::new(c.clone(), false));
