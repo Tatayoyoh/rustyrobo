@@ -1989,12 +1989,12 @@ fn text_view_scrolls_and_its_cursor_goes_by_pages() {
     let (start, view_top) = top(&h).expect("text");
     // Without a cursor in it: the keys scroll it.
     for (key, scrolled) in [(Key::End, true), (Key::Home, false), (Key::PageDown, true), (Key::ArrowUp, true), (Key::Home, false), (Key::ArrowDown, true)] {
-        let _ = rustyrobo::ui::output::navigate(h.state_mut(), key, 1, 1, fmt);
+        let _ = rustyrobo::ui::output::navigate(h.state_mut(), key, false, 1, 1, fmt);
         h.run_steps(10);
         let (y, _) = top(&h).expect("text");
         assert_eq!(y < start, scrolled, "{key:?}: {y} from {start}");
     }
-    let _ = rustyrobo::ui::output::navigate(h.state_mut(), Key::Home, 1, 1, fmt);
+    let _ = rustyrobo::ui::output::navigate(h.state_mut(), Key::Home, false, 1, 1, fmt);
     h.run_steps(10);
 
     // With the cursor in it: PageDown moves it by a page, End and Home to the ends.
@@ -2028,7 +2028,7 @@ fn keys_hide_the_highlight_of_the_row_under_the_pointer() {
         h.hover_at(row);
         h.run_steps(2);
         assert!(highlighted(&h), "{mode:?}: under the pointer");
-        let _ = rustyrobo::ui::output::navigate(h.state_mut(), Key::ArrowDown, 1, 1, fmt);
+        let _ = rustyrobo::ui::output::navigate(h.state_mut(), Key::ArrowDown, false, 1, 1, fmt);
         h.run_steps(2);
         assert!(!highlighted(&h), "{mode:?}: the keys went through the rows");
         // A moment later: the keys are timed by the clock, the pointer by egui's,
@@ -3267,6 +3267,10 @@ fn live_documents_open_from_ctrl_p_and_the_keys() {
     h.run_steps(3);
     assert!(shown(&h, DocMode::Edit, "linus-id"));
     close_document_dialog(&mut h);
+    // Shift+Up: the document above too.
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[tab].outputs[0].selected.len(), 2);
 
     // Ctrl+K: the next view, for all the results of the tab.
     h.key_press_modifiers(Modifiers::COMMAND, Key::K);

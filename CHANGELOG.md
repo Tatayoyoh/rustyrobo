@@ -5,6 +5,7 @@
 ### Added
 
 - Explorer: Ctrl+W closes the connection of the selected row
+- Tree and table views: Shift+Up/Down select several documents
 
 ### Changed
 

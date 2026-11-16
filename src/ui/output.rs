@@ -511,6 +511,8 @@ pub struct Selection {
     items: HashSet<String>,
     /// Start of Shift+click ranges.
     anchor: Option<String>,
+    /// Other end of the last range, where Shift+arrows go on from.
+    end: Option<String>,
     /// Last click, to know which result pane the Delete key applies to.
     pub touched: Option<std::time::Instant>,
 }
@@ -531,6 +533,7 @@ impl Selection {
     pub fn clear(&mut self) {
         self.items.clear();
         self.anchor = None;
+        self.end = None;
     }
 
     /// Click on `path`: Ctrl toggles it, Shift selects the range from the
@@ -558,9 +561,11 @@ impl Selection {
                     self.items.clear();
                 }
                 self.items.extend(range);
+                self.end = Some(path.to_string());
                 return;
             }
         }
+        self.end = None;
         if mods.command {
             if !self.items.remove(path) {
                 self.items.insert(path.to_string());
@@ -575,6 +580,12 @@ impl Selection {
     /// The last clicked row, when it is selected.
     pub fn current(&self) -> Option<&str> {
         self.anchor.as_deref().filter(|p| self.contains(p))
+    }
+
+    /// Where the keyboard is: the end of the last Shift range, or the last
+    /// clicked row.
+    pub fn cursor(&self) -> Option<&str> {
+        self.end.as_deref().filter(|p| self.contains(p)).or(self.current())
     }
 
     /// Document of the last clicked row, when it is selected.
@@ -1277,7 +1288,7 @@ pub fn open_selection(pane: &OutputPane, server: u64, tab: u64, mode: DocMode, f
 /// the value in place, or opens the
 /// document: an object or an array is edited with it, an `_id` only viewed.
 /// The text view scrolls.
-pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fmt: FormatOptions) -> Option<Action> {
+pub fn navigate(pane: &mut OutputPane, key: egui::Key, extend: bool, server: u64, tab: u64, fmt: FormatOptions) -> Option<Action> {
     use crate::ui::editor::Scroll;
     use egui::Key;
     let rows: Vec<(String, usize, Vec<String>, bool)> = match pane.mode {
@@ -1300,7 +1311,7 @@ pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fm
     if rows.is_empty() {
         return None;
     }
-    let at = pane.selected.current().and_then(|p| rows.iter().position(|r| r.0 == p));
+    let at = pane.selected.cursor().and_then(|p| rows.iter().position(|r| r.0 == p));
     let mut target = None;
     match (key, at) {
         (Key::ArrowDown, _) => target = Some(at.map_or(0, |i| (i + 1).min(rows.len() - 1))),
@@ -1362,7 +1373,8 @@ pub fn navigate(pane: &mut OutputPane, key: egui::Key, server: u64, tab: u64, fm
         _ => {}
     }
     if let Some(t) = target {
-        pane.selected.click(&rows[t].0, egui::Modifiers::NONE, Vec::new);
+        let mods = if extend { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+        pane.selected.click(&rows[t].0, mods, || rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>());
         pane.scroll_to = Some(rows[t].0.clone());
         pane.show_cell = pane.mode == ViewMode::Table;
     }
@@ -1875,6 +1887,28 @@ mod tests {
     }
 
     #[test]
+    fn shift_arrows_select_several_documents() {
+        use egui::Key;
+        let fmt = FormatOptions::default();
+        let mut p = pane((0..4).map(|i| Bson::Document(doc! { "_id": i })).collect(), None);
+        p.mode = ViewMode::Table;
+        let selected = |p: &OutputPane| (0..4).filter(|i| p.selected.contains(&i.to_string())).collect::<Vec<_>>();
+        navigate(&mut p, Key::ArrowDown, false, 1, 1, fmt);
+        for _ in 0..2 {
+            navigate(&mut p, Key::ArrowDown, true, 1, 1, fmt);
+        }
+        assert_eq!(selected(&p), [0, 1, 2]);
+        assert_eq!((p.selected.current(), p.selected.cursor()), (Some("0"), Some("2")));
+        navigate(&mut p, Key::ArrowUp, true, 1, 1, fmt);
+        assert_eq!(selected(&p), [0, 1]);
+        navigate(&mut p, Key::End, true, 1, 1, fmt);
+        assert_eq!(selected(&p), [0, 1, 2, 3]);
+        // Without Shift: the row after the end of the range, alone.
+        navigate(&mut p, Key::ArrowUp, false, 1, 1, fmt);
+        assert_eq!(selected(&p), [2]);
+    }
+
+    #[test]
     fn arrows_go_through_the_rows_and_enter_edits() {
         use egui::Key;
         let fmt = FormatOptions::default();
@@ -1886,7 +1920,7 @@ mod tests {
             }
         };
         let press = |p: &mut OutputPane, k: Key| {
-            let action = navigate(p, k, 1, 1, fmt);
+            let action = navigate(p, k, false, 1, 1, fmt);
             rebuild(p);
             action
         };

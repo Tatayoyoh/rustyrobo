@@ -185,7 +185,19 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 }
                 let (server, id) = (tab.server, tab.id);
                 if let Some(pane) = current_pane(tab, tabbed) {
-                    actions.extend(crate::ui::output::navigate(pane, key, server, id, fmt));
+                    actions.extend(crate::ui::output::navigate(pane, key, false, server, id, fmt));
+                }
+            }
+        }
+        // Shift: the selection goes with the rows, several documents at once.
+        for key in [Key::ArrowUp, Key::ArrowDown, Key::PageUp, Key::PageDown, Key::Home, Key::End] {
+            if ui.input_mut(|i| crate::ui::consume_exact_key(i, egui::Modifiers::SHIFT, key)) {
+                if let Some(focused) = ui.memory(|m| m.focused()) {
+                    ui.memory_mut(|m| m.surrender_focus(focused));
+                }
+                let (server, id) = (tab.server, tab.id);
+                if let Some(pane) = current_pane(tab, tabbed) {
+                    actions.extend(crate::ui::output::navigate(pane, key, true, server, id, fmt));
                 }
             }
         }

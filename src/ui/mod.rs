@@ -466,9 +466,14 @@ pub fn main_window(app: &mut App, ui: &mut Ui) {
 /// `key` pressed without modifiers. egui's `consume_key` takes it with Shift or
 /// Alt too: arrows would take Alt+arrows (the areas of the window).
 pub fn consume_plain_key(i: &mut egui::InputState, key: egui::Key) -> bool {
+    consume_exact_key(i, egui::Modifiers::NONE, key)
+}
+
+/// `key` pressed with `mods` and no other modifier.
+pub fn consume_exact_key(i: &mut egui::InputState, mods: egui::Modifiers, key: egui::Key) -> bool {
     let mut found = false;
     i.events.retain(|e| match e {
-        egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none() => {
+        egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && *modifiers == mods => {
             found = true;
             false
         }
