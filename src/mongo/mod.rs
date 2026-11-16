@@ -69,6 +69,8 @@ pub struct Connection {
     pub set_name: Option<String>,
     pub is_mongos: bool,
     pub databases: Vec<String>,
+    /// Refuses the commands that write (`ConnectionSettings::read_only`).
+    pub read_only: bool,
 }
 
 impl Connection {
@@ -159,6 +161,7 @@ impl Connection {
             set_name,
             is_mongos,
             databases: Vec::new(),
+            read_only: conn.read_only,
         };
         let build = connection.run_command("admin", doc! { "buildInfo": 1 }, None).await;
         connection.version = build
@@ -231,6 +234,9 @@ impl Connection {
         command: Document,
         session: Option<&mut Session>,
     ) -> anyhow::Result<Document> {
+        if self.read_only && !reads_only(&command) {
+            anyhow::bail!("Read-only connection: {} refused", command.keys().next().map_or("empty command", String::as_str));
+        }
         // The drivers refuse killCursors in a session.
         let session = session.filter(|_| !command.keys().next().is_some_and(|name| name.eq_ignore_ascii_case("killCursors")));
         match (&self.backend, session) {
@@ -348,6 +354,31 @@ fn is_auth_error(msg: &str) -> bool {
 pub fn is_unauthorized(e: &anyhow::Error) -> bool {
     let s = format!("{e:#}");
     s.contains("Unauthorized") || s.contains("not authorized") || s.contains("code 13")
+}
+
+/// Commands that only read, by their lowercase name.
+const READ_COMMANDS: &[&str] = &[
+    "find", "getmore", "killcursors", "count", "distinct", "listcollections", "listdatabases", "listindexes",
+    "listsearchindexes", "collstats", "dbstats", "datasize", "dbhash", "serverstatus", "buildinfo", "hostinfo", "hello",
+    "ismaster", "ping", "connectionstatus", "whatsmyuri", "getcmdlineopts", "getparameter", "getlog", "currentop", "top",
+    "lockinfo", "listcommands", "getdefaultrwconcern", "features", "replsetgetstatus", "replsetgetconfig", "isdbgrid",
+    "listshards", "balancerstatus", "getshardmap", "usersinfo", "rolesinfo", "plancachelistfilters", "startsession",
+    "endsessions", "refreshsessions", "committransaction", "aborttransaction",
+];
+
+/// Whether a read-only connection runs `command`: a command known to read, a
+/// pipeline without `$out` or `$merge`, an inline map-reduce, an explain
+/// (which writes nothing), reading the profiling level. Anything else is
+/// refused, unknown commands too.
+pub fn reads_only(command: &Document) -> bool {
+    let Some((name, value)) = command.iter().next() else { return false };
+    match name.to_ascii_lowercase().as_str() {
+        "aggregate" => !command.get_array("pipeline").is_ok_and(|p| p.iter().any(|s| s.as_document().is_some_and(|s| s.contains_key("$out") || s.contains_key("$merge")))),
+        "mapreduce" => command.get_document("out").is_ok_and(|o| o.contains_key("inline")),
+        "explain" => value.as_document().is_some_and(|c| reads_only(c) || c.keys().next().is_some_and(|n| ["update", "delete", "findandmodify"].contains(&n.to_ascii_lowercase().as_str()))),
+        "profile" => bson_as_i64(value) == Some(-1),
+        n => READ_COMMANDS.contains(&n),
+    }
 }
 
 pub fn bson_as_i64(b: &Bson) -> Option<i64> {
@@ -470,6 +501,43 @@ fn first_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_only_connections_run_the_commands_that_read() {
+        for c in [
+            doc! { "find": "c", "filter": {} },
+            doc! { "getMore": 1_i64, "collection": "c" },
+            doc! { "aggregate": "c", "pipeline": [{ "$match": {} }], "cursor": {} },
+            doc! { "listCollections": 1 },
+            doc! { "isMaster": 1 },
+            doc! { "mapReduce": "c", "map": "", "reduce": "", "out": { "inline": 1 } },
+            doc! { "explain": { "update": "c", "updates": [] } },
+            doc! { "explain": { "find": "c" }, "verbosity": "executionStats" },
+            doc! { "profile": -1 },
+        ] {
+            assert!(reads_only(&c), "{c}");
+        }
+        for c in [
+            doc! { "insert": "c", "documents": [] },
+            doc! { "update": "c", "updates": [] },
+            doc! { "findAndModify": "c" },
+            doc! { "drop": "c" },
+            doc! { "dropDatabase": 1 },
+            doc! { "createIndexes": "c", "indexes": [] },
+            doc! { "renameCollection": "a.b", "to": "a.c" },
+            doc! { "createUser": "u" },
+            doc! { "aggregate": "c", "pipeline": [{ "$match": {} }, { "$out": "d" }] },
+            doc! { "aggregate": "c", "pipeline": [{ "$merge": { "into": "d" } }] },
+            doc! { "mapReduce": "c", "map": "", "reduce": "", "out": "d" },
+            doc! { "explain": { "aggregate": "c", "pipeline": [{ "$out": "d" }] } },
+            doc! { "profile": 2 },
+            doc! { "eval": "1" },
+            doc! { "someNewCommand": 1 },
+            doc! {},
+        ] {
+            assert!(!reads_only(&c), "{c}");
+        }
+    }
 
     #[test]
     fn numeric_coercions() {

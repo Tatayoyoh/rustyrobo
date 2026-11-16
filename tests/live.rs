@@ -325,6 +325,60 @@ fn legacy_server_shell_api() {
     shell_suite(&rt, &mongo42(), "rr_e2e_legacy");
 }
 
+/// A read-only connection: the shell reads, its writes are refused.
+fn read_only_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
+    let c = open(rt, s).unwrap();
+    run(rt, &c, db, doc! { "dropDatabase": 1 });
+    insert(rt, &c, db, "c", &[doc! { "_id": 1, "n": 1 }]);
+    drop(c);
+    let read_only = ConnectionSettings { read_only: true, ..s.clone() };
+    let mut sh = Shell::new(rt, Arc::new(open(rt, &read_only).unwrap()), db, Duration::from_secs(20));
+    assert_eq!(sh.docs("db.c.find({})").len(), 1);
+    for read in [
+        "db.c.countDocuments({})",
+        "db.c.distinct('n')",
+        "db.c.getIndexes()",
+        "db.c.stats()",
+        "db.stats()",
+        "db.version()",
+        "show collections",
+        "show dbs",
+        "db.c.aggregate([{ $match: {} }]).toArray()",
+        "db.c.find().explain()",
+        "db.getProfilingStatus()",
+    ] {
+        sh.ok(read);
+    }
+    for write in [
+        "db.c.insertOne({ n: 2 })",
+        "db.c.updateOne({}, { $set: { n: 3 } })",
+        "db.c.deleteMany({})",
+        "db.c.drop()",
+        "db.c.createIndex({ n: 1 })",
+        "db.c.aggregate([{ $out: 'd' }])",
+    ] {
+        let e = sh.error(write);
+        assert!(e.contains("Read-only connection"), "{write}: {e}");
+    }
+    assert_eq!(sh.docs("db.c.find({})"), [Bson::Document(doc! { "_id": 1, "n": 1 })], "untouched");
+}
+
+#[test]
+fn read_only_connections_on_a_modern_server() {
+    if !live() {
+        return;
+    }
+    read_only_suite(&rt(), &mongo8(), "rr_e2e_read_only_modern");
+}
+
+#[test]
+fn read_only_connections_on_a_legacy_server() {
+    if !live() {
+        return;
+    }
+    read_only_suite(&rt(), &mongo42(), "rr_e2e_read_only_legacy");
+}
+
 fn transfer_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
     use rustyrobo::transfer::{Delimiter, ExportOptions, Format, ImportOptions, export, import};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

@@ -257,6 +257,9 @@ fn server_node(app: &App, s: &crate::app::Server, ui: &mut Ui, actions: &RefCell
                 ServerStatus::Failed(_) => (icon::WARNING, th.error),
             };
             let r = row(ui, id, RichText::new(format!("{icon} {}", s.label())).color(color).strong());
+            if s.settings.read_only {
+                ui.label(RichText::new(icon::LOCK).color(th.warning)).on_hover_text("Read-only: the commands that write are refused");
+            }
             if matches!(s.status, ServerStatus::Connecting) {
                 ui.spinner();
             }

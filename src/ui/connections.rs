@@ -75,6 +75,9 @@ fn badge(ui: &mut Ui, text: &str, color: Color32) {
 }
 
 fn attributes(ui: &mut Ui, c: &ConnectionSettings, th: &Theme) {
+    if c.read_only {
+        badge(ui, "READ-ONLY", th.warning);
+    }
     match c.kind {
         ConnectionType::ReplicaSet => badge(ui, "RS", th.syntax.keyword),
         ConnectionType::Srv => badge(ui, "SRV", th.syntax.keyword),
@@ -1081,6 +1084,12 @@ fn general_section(ui: &mut Ui, ed: &mut ConnectionEditor, issues: &[Issue], th:
     }
     ui.add_space(8.0);
     grid(ui, "g-db", |ui| {
+        ui.label("Read-only");
+        changed |= ui
+            .checkbox(&mut c.read_only, format!("{} Refuse the commands that write", icon::LOCK))
+            .on_hover_text("Inserts, updates, deletes, drops, indexes, users… For production servers.")
+            .changed();
+        ui.end_row();
         ui.label("Default database");
         changed |= ui.add(egui::TextEdit::singleline(&mut c.default_database).hint_text("used for new shells (default: test)").desired_width(280.0)).changed();
         ui.end_row();

@@ -246,6 +246,8 @@ pub struct ConnectionSettings {
     pub app_name: String,
     /// Extra `key=value&…` options appended to the generated URI.
     pub extra_options: String,
+    /// Refuses the commands that write: for production servers.
+    pub read_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_connected: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -270,6 +272,7 @@ impl Default for ConnectionSettings {
             connect_timeout_secs: 10,
             app_name: "rustyrobo".into(),
             extra_options: String::new(),
+            read_only: false,
             last_connected: None,
         }
     }

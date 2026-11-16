@@ -151,15 +151,19 @@ fn create_connection_through_the_editor() {
 
     replace_text(&mut h, "New Connection", "Staging");
     replace_text(&mut h, "localhost", "db.staging.local");
+    h.get_by_label(&format!("{} Refuse the commands that write", icon::LOCK)).click();
     h.get_by_label("Save").click();
     h.run_steps(6);
 
     assert!(!has_label(&h, "Edit Connection"), "editor closed after save");
     assert!(has_label(&h, "Staging"), "listed in the manager");
+    assert!(has_label(&h, "READ-ONLY"), "with its badge");
     let saved = saved_settings(&env);
     assert_eq!(saved.connections.len(), 1);
     assert_eq!(saved.connections[0].name, "Staging");
     assert_eq!(saved.connections[0].hosts[0].host, "db.staging.local");
+    assert!(saved.connections[0].read_only);
+    assert!(saved.connections[0].color.is_some(), "a colour of its own");
 }
 
 #[test]

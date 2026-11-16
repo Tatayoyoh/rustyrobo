@@ -8,6 +8,7 @@
 - Tree and table views: Shift+Up/Down select several documents
 - Keyboard shortcuts: by section, with a search (Ctrl+F), scrolled in a small window
 - New connections get a colour of their own
+- Read-only connections: the commands that write are refused (for production servers)
 
 ### Changed
 
