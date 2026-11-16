@@ -3,12 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rustyrobo — native MongoDB GUI in Rust</title>
-  <meta name="description" content="Rustyrobo is a fast, native MongoDB GUI written in Rust: a port of Robomongo / Robo 3T with an embedded shell, working SSH tunnels and MongoDB 3.6 to 8.x support.">
-  <meta property="og:title" content="Rustyrobo — native MongoDB GUI in Rust">
-  <meta property="og:description" content="The Robo 3T workflow, rebuilt in Rust for today's MongoDB.">
-  <meta property="og:image" content="screenshots/05-tree.png">
+  <title>Rustyrobo — Robo 3T / Robomongo alternative, a native MongoDB client</title>
+  <meta name="description" content="Free, open-source MongoDB client and GUI in Rust: the Robo 3T / Robomongo workflow for MongoDB 3.6 to 8.x, with an embedded mongo shell and SSH tunnels. Linux, macOS, Windows.">
+  <meta name="keywords" content="Robo 3T, Robo3T, Robot 3T, Robot3T, Robomongo, Robo 3T alternative, Mongo client, MongoDB client, MongoDB GUI, mongo shell, Rust">
+  <link rel="canonical" href="https://tatayoyoh.github.io/rustyrobo/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Rustyrobo">
+  <meta property="og:url" content="https://tatayoyoh.github.io/rustyrobo/">
+  <meta property="og:title" content="Rustyrobo — Robo 3T / Robomongo alternative, a native MongoDB client">
+  <meta property="og:description" content="The Robo 3T workflow, rebuilt in Rust for today's MongoDB: a free, native MongoDB client with an embedded shell.">
+  <meta property="og:image" content="https://tatayoyoh.github.io/rustyrobo/screenshots/05-tree.png">
+  <meta property="og:image:alt" content="Rustyrobo MongoDB client: database explorer, query editor and results in tree view">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" type="image/svg+xml" href="logo.svg">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Rustyrobo",
+    "alternateName": "Rusty Robo",
+    "description": "Free, open-source MongoDB client and GUI written in Rust, an alternative to Robo 3T (Robomongo) for MongoDB 3.6 to 8.x, with an embedded mongo shell and SSH tunnels.",
+    "keywords": "Robo 3T alternative, Robomongo alternative, MongoDB client, Mongo client, MongoDB GUI",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "url": "https://tatayoyoh.github.io/rustyrobo/",
+    "downloadUrl": "https://github.com/Tatayoyoh/rustyrobo/releases/latest",
+    "image": "https://tatayoyoh.github.io/rustyrobo/screenshots/05-tree.png",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "codeRepository": "https://github.com/Tatayoyoh/rustyrobo",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
   <style>
     :root {
       --bg: #faf7f4;
@@ -81,7 +106,7 @@
     .badges { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
     .badge { font-size: 13px; padding: 4px 10px; border-radius: 99px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 
-    .shot { margin: 40px auto 0; max-width: 1060px; }
+    .shot { margin: 40px auto 0; max-width: 960px; }
     .shot img { width: 100%; height: auto; display: block; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
 
     section { padding: 72px 0; }
@@ -109,7 +134,11 @@
     ul.checks li svg { width: 20px; height: 20px; color: var(--teal); flex: none; margin-top: 2px; }
 
     .themes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
-    .swatch { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
+    .swatch { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+    .swatch:hover { border-color: var(--muted); }
+    .swatch[aria-pressed="true"] { border-color: var(--rust); box-shadow: 0 0 0 1px var(--rust); }
+    .theme-shot { margin: 28px auto 0; max-width: 1025px; }
+    .theme-shot img { width: 100%; height: auto; display: block; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
     .swatch i { width: 22px; height: 22px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.1); }
 
     pre {
@@ -120,16 +149,14 @@
     pre .c { color: #7d8590; }
     pre .p { color: #f0883e; }
 
-    .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
-    .gallery figure { margin: 0; }
-    .gallery img { width: 100%; border-radius: 12px; border: 1px solid var(--border); }
-    .gallery figcaption { color: var(--muted); font-size: 14px; margin-top: 6px; }
+    .faq { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .faq h3 { margin: 0 0 6px; font-size: 17px; }
 
     footer { border-top: 1px solid var(--border); padding: 28px 0 40px; color: var(--muted); font-size: 14px; }
     footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
 
     @media (max-width: 820px) {
-      .why, .split, .gallery { grid-template-columns: 1fr; }
+      .why, .split, .faq { grid-template-columns: 1fr; }
       .nav nav { display: none; }
       section { padding: 52px 0; }
     }
@@ -143,6 +170,7 @@
         <a href="#why">Why</a>
         <a href="#features">Features</a>
         <a href="#ssh">SSH</a>
+        <a href="#themes">Themes</a>
         <a href="#install">Download</a>
         <a href="https://github.com/Tatayoyoh/Rustyrobo">GitHub</a>
       </nav>
@@ -153,8 +181,8 @@
     <div class="hero wrap">
       <img class="logo" src="logo.svg" alt="Rustyrobo logo">
       <h1>The Robo 3T workflow,<br><span>rebuilt in Rust.</span></h1>
-      <p class="lead">A fast, native MongoDB GUI with an embedded shell, working SSH tunnels and support
-        for every MongoDB from 3.6 to 8.x. One binary. No Electron.</p>
+      <p class="lead">A fast, native MongoDB client in the spirit of Robo 3T and Robomongo, with an embedded
+        shell, working SSH tunnels and support for every MongoDB from 3.6 to 8.x. One binary. No Electron.</p>
       <div class="cta">
         <a class="btn primary" href="#install">Get Rustyrobo</a>
         <a class="btn" href="https://github.com/Tatayoyoh/Rustyrobo">View on GitHub</a>
@@ -165,13 +193,13 @@
         <span class="badge">Linux · macOS · Windows</span>
         <span class="badge">Apache-2.0</span>
       </div>
-      <div class="shot"><img src="screenshots/05-tree.png" alt="Rustyrobo main window with the database explorer and a query result in tree view" loading="eager"></div>
+      <div class="shot"><img src="demo.gif" width="960" height="720" alt="Rustyrobo, a MongoDB client driven by the keyboard: connection manager, Ctrl+P to open a collection, tree view, document editing" loading="eager"></div>
     </div>
 
     <section id="why">
       <div class="wrap">
         <h2>Why Rustyrobo?</h2>
-        <p class="sub">Robomongo / Robo 3T was the lightweight, shell-centric MongoDB GUI many of us loved.
+        <p class="sub">Robomongo / Robo 3T was the lightweight, shell-centric MongoDB client many of us loved.
           It is no longer maintained, its shell stopped at MongoDB 4.2 and SSH tunnels became unreliable.</p>
         <div class="why">
           <div class="card"><h3>Same interface</h3><p>Explorer, query tabs, tree/table/text views, menus and shortcuts as you remember them.</p></div>
@@ -183,7 +211,7 @@
 
     <section id="features" style="background: var(--surface-2)">
       <div class="wrap">
-        <h2>Everything you used, and more</h2>
+        <h2>Everything you used in Robo 3T, and more</h2>
         <p class="sub">Feature parity with Robo 3T first, then the things it always lacked.</p>
         <div class="features">
           <div class="feature"><div class="icon"><i data-lucide="terminal"></i></div><div><b>Embedded mongo shell</b><span>find, cursors, aggregate, CRUD, indexes, users, use, show dbs, rs.*, sh.*</span></div></div>
@@ -219,32 +247,29 @@
             <li><i data-lucide="circle-check"></i>Searchable connection manager with keyboard navigation</li>
           </ul>
         </div>
-        <img src="screenshots/04-editor-test.png" alt="Connection editor showing a successful step-by-step SSH connection test" loading="lazy">
+        <img src="screenshots/04-editor-test.png" alt="Rustyrobo connection editor showing a successful step-by-step SSH tunnel test to MongoDB" loading="lazy">
       </div>
     </section>
 
     <section id="themes" style="background: var(--surface-2)">
       <div class="wrap">
         <h2>Real themes</h2>
-        <p class="sub">Each theme styles the whole interface, the JavaScript editor and the colours of BSON types.</p>
+        <p class="sub">Each theme styles the whole interface, the JavaScript editor and the colours of BSON types. Pick one to see it.</p>
         <div class="themes">
-          <span class="swatch"><i style="background:#f3f4f6"></i>Porcelain</span>
-          <span class="swatch"><i style="background:#1e1f22"></i>Graphite</span>
-          <span class="swatch"><i style="background:#2e3440"></i>Nord</span>
-          <span class="swatch"><i style="background:#fdf6e3"></i>Solarized Light</span>
-          <span class="swatch"><i style="background:#002b36"></i>Solarized Dark</span>
-          <span class="swatch"><i style="background:#282828"></i>Gruvbox Dark</span>
-          <span class="swatch"><i style="background:#282c34"></i>One Dark</span>
-          <span class="swatch"><i style="background:#282a36"></i>Dracula</span>
-          <span class="swatch"><i style="background:#1a1b26"></i>Tokyo Night</span>
-          <span class="swatch"><i style="background:#eff1f5"></i>Catppuccin Latte</span>
-          <span class="swatch"><i style="background:#1e1e2e"></i>Catppuccin Mocha</span>
-          <span class="swatch"><i style="background:#000"></i>High Contrast</span>
+          <button class="swatch" aria-pressed="false"><i style="background:#f3f4f6"></i>Porcelain</button>
+          <button class="swatch" aria-pressed="true"><i style="background:#1e1f22"></i>Graphite</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#2e3440"></i>Nord</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#fdf6e3"></i>Solarized Light</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#002b36"></i>Solarized Dark</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#282828"></i>Gruvbox Dark</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#282c34"></i>One Dark</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#282a36"></i>Dracula</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#1a1b26"></i>Tokyo Night</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#eff1f5"></i>Catppuccin Latte</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#1e1e2e"></i>Catppuccin Mocha</button>
+          <button class="swatch" aria-pressed="false"><i style="background:#000"></i>High Contrast</button>
         </div>
-        <div class="gallery" style="margin-top:32px">
-          <figure><img src="screenshots/09-theme-nord.png" alt="Nord theme" loading="lazy"><figcaption>Nord</figcaption></figure>
-          <figure><img src="screenshots/10-light-doc.png" alt="Porcelain theme with the document editor" loading="lazy"><figcaption>Porcelain, document editor</figcaption></figure>
-        </div>
+        <figure class="theme-shot"><img id="theme-shot" src="screenshots/09-theme-graphite.png" width="1025" height="802" alt="Graphite theme: a find query and its results in an expanded tree" loading="lazy"></figure>
       </div>
     </section>
 
@@ -267,6 +292,17 @@
           (<em>Import → From Robo 3T</em>).</p>
       </div>
     </section>
+    <section id="faq" style="background: var(--surface-2)">
+      <div class="wrap">
+        <h2>Questions</h2>
+        <div class="faq" style="margin-top:28px">
+          <div class="card"><h3>Is Rustyrobo an alternative to Robo 3T and Robomongo?</h3><p>Yes. Robo 3T (often typed Robot 3T or Robo3T), formerly Robomongo, is no longer maintained. Rustyrobo keeps its layout, menus and shortcuts, and its generated scripts like <code>db.getCollection('x').find({})</code>.</p></div>
+          <div class="card"><h3>Which MongoDB versions does this MongoDB client support?</h3><p>Every MongoDB from 3.6 to 8.x, the embedded shell included: Robo 3T's shell stopped at MongoDB 4.2.</p></div>
+          <div class="card"><h3>Can I keep my Robo 3T connections?</h3><p>Yes: <em>Import → From Robo 3T</em> in the connection manager reads them, SSH tunnels included (passwords Robo 3T encrypted have to be typed again). You can also paste any connection string.</p></div>
+          <div class="card"><h3>Is it free?</h3><p>Yes, free and open source under the Apache-2.0 licence, for Linux, macOS and Windows. It is an independent rewrite, not affiliated with Studio 3T or MongoDB, Inc.</p></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer>
@@ -276,6 +312,20 @@
     </div>
   </footer>
   <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
-  <script>lucide.createIcons();</script>
+  <script>
+    lucide.createIcons();
+    // The swatches show their theme in the screenshot below them.
+    const themeShot = document.getElementById('theme-shot');
+    const themeButtons = document.querySelectorAll('.themes button');
+    const shotOf = (b) => 'screenshots/09-theme-' + b.textContent.trim().toLowerCase().replace(/ /g, '-') + '.png';
+    for (const b of themeButtons) {
+      b.addEventListener('pointerenter', () => { new Image().src = shotOf(b); });
+      b.addEventListener('click', () => {
+        themeShot.src = shotOf(b);
+        themeShot.alt = b.textContent.trim() + ' theme: a find query and its results in an expanded tree';
+        for (const o of themeButtons) o.setAttribute('aria-pressed', o === b);
+      });
+    }
+  </script>
 </body>
 </html>

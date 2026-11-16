@@ -41,27 +41,26 @@ and rebuilds it as a single native Rust binary that supports current MongoDB ver
 
 **Plus**
 - MongoDB 3.6 → 8.x, shell included (no 4.2 limit)
-- Reliable SSH tunnels: agent, encrypted keys, host-key checks
-- Improved connection manager and redesigned connection editor
-- Improved document view/edit modal
-- Field-name and operator autocompletion
-- Find in the results (Ctrl+F)
-- Kick copy the value under the pointer (Ctrl+C) or with its name field (Ctrl+Shift+C)
+- SSH tunnels (broken in Robo 3T)
+- Improved connection manager
+- Improved document view and edit modals
 - Real colour themes
-- Native single binary, light on resources
-- Multi document selection
-- A favorite script manager (Ctrl+J)
+- Keyboard navigation
+- Query field-name and operator autocompletion
+- Edit values in place in tree / table views
+- Quick find in the results (Ctrl+F)
+- Quick copy of the value under the pointer (Ctrl+C), or with its field name (Ctrl+Shift+C)
+- Multi-document selection
+- Favorite script manager (Ctrl+J)
+- Query history (Ctrl+H)
 - Import / export of collections in JSON and CSV
 - Dump / restore of databases in the formats of mongodump
-- Query history (Ctrl+H)
-- Edit values in place in tree / table views
-- Kick collection access (Ctrl+P)
-- Kick section switch : explorer, editor, results, logs (Alt+arrows)
-- Keyboard navigation
+- Quick collection access (Ctrl+P)
+- Quick section switch: explorer, editor, results, logs (Alt+arrows)
 
 ## Known issues
 
-- right-to-left texts partialy supported (egui issue)
+- Right-to-left text partially supported (egui issue)
 
 ## Install
 
@@ -101,8 +100,8 @@ Settings are stored in `~/.config/rustyrobo/settings.json` (override with `RUSTY
 | Connection editor | SSH test |
 |---|---|
 | ![](docs/screenshots/02-editor-general.png) | ![](docs/screenshots/04-editor-test.png) |
-| **Table view** | **Nord theme** |
-| ![](docs/screenshots/06-table.png) | ![](docs/screenshots/09-theme-nord.png) |
+| **Tree view** | **Table view** |
+| ![](docs/screenshots/09-theme-graphite.png) | ![](docs/screenshots/06-table.png) |
 | **Query history** | **Export** |
 | ![](docs/screenshots/13-history.png) | ![](docs/screenshots/14-export.png) |
 | **Editing in the table** | |
