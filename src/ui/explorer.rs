@@ -83,6 +83,15 @@ pub fn key(ctx: &egui::Context, key: egui::Key) {
     }
 }
 
+/// The server of the selected row, that row being its own or one under it.
+pub fn selected_server(ctx: &egui::Context, servers: impl IntoIterator<Item = u64>) -> Option<u64> {
+    let rows = ctx.data(|d| d.get_temp::<Rows>(Id::new(SHOWN)))?;
+    let sel = ctx.data(|d| d.get_temp::<Id>(Id::new("explorer_selected")))?;
+    let i = rows.list.iter().position(|r| r.0 == sel)?;
+    let top = rows.list[..=i].iter().rfind(|r| r.1 == 0)?.0;
+    servers.into_iter().find(|&s| Id::new(("srv", s)) == top)
+}
+
 /// A server just connected: its row takes the keyboard, its databases shown.
 pub fn focus_server(ctx: &egui::Context, sid: u64) {
     let id = Id::new(("srv", sid));

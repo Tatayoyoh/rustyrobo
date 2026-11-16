@@ -1448,10 +1448,15 @@ impl App {
         } else if pressed(cmd, Key::S) {
             self.actions.push(Action::SaveFile { save_as: false });
         }
-        if pressed(cmd, Key::W)
-            && let Some(t) = tab_id {
+        // Ctrl+W: the connection of the selected row in the explorer, the shell elsewhere.
+        if pressed(cmd, Key::W) {
+            let server = (self.zone == Some(Zone::Explorer)).then(|| crate::ui::explorer::selected_server(ctx, self.servers.iter().map(|s| s.id))).flatten();
+            if let Some(s) = server {
+                self.actions.push(Action::Disconnect(s));
+            } else if let Some(t) = tab_id {
                 self.actions.push(Action::CloseTab(t));
             }
+        }
         if pressed(shift_cmd, Key::T) {
             if let Some(t) = tab_id {
                 self.actions.push(Action::DuplicateTab(t));

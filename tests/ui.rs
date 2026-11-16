@@ -1572,6 +1572,11 @@ fn the_explorer_goes_with_the_arrows_and_enter_opens_a_collection() {
     assert!(!has_label(&h, "orders"), "closed again");
     press(&mut h, Key::ArrowUp);
     assert_eq!(selected(&h), Some(egui::Id::new(("db", 7u64, "shop"))));
+    // Ctrl+W closes the connection of the selected row.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(2);
+    assert!(h.state().servers.is_empty());
+    assert!(h.state().logs.iter().any(|l| l.text == "Disconnected from Prod"));
 }
 
 #[test]
