@@ -762,6 +762,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Ctrl+K", "Next view: tree, table, text"),
             ("Up / Down", "Previous / next row"),
             ("Shift+Up / Shift+Down", "Select the rows above / below too"),
+            ("Ctrl+A", "Select all the rows shown"),
             ("PageUp / PageDown", "A page up / down"),
             ("Home / End", "First / last row"),
             ("Right / Left", "Open / close a node of the tree, next / previous column of the table"),

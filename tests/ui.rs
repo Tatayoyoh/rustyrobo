@@ -3315,6 +3315,12 @@ fn live_documents_open_from_ctrl_p_and_the_keys() {
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowUp);
     h.run_steps(2);
     assert_eq!(h.state().tabs[tab].outputs[0].selected.len(), 2);
+    // Ctrl+A: all of them, from one.
+    click_at(&mut h, at, egui::PointerButton::Primary);
+    assert_eq!(h.state().tabs[tab].outputs[0].selected.len(), 1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[tab].outputs[0].selected.len(), 2);
 
     // Ctrl+K: the next view, for all the results of the tab.
     h.key_press_modifiers(Modifiers::COMMAND, Key::K);

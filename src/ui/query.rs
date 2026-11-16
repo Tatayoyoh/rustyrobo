@@ -189,6 +189,11 @@ pub fn work_area(app: &mut App, ui: &mut Ui) {
                 }
             }
         }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A))
+            && let Some(pane) = current_pane(tab, tabbed)
+        {
+            pane.select_all();
+        }
         // Shift: the selection goes with the rows, several documents at once.
         for key in [Key::ArrowUp, Key::ArrowDown, Key::PageUp, Key::PageDown, Key::Home, Key::End] {
             if ui.input_mut(|i| crate::ui::consume_exact_key(i, egui::Modifiers::SHIFT, key)) {

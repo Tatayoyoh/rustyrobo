@@ -470,6 +470,19 @@ impl OutputPane {
         self.field_update(edit.doc, &edit.keys, Some(value))
     }
 
+    /// Ctrl+A: the rows shown in the tree, the documents of the page in the table.
+    pub fn select_all(&mut self) {
+        let paths = match self.mode {
+            ViewMode::Tree => match &self.rows_cache {
+                Some((_, _, rows)) => rows.iter().map(|r| r.path.clone()).collect(),
+                None => return,
+            },
+            ViewMode::Table => (0..self.docs().len()).map(|i| i.to_string()).collect(),
+            ViewMode::Text => return,
+        };
+        self.selected.select_all(paths);
+    }
+
     /// Opens the nodes of the tree at `paths` (`"0"`, `"0/items/[0]"`…).
     pub fn expand(&mut self, paths: &[&str]) {
         self.expanded.extend(paths.iter().map(|p| p.to_string()));
@@ -591,6 +604,14 @@ impl Selection {
     /// Document of the last clicked row, when it is selected.
     pub fn current_doc(&self) -> Option<usize> {
         self.current()?.split('/').next()?.parse().ok()
+    }
+
+    /// All of `paths`, the keyboard at the last one.
+    pub fn select_all(&mut self, paths: Vec<String>) {
+        self.touched = Some(std::time::Instant::now());
+        self.anchor = paths.first().cloned();
+        self.end = paths.last().cloned();
+        self.items = paths.into_iter().collect();
     }
 
     /// Right click: keeps the selection when `path` is part of it.
@@ -1884,6 +1905,21 @@ mod tests {
         assert!(p.rows_cache.is_none());
         let rows: Vec<_> = flatten(p.docs(), &p.expanded, fmt, &crate::theme::THEMES[0]).into_iter().map(|r| r.path).collect();
         assert_eq!(rows, ["0", "0/_id", "0/a", "0/a/b", "0/a/b/[0]", "0/a/b/[1]", "0/s", "1"]);
+    }
+
+    #[test]
+    fn select_all_takes_the_rows_shown() {
+        let fmt = FormatOptions::default();
+        let mut p = pane(docs(), None);
+        p.expand(&["0", "0/a"]);
+        p.rows_cache = Some((fmt, "t", flatten(p.docs(), &p.expanded, fmt, &crate::theme::THEMES[0])));
+        p.select_all();
+        let rows = ["0", "0/_id", "0/a", "0/a/b", "0/s", "1"];
+        assert!(rows.iter().all(|r| p.selected.contains(r)) && p.selected.len() == rows.len());
+        assert_eq!(p.selected.cursor(), Some("1"));
+        p.mode = ViewMode::Table;
+        p.select_all();
+        assert!(p.selected.contains("0") && p.selected.contains("1") && p.selected.len() == 2);
     }
 
     #[test]
