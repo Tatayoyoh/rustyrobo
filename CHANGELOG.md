@@ -6,6 +6,7 @@
 
 - Results: the memory of the documents goes back to the system once other results replace them (it stayed at its peak, hundreds of MB with large documents)
 - Text view: after a click in it, copies of its text stayed in memory, those of earlier results too
+- Explorer, dumps: a database of more than 101 collections could fail to load with "Cursor session id … is not the same as the operation context's session id"
 
 ## 1.6.0
 

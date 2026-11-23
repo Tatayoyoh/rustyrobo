@@ -407,8 +407,12 @@ pub async fn collect_cursor(
     db: &str,
     cmd: Document,
     max: usize,
-    mut session: Option<&mut Session>,
+    session: Option<&mut Session>,
 ) -> anyhow::Result<Vec<Document>> {
+    // getMore must run in the session of the cursor. An implicit session goes
+    // back to the pool in the background: the next command may get another one.
+    let mut own = if session.is_none() { c.start_session().await.ok() } else { None };
+    let mut session = session.or(own.as_mut());
     let res = c.run_command(db, cmd, session.as_deref_mut()).await?;
     let cursor = res.get_document("cursor").context("command did not return a cursor")?;
     let mut docs: Vec<Document> = cursor
