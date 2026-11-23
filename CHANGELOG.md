@@ -10,6 +10,7 @@
 
 - Results: the memory taken by large results is given back after the next query, another page or closing the tab (it could stay at several hundred MB)
 - Text view: a click in the text no longer keeps earlier results in memory
+- Results: with large documents, a page showed only part of them (up to 16 MB) and no next page
 - Explorer and dumps: databases of more than 101 collections no longer fail to load with "Cursor session id … is not the same…"
 
 ## 1.6.0

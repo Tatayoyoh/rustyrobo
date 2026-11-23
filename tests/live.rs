@@ -215,6 +215,13 @@ fn shell_suite(rt: &tokio::runtime::Runtime, s: &ConnectionSettings, db: &str) {
     let OutputKind::Docs { spec, .. } = &outs[0].kind else { panic!() };
     // Paging never goes past the user's limit.
     assert_eq!(rt.block_on(fetch_page(&c, spec.as_ref().unwrap(), 12, 50)).unwrap().len(), 3);
+    // A page of large documents is more than the 16 MB of a batch.
+    sh.ok("var s = 'x'.repeat(1 << 20); for (var i = 0; i < 20; i++) db.large.insertOne({ i: i, s: s })");
+    let outs = sh.run("db.large.find().sort({ i: 1 })");
+    let OutputKind::Docs { docs, spec, more, .. } = &outs[0].kind else { panic!("{outs:?}") };
+    assert_eq!((docs.len(), *more), (20, false));
+    assert_eq!(rt.block_on(fetch_page(&c, spec.as_ref().unwrap(), 2, 50)).unwrap().len(), 18);
+    sh.ok("db.large.drop()");
 
     // --- BSON types round trip through the shell
     sh.ok(r#"db.types.insertOne({ _id: 1, long: NumberLong('9007199254740993'), int: NumberInt(7), dbl: 1.5,

@@ -65,9 +65,10 @@ impl QuerySpec {
         if skip > 0 {
             cmd.insert("skip", skip as i64);
         }
+        // Not a single batch: a batch stops at 16 MB, getMore brings the rest
+        // of a page of large documents.
         cmd.insert("limit", limit as i64);
         cmd.insert("batchSize", limit as i64);
-        cmd.insert("singleBatch", true);
         if let Some(h) = &self.hint {
             cmd.insert("hint", h.clone());
         }
@@ -754,7 +755,7 @@ mod tests {
         let cmd = q.find_command(20, 50);
         assert_eq!(cmd.get_i64("skip").unwrap(), 20);
         assert_eq!(cmd.get_i64("limit").unwrap(), 50);
-        assert!(cmd.get_bool("singleBatch").unwrap());
+        assert!(!cmd.contains_key("singleBatch"));
         assert_eq!(cmd.keys().next().unwrap(), "find");
         // Counted within the skip and the limit of the script, not of the page.
         let count = q.count_command();
