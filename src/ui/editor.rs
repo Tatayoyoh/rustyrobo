@@ -1436,6 +1436,9 @@ fn read_only_text(ui: &mut Ui, id: Id, text: &str, theme: &Theme, font: FontId, 
         .frame(egui::Frame::NONE)
         .layouter(&mut layouter)
         .show(ui);
+    // Nothing to undo in a read-only text, and the history would keep copies of
+    // all of it, of the earlier results too (same id): none is kept.
+    output.state.clone().set_undoer(egui::util::undoer::Undoer::with_settings(egui::util::undoer::Settings { max_undos: 0, ..Default::default() }));
     if let Some(order) = &copy {
         copy_drawn(ui, &output, text, order);
     }

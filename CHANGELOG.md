@@ -5,6 +5,7 @@
 ### Fixed
 
 - Results: the memory of the documents goes back to the system once other results replace them (it stayed at its peak, hundreds of MB with large documents)
+- Text view: after a click in it, copies of its text stayed in memory, those of earlier results too
 
 ## 1.6.0
 

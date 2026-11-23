@@ -2362,6 +2362,31 @@ fn rtl_text_view_reads_from_right_to_left_and_copies_the_real_text() {
 }
 
 #[test]
+fn text_view_keeps_no_undo_history() {
+    // egui's history of a TextEdit holds copies of all of its text, even
+    // read-only: those of the earlier results, shown under the same id.
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).build_ui_state(
+        |ui, text: &mut String| {
+            code_view(ui, egui::Id::new("view"), text, theme::resolve(theme::DEFAULT_THEME, true), egui::FontId::monospace(13.0));
+        },
+        "{ \"a\" : 1 }\n".repeat(5),
+    );
+    h.ctx.set_fonts(fonts::definitions(&Default::default()));
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+    h.run_steps(2);
+    *h.state_mut() = "{ \"b\" : 2 }\n".repeat(5);
+    for _ in 0..3 {
+        h.key_press(Key::ArrowDown);
+        h.run_steps(2);
+    }
+    let id = egui::Id::new("view").with("t");
+    assert!(h.ctx.memory(|m| m.has_focus(id)), "the text view has the keyboard");
+    let undoer = egui::TextEdit::load_state(&h.ctx, id).unwrap().undoer();
+    assert!(format!("{undoer:?}").contains("undo count: 0"), "{undoer:?}");
+}
+
+#[test]
 fn rtl_text_view_copies_what_is_selected() {
     // egui padded right-to-left runs with glyphs (emilk/egui#8576): the next
     // lines were selected by offsets past them.
