@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, anyhow, bail};
 use bson::{Bson, Document, doc};
 
-use crate::mongo::{Connection, bson_as_i64, error_code, error_message};
+use crate::mongo::{Connection, bson_as_i64, error_code, error_message, take_batch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Format {
@@ -216,12 +216,12 @@ pub(crate) async fn for_each_batch(
     mut f: impl FnMut(Vec<Document>) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let mut session = conn.start_session().await.ok();
-    let reply = conn.run_command(db, cmd, session.as_mut()).await?;
-    let cursor = reply.get_document("cursor").context("find did not return a cursor")?;
+    let mut reply = conn.run_command(db, cmd, session.as_mut()).await?;
+    let cursor = reply.get_document_mut("cursor").context("find did not return a cursor")?;
     // The namespace of the cursor, which getMore must name.
     let coll = cursor.get_str("ns").ok().and_then(|ns| ns.split_once('.')).map_or(coll, |(_, c)| c).to_string();
     let mut id = cursor.get("id").and_then(bson_as_i64).unwrap_or(0);
-    let mut batch = batch_of(cursor, "firstBatch");
+    let mut batch = take_batch(cursor, "firstBatch");
     let mut done = before;
     loop {
         done += batch.len() as u64;
@@ -233,15 +233,11 @@ pub(crate) async fn for_each_batch(
             let _ = conn.run_command(db, doc! { "killCursors": &coll, "cursors": [id] }, None).await;
             bail!("cancelled after {}", docs(done));
         }
-        let more = conn.run_command(db, doc! { "getMore": id, "collection": &coll, "batchSize": BATCH as i64 }, session.as_mut()).await?;
-        let cursor = more.get_document("cursor").context("getMore did not return a cursor")?;
+        let mut more = conn.run_command(db, doc! { "getMore": id, "collection": &coll, "batchSize": BATCH as i64 }, session.as_mut()).await?;
+        let cursor = more.get_document_mut("cursor").context("getMore did not return a cursor")?;
         id = cursor.get("id").and_then(bson_as_i64).unwrap_or(0);
-        batch = batch_of(cursor, "nextBatch");
+        batch = take_batch(cursor, "nextBatch");
     }
-}
-
-fn batch_of(cursor: &Document, key: &str) -> Vec<Document> {
-    cursor.get_array(key).map(|a| a.iter().filter_map(|d| d.as_document().cloned()).collect()).unwrap_or_default()
 }
 
 /// What an import did.

@@ -20,7 +20,7 @@ use rquickjs::context::EvalOptions;
 use rquickjs::{Context, Ctx, Function, Runtime, Value};
 use tokio::runtime::Handle;
 
-use crate::mongo::{Connection, Session, bson_as_i64};
+use crate::mongo::{Connection, Session, bson_as_i64, take_batch};
 
 const PRELUDE: &str = include_str!("prelude.js");
 
@@ -568,13 +568,11 @@ fn resolve_native(state: &Rc<RefCell<NativeState>>, json: &str) -> Option<Result
                 let mut id = id;
                 while id != 0 && (docs.len() as u64) < batch {
                     let want = (batch - docs.len() as u64) as i64;
-                    let more = conn
+                    let mut more = conn
                         .run_command(&db, bson::doc! { "getMore": id, "collection": &coll, "batchSize": want }, session.as_mut())
                         .await?;
-                    let cur = more.get_document("cursor")?;
-                    if let Ok(batch_docs) = cur.get_array("nextBatch") {
-                        docs.extend(batch_docs.iter().cloned());
-                    }
+                    let cur = more.get_document_mut("cursor")?;
+                    docs.extend(take_batch(cur, "nextBatch").into_iter().map(Bson::Document));
                     id = cur.get("id").and_then(bson_as_i64).unwrap_or(0);
                 }
                 if id != 0 {

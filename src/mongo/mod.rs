@@ -413,25 +413,18 @@ pub async fn collect_cursor(
     // back to the pool in the background: the next command may get another one.
     let mut own = if session.is_none() { c.start_session().await.ok() } else { None };
     let mut session = session.or(own.as_mut());
-    let res = c.run_command(db, cmd, session.as_deref_mut()).await?;
-    let cursor = res.get_document("cursor").context("command did not return a cursor")?;
-    let mut docs: Vec<Document> = cursor
-        .get_array("firstBatch")
-        .map(|a| a.iter().filter_map(|d| d.as_document().cloned()).collect())
-        .unwrap_or_default();
+    let mut res = c.run_command(db, cmd, session.as_deref_mut()).await?;
+    let cursor = res.get_document_mut("cursor").context("command did not return a cursor")?;
+    let mut docs = take_batch(cursor, "firstBatch");
     let ns = cursor.get_str("ns").unwrap_or_default().to_string();
     let coll = ns.split_once('.').map(|(_, c)| c.to_string()).unwrap_or_default();
     let mut id = cursor.get("id").and_then(bson_as_i64).unwrap_or(0);
     while id != 0 && docs.len() < max {
-        let more = c
+        let mut more = c
             .run_command(db, doc! { "getMore": id, "collection": &coll }, session.as_deref_mut())
             .await?;
-        let cur = more.get_document("cursor")?;
-        docs.extend(
-            cur.get_array("nextBatch")
-                .map(|a| a.iter().filter_map(|d| d.as_document().cloned()).collect::<Vec<_>>())
-                .unwrap_or_default(),
-        );
+        let cur = more.get_document_mut("cursor")?;
+        docs.extend(take_batch(cur, "nextBatch"));
         id = cur.get("id").and_then(bson_as_i64).unwrap_or(0);
     }
     if id != 0 {
@@ -441,6 +434,21 @@ pub async fn collect_cursor(
     }
     docs.truncate(max);
     Ok(docs)
+}
+
+/// The documents of a cursor batch (`firstBatch`, `nextBatch`), moved out of
+/// the reply: a page of large documents can weigh hundreds of MB.
+pub fn take_batch(cursor: &mut Document, key: &str) -> Vec<Document> {
+    match cursor.remove(key) {
+        Some(Bson::Array(a)) => a
+            .into_iter()
+            .filter_map(|d| match d {
+                Bson::Document(d) => Some(d),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Short, user-facing message for a driver error: `BadValue (2): unknown
@@ -562,6 +570,14 @@ mod tests {
         assert!(!is_auth_error("connection refused"));
         assert_eq!(error_message(&anyhow!("plain")), "plain");
         assert_eq!(first_line("msg, labels: {}, source"), "msg");
+    }
+
+    #[test]
+    fn batches_are_moved_out_of_the_reply() {
+        let mut cursor = doc! { "id": 0_i64, "firstBatch": [{ "a": 1 }, 2, { "b": 2 }] };
+        assert_eq!(take_batch(&mut cursor, "firstBatch"), vec![doc! { "a": 1 }, doc! { "b": 2 }]);
+        assert!(!cursor.contains_key("firstBatch"));
+        assert!(take_batch(&mut cursor, "nextBatch").is_empty());
     }
 
     #[test]

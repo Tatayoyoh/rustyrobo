@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Results: a page of large documents takes half the memory while it loads
+
 ### Fixed
 
 - Results: the memory of the documents goes back to the system once other results replace them (it stayed at its peak, hundreds of MB with large documents)
