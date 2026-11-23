@@ -646,7 +646,7 @@ impl App {
                         TabVar { name: v.name, summary: v.summary, keep }
                     });
                     tab.vars = vars.collect();
-                    tab.outputs = reply
+                    let outputs = reply
                         .outputs
                         .into_iter()
                         .map(|o| {
@@ -656,6 +656,8 @@ impl App {
                             OutputPane::new(o, mode, batch, auto_expand)
                         })
                         .collect();
+                    // Also gives back what fetching the results took.
+                    crate::memory::release(std::mem::replace(&mut tab.outputs, outputs));
                     tab.result_tab = 0;
                     counted = (0..tab.outputs.len()).filter(|&out| tab.outputs[out].source().is_some()).collect();
                     if tab.outputs.is_empty() {
@@ -849,7 +851,9 @@ impl App {
                         let _guard = self.rt.enter();
                         c.shutdown();
                     }
-                    self.tabs.retain(|t| t.server != id);
+                    let (closed, kept): (Vec<_>, _) = std::mem::take(&mut self.tabs).into_iter().partition(|t| t.server == id);
+                    self.tabs = kept;
+                    crate::memory::release(closed);
                     self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
                     self.log(LogLevel::Info, format!("Disconnected from {}", s.settings.name));
                     // From the explorer: the keyboard goes to the last server left (Ctrl+W again closes it).
@@ -999,6 +1003,7 @@ impl App {
                     if let Some(sh) = &t.shell {
                         sh.interrupt();
                     }
+                    crate::memory::release(t);
                     if self.active_tab >= pos && self.active_tab > 0 {
                         self.active_tab -= 1;
                     }

@@ -39,6 +39,7 @@ src/
   fonts.rs         bundled fonts, system fonts as fallbacks (scan in background, mmap), user's choice
   bidi.rs          right-to-left text in visual order, for read-only views
   bsonfmt.rs       BSON → shell syntax, short values, type names, legacy UUIDs
+  memory.rs        replaced results dropped off the UI thread, freed pages given back (glibc)
   transfer.rs      import / export (JSON, CSV), batches, replacing a collection safely
   dump.rs          dump / restore in the formats of mongodump (folder, archive, gzip)
   autotest.rs      scripted UI walkthrough (RUSTYROBO_AUTOTEST)
@@ -135,6 +136,9 @@ Key design rules:
   after the prelude and `.mongorc.js` (`__markBaseline`), minus `__*` internals.
 - `db.runCommand()` returns the `{ ok: 0, ... }` reply of a refused command, like the mongo shell (`__runCommand`). The shell's own
   helpers go through `__cmd`, which throws it.
+- glibc keeps the pages it frees: a page of large documents (hundreds of MB as `Bson` values) would
+  leave the process at its peak. Hand large replaced data to `memory::release`, which drops it on a
+  background thread, then calls `malloc_trim`.
 - Statement splitting is heuristic; chunks that fail to parse are merged with the next one.
 - mongodump names the buckets of a time series `system.buckets.<name>` when the server has no
   `rawData` (before MongoDB 8.2), `<name>` since; mongorestore 100.20 goes by the server version of

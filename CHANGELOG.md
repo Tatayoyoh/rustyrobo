@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Results: the memory of the documents goes back to the system once other results replace them (it stayed at its peak, hundreds of MB with large documents)
+
 ## 1.6.0
 
 ### Added

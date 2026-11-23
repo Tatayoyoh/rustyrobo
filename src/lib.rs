@@ -8,6 +8,7 @@ pub mod bsonfmt;
 pub mod dump;
 pub mod fonts;
 pub mod history;
+pub mod memory;
 pub mod mongo;
 pub mod settings;
 pub mod shell;

@@ -385,7 +385,7 @@ impl OutputPane {
     pub fn set_page(&mut self, docs: Vec<Bson>, skip: u64) {
         if let OutputKind::Docs { docs: d, more, .. } = &mut self.output.kind {
             *more = docs.len() as u64 >= self.page_size;
-            *d = docs;
+            crate::memory::release(std::mem::replace(d, docs));
         }
         // The same page again (after an edit): its rows stay selected.
         if skip != self.skip {
