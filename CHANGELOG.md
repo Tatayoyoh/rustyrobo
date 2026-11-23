@@ -4,13 +4,13 @@
 
 ### Changed
 
-- Results: a page of large documents takes half the memory while it loads
+- Results: large documents take about half the memory while they load
 
 ### Fixed
 
-- Results: the memory of the documents goes back to the system once other results replace them (it stayed at its peak, hundreds of MB with large documents)
-- Text view: after a click in it, copies of its text stayed in memory, those of earlier results too
-- Explorer, dumps: a database of more than 101 collections could fail to load with "Cursor session id … is not the same as the operation context's session id"
+- Results: the memory taken by large results is given back after the next query, another page or closing the tab (it could stay at several hundred MB)
+- Text view: a click in the text no longer keeps earlier results in memory
+- Explorer and dumps: databases of more than 101 collections no longer fail to load with "Cursor session id … is not the same…"
 
 ## 1.6.0
 
